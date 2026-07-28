@@ -1,0 +1,57 @@
+<idea-plugin>
+    <id>com.audioexplainer.rider</id>
+    <name>Explain Code Audio</name>
+    <vendor>Andrej Zigmund</vendor>
+
+    <description><![CDATA[
+        Right-click <b>"Explain This (Audio)"</b> to get a spoken, line-highlighted walkthrough of the
+        selected code — or the method/class under the cursor. Uses Claude Code (headless) as the
+        reasoning backbone and a local Kokoro TTS server for narration.
+        <br/><br/>
+        Requires the Claude CLI on PATH and a local TTS server (see the plugin's setup docs).
+    ]]></description>
+
+    <!-- Depending only on the platform module makes this a pure frontend plugin,
+         loadable in Rider and every other IntelliJ-based IDE. -->
+    <depends>com.intellij.modules.platform</depends>
+    <!-- Rider replaces the IntelliJ Project view with its own Solution Explorer, whose context menu is
+         populated from SolutionExplorerPopupMenu (NOT ProjectViewPopupMenu). Loading this extra descriptor
+         only when the Rider module is present (a) keeps the base plugin loadable in every other IDE and
+         (b) guarantees the Rider group is registered before we reference it. -->
+    <depends optional="true" config-file="rider.xml">com.intellij.modules.rider</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Audio Explainer" anchor="right"
+                    icon="AllIcons.Toolwindows.Documentation"
+                    factoryClass="com.audioexplainer.AudioExplainerToolWindowFactory"/>
+        <postStartupActivity implementation="com.audioexplainer.ServerStartupActivity"/>
+        <applicationService serviceImplementation="com.audioexplainer.ExplainerServerService"/>
+        <applicationService serviceImplementation="com.audioexplainer.AudioExplainerSettings"/>
+        <applicationService serviceImplementation="com.audioexplainer.ClaudeExplainer"/>
+        <applicationService serviceImplementation="com.audioexplainer.TtsService"/>
+        <applicationConfigurable parentId="tools"
+                                 id="com.audioexplainer.settings"
+                                 displayName="Audio Explainer"
+                                 instance="com.audioexplainer.HighlightSettingsConfigurable"/>
+        <notificationGroup id="Audio Explainer" displayType="BALLOON"/>
+    </extensions>
+
+    <actions>
+        <action id="AudioExplainer.ExplainThis"
+                class="com.audioexplainer.ExplainThisAction"
+                text="Explain This (Audio)"
+                description="Audio-explain the selected code, the symbol under the cursor, or the selected file/folder">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <!-- Solution Explorer / Project view: explain a selected file, folder, or project node. -->
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        </action>
+
+        <group id="AudioExplainer.ToolsMenu" text="Audio Explainer" popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action id="AudioExplainer.SetupTts"
+                    class="com.audioexplainer.ConfigureTtsAction"
+                    text="Audio engines…"
+                    description="Open the per-engine narration settings: status, install Kokoro / language packs, Windows voices"/>
+        </group>
+    </actions>
+</idea-plugin>

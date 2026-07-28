@@ -1,0 +1,16 @@
+SKILL.md
+VERSION
+docs/assess.md
+docs/explain-at-cursor.md
+docs/plan.md
+docs/podcast.md
+docs/read.md
+docs/scan.md
+docs/segments.md
+docs/setup.md
+docs/tts.md
+docs/uninstall.md
+docs/walkthrough.md
+scripts/explainer.ps1
+scripts/explainer.sh
+scripts/tts_server.py

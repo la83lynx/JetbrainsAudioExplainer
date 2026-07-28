@@ -1,0 +1,12 @@
+<idea-plugin>
+    <!-- Rider-only supplement, loaded via `<depends optional config-file="rider.xml">com.intellij.modules.rider`
+         in plugin.xml. Rider's Solution Explorer overrides the IntelliJ Project view and ignores
+         ProjectViewPopupMenu, so the "Explain This (Audio)" action (defined in plugin.xml) also has to be
+         added to Rider's own SolutionExplorerPopupMenu. `<reference>` re-targets the existing action into
+         this extra group without redefining it. -->
+    <actions>
+        <reference ref="AudioExplainer.ExplainThis">
+            <add-to-group group-id="SolutionExplorerPopupMenu" anchor="last"/>
+        </reference>
+    </actions>
+</idea-plugin>

@@ -1,0 +1,194 @@
+<!--
+  Sidebar body markup — ported almost verbatim from code-explainer's
+  vscode-extension/src/sidebar.ts getHtml() template. Assembled into a full document by
+  AudioExplainerSidebar.kt, which injects the theme variables, sidebar.css, the JCEF bridge shim, and
+  sidebar.js. The VS Code CSP/nonce and asWebviewUri script/style links are dropped (everything is
+  inlined for JCEF loadHTML).
+-->
+<!-- Phase 7.5 #5 — docked status strips at the top of the tool window (flex-column children of body,
+     natural height, never overlapping the views which scroll in #view-scroll below). -->
+<div id="generation-banner" class="gen-banner" style="display:none;">
+    <span class="gen-spinner" aria-hidden="true"></span>
+    <div class="gen-text">
+        <div id="gen-title" class="gen-title">Generating walkthrough…</div>
+        <div id="gen-activity" class="gen-activity"></div>
+    </div>
+    <button id="gen-collapse" class="gen-iconbtn" title="Collapse">&#9660;</button>
+    <button id="gen-dismiss" class="gen-iconbtn" title="Dismiss" style="display:none;">&#10005;</button>
+</div>
+
+<div id="replace-banner" class="replace-banner" style="display:none;">
+    <div class="replace-text">
+        New walkthrough loaded, replacing the previous one.
+        <span id="replace-prev" class="replace-prev"></span>
+    </div>
+    <div class="replace-actions">
+        <button id="btn-undo" class="replace-btn undo">Undo</button>
+        <button id="btn-keep" class="replace-btn keep">Keep</button>
+    </div>
+</div>
+
+<!-- Scroll region: exactly one of the three views is visible at a time; it scrolls under the docked
+     status strips above so a banner can never clip or overlap a view's (sticky) header. -->
+<div id="view-scroll">
+<div id="idle-view">
+    <div class="idle-header">
+        <span class="idle-header-label">AUDIO EXPLAINER</span>
+    </div>
+    <div class="idle-hero">
+        <svg class="idle-icon" width="32" height="32" viewBox="0 0 16 16" fill="currentColor" opacity="0.4">
+            <path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 12.5a5.5 5.5 0 110-11 5.5 5.5 0 010 11zM6.5 5v6l5-3-5-3z"/>
+        </svg>
+        <p class="idle-text">No walkthrough loaded</p>
+        <p class="idle-hint">Run <code>/explainer</code> in your coding agent to generate one</p>
+    </div>
+    <div id="saved-list-section" style="display:none;">
+        <div class="saved-list-header">
+            <h3 id="saved-list-title" class="saved-list-title">Saved Walkthroughs</h3>
+            <button id="btn-delete-all" class="saved-delete-all" title="Delete all saved walkthroughs">Delete all</button>
+        </div>
+        <input id="saved-filter" class="saved-filter" type="text" placeholder="Filter…" autocomplete="off" spellcheck="false">
+        <ul id="saved-list"></ul>
+        <p id="saved-empty" class="saved-empty" style="display:none;">No walkthroughs match the filter.</p>
+    </div>
+</div>
+
+<div id="active-view" style="display:none;">
+    <div class="sticky-top">
+        <div class="header">
+            <span class="header-label">AUDIO EXPLAINER</span>
+            <div class="header-actions">
+                <button id="btn-refresh" class="icon-btn" title="Refresh UI">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M13.65 2.35A7.96 7.96 0 008 0C3.58 0 .01 3.58.01 8S3.58 16 8 16c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 018 14c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L9 8h7V1l-3.35 1.35z"/>
+                    </svg>
+                </button>
+                <button id="btn-save" class="icon-btn" title="Save Walkthrough">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M13.354 4.354l-3.708-3.708A.5.5 0 009.293.5H2.5A1.5 1.5 0 001 2v12a1.5 1.5 0 001.5 1.5h11A1.5 1.5 0 0015 14V4.707a.5.5 0 00-.146-.353zM12 14H4V9h8v5zm1-7H3V2h6.293L13 5.707V7z"/>
+                    </svg>
+                </button>
+                <button id="btn-close" class="icon-btn" title="Close walkthrough">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 8.707l3.646 3.647.708-.708L8.707 8l3.647-3.646-.708-.708L8 7.293 4.354 3.646l-.708.708L7.293 8l-3.647 3.646.708.708L8 8.707z"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <h2 id="walkthrough-title"></h2>
+        <!-- Language badge (Phase L3): shows the walkthrough's language when it isn't English. -->
+        <span id="wt-language" class="wt-language" style="display:none;"></span>
+
+        <div class="now-playing">
+            <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+            <span id="segment-counter" class="counter"></span>
+            <span id="segment-title" class="seg-title"></span>
+            <a id="segment-location" class="seg-location" href="#"></a>
+        </div>
+
+        <!-- Overview of the current segment — collapsible, sits above the play controls (Phase 7.5 #11). -->
+        <div class="explanation-box" id="explanation-box">
+            <div class="explanation-header" id="explanation-toggle">
+                <span class="explanation-title">Overview</span>
+                <button id="btn-overview-collapse" class="explanation-collapse-btn" title="Collapse overview">&#9660;</button>
+            </div>
+            <div id="explanation-text" class="explanation-text"></div>
+        </div>
+
+        <!-- Vol + Voice share one line and each take ~half width; the pair wraps back to a stacked layout
+             when the tool window is too narrow (flex-wrap threshold, Phase 7.5 #14 task 1). Speed keeps its
+             own full-width row so the four speed buttons stay roomy. -->
+        <div class="audio-controls">
+            <div class="audio-inline">
+                <label class="control-row">
+                    <span class="label">Vol</span>
+                    <input type="range" id="volume-slider" min="0" max="100" value="80">
+                    <button id="btn-mute" title="Mute">&#128266;</button>
+                </label>
+                <label class="control-row">
+                    <span class="label">Voice</span>
+                    <!-- Options are populated dynamically per the loaded walkthrough's language via the
+                         `voice_options` message (Phase L3); this single option is only the pre-load frame. -->
+                    <select id="voice-select">
+                        <option value="af_heart">Heart (US, F)</option>
+                    </select>
+                </label>
+            </div>
+            <label class="control-row">
+                <span class="label">Speed</span>
+                <div class="speed-buttons" id="speed-buttons">
+                    <button data-speed="1" class="active">1x</button>
+                    <button data-speed="1.25">1.25x</button>
+                    <button data-speed="1.5">1.5x</button>
+                    <button data-speed="2">2x</button>
+                </div>
+            </label>
+            <!-- Robotic-voice (espeak) tuning. Shown only when the current walkthrough's language uses the
+                 espeak tier (toggled by the `voice_options` message's `robotic` flag); Kokoro voices ignore
+                 pitch/range so the row stays hidden for them. -->
+            <label class="control-row robotic-row" id="robotic-controls" style="display:none">
+                <span class="label">Robotic</span>
+                <div class="robotic-sliders">
+                    <span class="rs-label">Pitch</span>
+                    <input type="range" id="espeak-pitch" min="0" max="100" value="50"
+                           title="Base pitch of the robotic voice">
+                    <span class="rs-label">Life</span>
+                    <input type="range" id="espeak-range" min="0" max="100" value="50"
+                           title="Liveliness / intonation range (0 = flat monotone)">
+                    <span class="rs-label">Gap</span>
+                    <input type="range" id="espeak-wordgap" min="0" max="20" value="1"
+                           title="Extra gap between words (×10 ms)">
+                    <button type="button" id="btn-advanced" title="Advanced voice settings…">&#9881;</button>
+                </div>
+            </label>
+        </div>
+
+        <!-- Play controls (prev / play / next) — moved down to sit just above the transcript, next to the
+             step progress bar (Phase 7.5 #14 task 2). -->
+        <div class="controls">
+            <button id="btn-prev" title="Hold Shift to skip entire segment">
+                <svg class="icon-highlight" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M10 2L4 8l6 6V2z"/></svg>
+                <svg class="icon-segment" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="display:none"><path d="M3 3h2v10H3V3zm10 0L7 8l6 5V3z"/></svg>
+            </button>
+            <button id="btn-play-pause" class="play-btn" title="Play/Pause">
+                <svg class="icon-play" width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2l10 6-10 6V2z"/></svg>
+                <svg class="icon-pause" width="18" height="18" viewBox="0 0 16 16" fill="currentColor" style="display:none"><path d="M3 2h4v12H3V2zm6 0h4v12H9V2z"/></svg>
+            </button>
+            <button id="btn-next" title="Hold Shift to skip entire segment">
+                <svg class="icon-highlight" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M6 2l6 6-6 6V2z"/></svg>
+                <svg class="icon-segment" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="display:none"><path d="M11 3h2v10h-2V3zM3 3l6 5-6 5V3z"/></svg>
+            </button>
+        </div>
+
+        <div id="transcript-box" class="transcript-box" style="display:none;">
+            <div class="transcript-label">Transcript</div>
+            <div class="step-progress-bar"><div id="step-progress-fill" class="step-progress-fill"></div></div>
+            <div id="transcript-text" class="transcript-text"></div>
+        </div>
+
+        <div class="agent-hint">
+            <span class="agent-hint-icon">&#x1F4AC;</span>
+            Have questions? Ask your coding agent!
+        </div>
+
+        <div class="finish-row">
+            <button id="btn-finish" class="finish-btn"
+                    title="End the walkthrough and clear the editor highlights">&#10003; Finish</button>
+        </div>
+    </div>
+
+    <div class="outline">
+        <h3>Outline</h3>
+        <ul id="outline-list"></ul>
+    </div>
+</div>
+
+<div id="done-view" style="display:none;">
+    <div class="done-card">
+        <p class="done-text">Walkthrough complete</p>
+        <p id="done-summary" class="done-summary"></p>
+        <p class="done-hint">Have more questions? Ask your coding agent!</p>
+        <button id="btn-restart" class="done-restart-btn">Restart Walkthrough</button>
+    </div>
+</div>
+</div><!-- /#view-scroll -->
