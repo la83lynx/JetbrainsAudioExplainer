@@ -220,6 +220,9 @@ class NarrationController(
         hlIndex = boundedHl
 
         // Move the editor spotlight to this highlight (fires WalkthroughListener.onHighlight).
+        // NOTE the ordering: decorations land HERE, before any TTS request below — so every editor
+        // decoration (including the token flash) precedes the voice by the whole synthesis latency.
+        if (log.isDebugEnabled) log.debug("narrate: spotlight -> segment ${seg.id} step ${boundedHl + 1}/${seg.highlights.size}")
         walkthrough.advanceHighlight(boundedHl)
 
         val hl = seg.highlights.getOrNull(boundedHl)
@@ -245,9 +248,20 @@ class NarrationController(
         // Robotic voices carry the saved profile for their variant (ae_f/ae_m); Kokoro voices pass null.
         val tune = if (Languages.engineOfVoice(voice) == Engine.ESPEAK)
             EspeakTune.from(settings.espeakProfile(voice.substringAfter('+', "ae_f"))) else null
+        // Timestamped so the flash-vs-voice gap is measurable: this line minus the "narrate: spotlight"
+        // line above is decoration lead time; the "first audio chunk" line below closes it.
+        val requestedAt = System.currentTimeMillis()
+        if (log.isDebugEnabled) log.debug("narrate: requesting TTS (voice=$voice, speed=$speed, ${text.length} chars)")
+        var firstChunk = true
         stream = tts.speak(text, voice, speed, tune, object : TtsService.TtsListener {
             override fun onChunk(base64: String, sampleRate: Int, sentenceIndex: Int, sentenceWords: Int) {
                 if (disposed) return
+                if (firstChunk) {
+                    firstChunk = false
+                    if (log.isDebugEnabled) {
+                        log.debug("narrate: first audio chunk after ${System.currentTimeMillis() - requestedAt}ms")
+                    }
+                }
                 post(msg("audio_chunk") {
                     put("data", base64); put("sampleRate", sampleRate)
                     put("si", sentenceIndex); put("sw", sentenceWords)

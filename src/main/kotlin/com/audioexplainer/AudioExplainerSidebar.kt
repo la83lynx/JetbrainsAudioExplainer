@@ -416,6 +416,13 @@ class AudioExplainerSidebar(
             "delete_all_walkthroughs" -> onDeleteAll()
             // Narration feedback + TTS knobs (Phase 7).
             "playback_complete" -> narration.onPlaybackComplete()
+            // The webview's Web Audio playhead has reached this step's first buffer — i.e. the user is NOW
+            // hearing it. Only the webview knows this moment: the plugin's own "first chunk" callback is
+            // synthesis/enqueue time, measured 1.8–6.0 s early (MoreUI.md §2.8). Routed straight to the
+            // editor, which is where the time-sensitive decoration lives.
+            "playback_started" -> forEachOwnHighlighter {
+                it.flashCurrentToken(obj.intField("segmentId") ?: -1, obj.intField("highlightIndex") ?: 0)
+            }
             "speed_change" -> obj.doubleField("speed")?.let {
                 AudioExplainerSettings.getInstance().state.ttsSpeedPercent = (it * 100).toInt().coerceIn(25, 400)
                 narration.onRateChanged()
@@ -456,6 +463,20 @@ class AudioExplainerSidebar(
      * focusing the editor — the Now-Playing location link (Phase 7.5). File resolution (a VFS refresh) is
      * a slow op forbidden on the EDT, so it runs on a pooled thread; only the editor open is marshalled back.
      */
+    /**
+     * Apply [action] to the [EditorHighlighter]s driving *this* project. They register themselves as
+     * walkthrough listeners at project open (see `ServerStartupActivity`), which is the only handle on
+     * them — the same discovery [HighlightSettingsConfigurable] uses for its live re-render.
+     */
+    private fun forEachOwnHighlighter(action: (EditorHighlighter) -> Unit) {
+        runCatching {
+            walkthrough.getListeners()
+                .filterIsInstance<EditorHighlighter>()
+                .filter { it.project == project }
+                .forEach(action)
+        }
+    }
+
     private fun revealLocation(filePath: String, line1: Int) {
         ApplicationManager.getApplication().executeOnPooledThread {
             if (disposed || project.isDisposed) return@executeOnPooledThread

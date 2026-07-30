@@ -6,7 +6,8 @@ Sidebar-driven playback. Send the walkthrough plan to the sidebar extension whic
 
 ## Steps
 
-1. **Build the plan JSON:**
+1. **Build the plan JSON.** The schema lives in **`docs/plan-schema.md` — the single source of truth**;
+   read it for the exact field names rather than copying the illustration below.
 
 ```json
 {
@@ -21,16 +22,24 @@ Sidebar-driven playback. Send the walkthrough plan to the sidebar extension whic
             "end": 40,
             "title": "Module definition",
             "explanation": "This is the **module definition**. It imports all the services and sets up the constructor.",
-            "ttsText": "This is the module definition. It imports all the services and sets up the constructor.",
             "highlights": [
                 { "start": 1, "end": 8, "ttsText": "First we have the imports, pulling in the services needed for order matching." },
-                { "start": 10, "end": 25, "ttsText": "Next, the class definition with its injectable decorator and constructor dependencies." },
+                { "start": 10, "end": 25, "ttsText": "Next, the class definition with its injectable decorator and constructor dependencies.", "note": "Constructor injection is what makes the matcher swappable in tests.", "token": "constructor" },
                 { "start": 27, "end": 40, "ttsText": "Finally, the initialization method that loads existing orders into the in-memory book." }
             ]
         }
     ]
 }
 ```
+
+Note there is **no segment-level `ttsText`** — narration lives on each highlight. (An earlier version of
+this example showed one; it was never a real field and decoded to nothing.) The optional per-highlight
+`note` shown above is drawn as a callout box beside the code in the editor, the optional one-line
+`example` (`"Parse(\"2024-01\") → DateOnly(2024, 1, 1)"`) is drawn under it in the same box, and the
+optional `token` — a literal substring of those lines — is briefly flashed so the eye lands on the step's
+key identifier. A segment may also carry an optional `relations` list linking two places in the code; the
+plugin draws an arrow between nearby lines of the same file and a clickable gutter pointer for a target
+elsewhere. See `docs/plan-schema.md` for all of them.
 
 2. **Send to sidebar:**
 
@@ -58,8 +67,10 @@ Returns e.g. `{"type": "user_action", "action": "next", "segmentId": 3}`. Handle
 Top-level `"language"` is the walkthrough's language code (`en`, `es`, `fr`, `hi`, `it`, `pt`, `ja`,
 `zh`); default `"en"`. **One language per walkthrough.** If the user asks for another language (or the
 plugin's configured explanation language is non-English), set `"language"` to that code and write ALL
-prose — `title`, every segment `title`/`explanation`, and every highlight `ttsText`/`explanation` — in
-that language, keeping code identifiers, file paths, and API names verbatim (never translate code). The
+prose — `title`, every segment `title`/`explanation`, and every highlight `ttsText`/`explanation`/`note` —
+in that language, keeping code identifiers, file paths, and API names verbatim (never translate code, and
+never translate `token` or `example` — a `token` must match the source text to resolve, and an `example` is
+code; a relation's `note` is prose and does get translated, its `token`/`symbol` do not). The
 plugin loads that language's voices automatically; no `voice` field is needed here.
 
 ## Segment guidelines

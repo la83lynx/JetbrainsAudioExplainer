@@ -64,37 +64,33 @@ Explorer (a whole file, or a folder/project). A `"scope"` field tells you which:
    played yet, always write good `ttsText` — the highlights double as the reading order and the TTS phase
    will speak them.
 
-   **Exact schema** (1-based line numbers, inclusive ranges — do NOT use `startLine`/`endLine`/`label`):
-
-   ```json
-   {
-     "type": "set_plan",
-     "title": "<short title of what's being explained>",
-     "language": "en",
-     "segments": [
-       {
-         "id": 0,
-         "file": "<same path style you were given>",
-         "start": 40,
-         "end": 78,
-         "title": "<short segment label>",
-         "explanation": "<markdown explanation of the whole segment>",
-         "highlights": [
-           { "start": 42, "end": 45, "ttsText": "<1-2 plain-text sentences, flowing narration>", "explanation": "<2-5 word sidebar label>" }
-         ]
-       }
-     ]
-   }
-   ```
+   **Schema: read `docs/plan-schema.md` — it is the single source of truth** for the `set_plan` shape,
+   the exact field names, the `language` rule, the optional per-highlight `note` / `example` / `token`, and the
+   optional per-segment `relations`. Do not
+   work from memory or from examples in other docs; the plugin drops unknown fields silently, so a wrong
+   field name fails quietly.
 
    Segment `id`s are sequential from 0. `file` should be the **absolute path** (or the exact path you were
    given) so the editor can open it.
 
-   **Language.** The top-level `"language"` is the walkthrough's language code (`en`, `es`, `fr`, `hi`,
-   `it`, `pt`, `ja`, `zh`). Default to `"en"`. If the prompt contains a **LANGUAGE:** instruction, obey it:
-   set `"language"` to that code and write ALL prose — `title`, every segment `title`/`explanation`, and
-   every highlight `ttsText`/`explanation` — in that language, while keeping code identifiers, file paths,
-   and API names verbatim (never translate code). One language per walkthrough.
+   Where a one-line aside next to the code would genuinely help the reader — a constraint, a gotcha, the
+   reason behind a magic number — add a `note` to that highlight; the plugin renders it as a callout box
+   in the editor. Keep it to one sentence, plain text, and skip it when it would only restate the line.
+
+   Where a step is really about **one identifier**, add a `token` with that name copied verbatim from the
+   highlighted lines; the plugin flashes it so the eye lands on the right word. Omit it when the step has
+   no single focal name.
+
+   Where a concrete case would clarify a tricky transformation or a surprising result, add a one-line
+   `example` with real values (`Parse("2024-01") → DateOnly(2024, 1, 1)`); it is drawn under the `note` in
+   the same box. **One line only** — extra lines are dropped. All three fields are optional, and sparse
+   beats always-present — see `plan-schema.md`.
+
+   Where two places in the code are genuinely linked — a value produced on one line and consumed on another,
+   a call whose target lives in another file — add a segment-level `relations` entry (`{"kind":"flow","from":
+   {"line":44,"token":"raw"},"to":{"line":51,"token":"parsed"},"note":"parsed value"}`). The plugin draws an
+   arrow between nearby lines of the same file and a clickable gutter pointer for anything else. 2-3 per
+   segment at most, one endpoint inside the highlight it belongs to, and line numbers you have checked.
 
 4. **POST the plan.** ALWAYS write the full `set_plan` JSON to a temp file first (use the `Write` tool),
    then send that file. **Never pass the JSON inline on a command line** — shell quoting will corrupt it
@@ -123,6 +119,6 @@ Explorer (a whole file, or a folder/project). A `"scope"` field tells you which:
 - If the server is unreachable, the discovery files (`~/.claude-explainer-port`, `~/.claude-explainer-token`)
   are missing — the plugin isn't running. Report it plainly; don't retry in a loop.
 - Field-name mistakes are the most common failure: it's `start`/`end`/`title`/`ttsText`/`highlights`, never
-  `startLine`/`endLine`/`label`/`subHighlights`.
+  `startLine`/`endLine`/`label`/`subHighlights`. `docs/plan-schema.md` is authoritative.
 - A **LANGUAGE:** line in the prompt means translate all prose to that language (see step 3) and set the
   top-level `"language"` code — but never translate code identifiers, paths, or API names.

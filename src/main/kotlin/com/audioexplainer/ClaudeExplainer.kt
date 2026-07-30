@@ -162,9 +162,12 @@ class ClaudeExplainer {
             if (lang.code != Languages.DEFAULT_CODE) {
                 appendLine(
                     "LANGUAGE: Generate the walkthrough in ${lang.displayName} (${lang.autonym}). Write the " +
-                        "`title`, every segment `title` and `explanation`, and every highlight `ttsText` and " +
-                        "`explanation` in ${lang.displayName}. Keep code identifiers, file paths, and API names " +
-                        "verbatim (do NOT translate code). You MUST put \"language\":\"${lang.code}\" at the top " +
+                        "`title`, every segment `title` and `explanation`, and every highlight `ttsText`, " +
+                        "`explanation` and `note` in ${lang.displayName}. Keep code identifiers, file paths, and API names " +
+                        "verbatim (do NOT translate code) — a highlight's `token` especially, since it must match the " +
+                        "source text exactly to resolve, and its `example`, which is code. The same split applies to a " +
+                        "segment's `relations`: their `note` is prose, their `token` and `symbol` are code. " +
+                        "You MUST put \"language\":\"${lang.code}\" at the top " +
                         "level of the `set_plan` JSON.",
                 )
                 appendLine()
@@ -175,19 +178,62 @@ class ClaudeExplainer {
             if (skillPath != null) {
                 appendLine("Follow the headless flow documented here (read it first):")
                 appendLine("  $skillPath/docs/explain-at-cursor.md")
+                appendLine("The `set_plan` schema is documented ONCE, authoritatively — read it before writing the plan:")
+                appendLine("  $skillPath/docs/plan-schema.md")
                 appendLine("The helpers that POST the plan are in $skillPath/scripts/ (explainer.ps1 on Windows, explainer.sh elsewhere).")
                 appendLine()
             }
             appendLine("What to do:")
             appendLine(step1)
-            appendLine(
-                "2. Build a lean `set_plan` (usually 1-2 segments) with dense, pointer-style highlights and good " +
-                    "plain-text `ttsText`. Schema (1-based, inclusive line ranges; absolute file paths):",
-            )
-            appendLine(
-                "   {\"type\":\"set_plan\",\"title\":\"…\",\"language\":\"${lang.code}\",\"segments\":[{\"id\":0,\"file\":\"…\",\"start\":N,\"end\":N," +
-                    "\"title\":\"…\",\"explanation\":\"…\",\"highlights\":[{\"start\":N,\"end\":N,\"ttsText\":\"…\",\"explanation\":\"…\"}]}]}",
-            )
+            if (skillPath != null) {
+                appendLine(
+                    "2. Build a lean `set_plan` (usually 1-2 segments) with dense, pointer-style highlights and good " +
+                        "plain-text `ttsText`, following docs/plan-schema.md exactly. Where a one-line aside next to " +
+                        "the code would genuinely help (a constraint, a gotcha, the reason behind a magic number), add " +
+                        "an optional one-sentence `note` to that highlight — sparingly, not on every one. Where a " +
+                        "highlight is really about ONE identifier, add an optional `token` with that name copied " +
+                        "verbatim from those lines, so the plugin can flash it — again sparingly. Where a concrete " +
+                        "case would clarify a tricky transformation or a surprising result, add an optional " +
+                        "ONE-LINE `example` (\"Parse(\\\"2024-01\\\") → DateOnly(2024, 1, 1)\") — one line only, and " +
+                        "only where it teaches something the code doesn't show. Where two places are genuinely " +
+                        "linked — a value produced on one line and consumed on another, a call whose target is in " +
+                        "another file — add an optional segment-level `relations` entry and the plugin will draw the " +
+                        "connection; 2-3 per segment at most, and anchor an endpoint inside the highlight it belongs to.",
+                )
+            } else {
+                // No skill dir on disk, so docs/plan-schema.md is unreachable and the agent has nothing to
+                // read. This inline copy is the FALLBACK mirror only — keep it in sync with that doc, which
+                // stays the source of truth for every other caller.
+                appendLine(
+                    "2. Build a lean `set_plan` (usually 1-2 segments) with dense, pointer-style highlights and good " +
+                        "plain-text `ttsText`. Schema (1-based, inclusive line ranges; absolute file paths):",
+                )
+                appendLine(
+                    "   {\"type\":\"set_plan\",\"title\":\"…\",\"language\":\"${lang.code}\",\"segments\":[{\"id\":0,\"file\":\"…\",\"start\":N,\"end\":N," +
+                        "\"title\":\"…\",\"explanation\":\"…\",\"highlights\":[{\"start\":N,\"end\":N,\"ttsText\":\"…\",\"explanation\":\"…\",\"note\":\"…\",\"example\":\"…\",\"token\":\"…\"}]," +
+                        "\"relations\":[{\"kind\":\"flow\",\"from\":{\"line\":N,\"token\":\"…\"},\"to\":{\"line\":N,\"token\":\"…\"},\"note\":\"…\"}]}]}",
+                )
+                appendLine(
+                    "   Highlight `note` is optional: ONE plain-text sentence, drawn as a callout box beside the code. " +
+                        "Use it only where a margin aside helps; omit it otherwise.",
+                )
+                appendLine(
+                    "   Highlight `example` is optional: ONE line showing the code in action with concrete values " +
+                        "(\"Parse(\\\"2024-01\\\") → DateOnly(2024, 1, 1)\"), drawn under the note. One line is a hard " +
+                        "limit — no fences, no multi-statement snippets. Omit it unless a concrete case clarifies.",
+                )
+                appendLine(
+                    "   Highlight `token` is optional: the ONE identifier that highlight is about, copied verbatim from " +
+                        "its own lines (the plugin flashes it). Omit it when there is no single focal name.",
+                )
+                appendLine(
+                    "   Segment `relations` is optional: each entry links two places — `kind` \"flow\" (A feeds B) or " +
+                        "\"backforth\", and `from`/`to` each {\"line\":N,\"token\":\"…\"}, or {\"file\":\"…\",\"symbol\":\"…\"} " +
+                        "for somewhere in another file, plus a short optional `note`. The plugin draws an arrow when both " +
+                        "ends are lines of this file and a clickable pointer otherwise. 2-3 per segment at most, and one " +
+                        "endpoint MUST be inside the highlight the relation belongs to or it is never shown.",
+                )
+            }
             appendLine("   Use field names start/end/title/ttsText/highlights — never startLine/endLine/label/subHighlights.")
             appendLine("   The top-level \"language\" is the walkthrough's language code (\"en\" if English).")
             appendLine(

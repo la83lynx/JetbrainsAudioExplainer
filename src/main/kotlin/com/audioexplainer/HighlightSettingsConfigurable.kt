@@ -4,6 +4,8 @@ import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.components.service
+import com.intellij.openapi.editor.colors.EditorColorsManager
+import com.intellij.openapi.editor.colors.EditorFontType
 import com.intellij.openapi.options.BoundConfigurable
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
@@ -16,14 +18,23 @@ import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.components.ActionLink
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.dsl.builder.Cell
+import com.intellij.ui.dsl.builder.Row
 import com.intellij.ui.dsl.builder.bindIntValue
 import com.intellij.ui.dsl.builder.bindItem
 import com.intellij.ui.dsl.builder.bindSelected
 import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
 import java.awt.Color
+import java.awt.Font
+import java.awt.GraphicsEnvironment
 import java.awt.event.ActionListener
+import java.text.NumberFormat
+import java.text.ParseException
 import javax.swing.DefaultComboBoxModel
+import javax.swing.JSpinner
+import javax.swing.text.DefaultFormatterFactory
+import javax.swing.text.NumberFormatter
 
 /**
  * Settings page for the editor spotlight appearance (Phase 3.5), shown under
@@ -45,6 +56,12 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     private val accentPanel = ColorPanel().apply { selectedColor = parseColor(state.accentColor) }
     private val glowPanel = ColorPanel().apply { selectedColor = parseColor(state.activeGlowColor) }
 
+    /** Disabled while arrows follow the accent, so the picker never shows a colour that isn't in use. */
+    private val arrowColorPanel = ColorPanel().apply {
+        selectedColor = parseColor(state.arrowColor)
+        isEnabled = !state.arrowUseAccent
+    }
+
     init {
         // Off the EDT: discover Windows SAPI voices (Phase L7) so the language/voice combos below include
         // them + any SAPI-only languages, and warm the Kokoro prerequisite probe (both `refresh = false`,
@@ -55,6 +72,8 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
             val tts = TtsService.getInstance()
             runCatching { tts.status(refresh = false) }
             runCatching { tts.sapiVoices(refresh = false) }
+            // Warm the installed-font list here too, so building the panel doesn't enumerate fonts on the EDT.
+            runCatching { proseFonts() }
             ApplicationManager.getApplication().invokeLater({ refreshEngineStatusLabels() }, ModalityState.any())
         }
     }
@@ -64,9 +83,36 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     private lateinit var glowSpinner: JBIntSpinner
     private lateinit var tintSpinner: JBIntSpinner
     private lateinit var gapWidthSpinner: JBIntSpinner
+    private lateinit var calloutTintSpinner: JBIntSpinner
+    private lateinit var calloutOpacitySpinner: JBIntSpinner
     private lateinit var overviewCheck: JBCheckBox
     private lateinit var tintCheck: JBCheckBox
     private lateinit var gapCheck: JBCheckBox
+    private lateinit var calloutCheck: JBCheckBox
+    private lateinit var exampleCheck: JBCheckBox
+    private lateinit var flashCheck: JBCheckBox
+    private lateinit var flashMsSpinner: JBIntSpinner
+    private lateinit var relationsCheck: JBCheckBox
+    private lateinit var frameCombo: ComboBox<String>
+    private lateinit var proseFontCombo: ComboBox<String>
+    private lateinit var leaderCheck: JBCheckBox
+
+    /**
+     * Live sample of the description font, kept in sync with the family combo *and* the text-size spinner —
+     * the two settings that decide the face the callout actually draws prose in. Its own colour is the
+     * dialog's, not the callout's: over a settings background the softened body colour reads as disabled
+     * text, and the thing being previewed here is the font.
+     */
+    private val proseFontPreview = JBLabel(PROSE_PREVIEW_TEXT)
+    private lateinit var calloutRadiusSpinner: JBIntSpinner
+    private lateinit var calloutBarSpinner: JBIntSpinner
+    private lateinit var calloutScaleSpinner: JBIntSpinner
+    private lateinit var calloutBelowCheck: JBCheckBox
+    private lateinit var arrowAccentCheck: JBCheckBox
+    private lateinit var arrowThicknessSpinner: JBIntSpinner
+    private lateinit var arrowHeadSpinner: JBIntSpinner
+    private lateinit var arrowSquareCheck: JBCheckBox
+    private lateinit var arrowLabelsCheck: JBCheckBox
 
     /** The narration voice combo (Phase L7 cleanup) — its items are rebuilt to match the currently-selected
      *  explanation language, so it always shows only voices valid for that language. */
@@ -83,10 +129,10 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     override fun createPanel(): DialogPanel = panel {
         group("Segment spotlight") {
             row("Outside-segment brightness (%):") {
-                outsideSpinner = spinner(0..100).bindIntValue(state::outsideDimPercent).component
+                outsideSpinner = clampedSpinner(0..100).bindIntValue(state::outsideDimPercent).component
             }.rowComment("Lower = more dimmed. Lines outside the current segment.")
             row("Within-segment brightness (%):") {
-                withinSpinner = spinner(0..100).bindIntValue(state::withinDimPercent).component
+                withinSpinner = clampedSpinner(0..100).bindIntValue(state::withinDimPercent).component
             }.rowComment("Non-active and context lines inside the segment. Keep clearly brighter than the outside value.")
         }
 
@@ -98,7 +144,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                     .onIsModified { toHex(glowPanel.selectedColor ?: return@onIsModified false) != state.activeGlowColor }
             }
             row("Glow strength (%):") {
-                glowSpinner = spinner(0..100).bindIntValue(state::activeGlowPercent).component
+                glowSpinner = clampedSpinner(0..100).bindIntValue(state::activeGlowPercent).component
             }.rowComment("Whole-line background glow behind the active highlight.")
             row {
                 overviewCheck = checkBox("Show accent mark in the overview ruler")
@@ -118,7 +164,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                     .bindSelected(state::nonActiveTint).component
             }.rowComment("Gives non-active highlights their own cue so they don't rely on the gutter bar alone.")
             row("Tint strength (%):") {
-                tintSpinner = spinner(0..100).bindIntValue(state::nonActiveTintPercent).component
+                tintSpinner = clampedSpinner(0..100).bindIntValue(state::nonActiveTintPercent).component
             }
         }
 
@@ -127,8 +173,118 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 gapCheck = checkBox("Show accent gutter bar").bindSelected(state::gapGutter).component
             }
             row("Gutter bar width (px):") {
-                gapWidthSpinner = spinner(1..8).bindIntValue(state::gapGutterWidth).component
+                gapWidthSpinner = clampedSpinner(1..8).bindIntValue(state::gapGutterWidth).component
             }
+        }
+
+        group("Step decorations") {
+            row {
+                calloutCheck = checkBox("Docked callout by the active lines").bindSelected(state::callout).component
+            }.rowComment("Shows the step's short label in the editor. Nothing is drawn for walkthroughs without per-step labels. Appearance and placement: “Callout appearance” below.")
+            row {
+                exampleCheck = checkBox("Include the step's worked example").bindSelected(state::calloutExample).component
+            }.rowComment("Adds a one-line “input → output” illustration under the callout text, where the walkthrough gives one. Needs the callout above.")
+            row {
+                flashCheck = checkBox("Flash the step's key identifier").bindSelected(state::tokenFlash).component
+            }.rowComment("Briefly pulses the one identifier a step names, where the walkthrough points at one. Nothing happens on steps that don't.")
+            row("Flash duration (ms):") {
+                flashMsSpinner = clampedSpinner(100..3000).bindIntValue(state::tokenFlashMs).component
+            }
+            row {
+                relationsCheck = checkBox("Show relationships between lines").bindSelected(state::relations).component
+            }.rowComment("Draws an arrow between two related lines of the file, or a clickable gutter pointer when the other end is in another file. Only where the walkthrough names a relationship.")
+        }
+
+        group("Callout appearance") {
+            row("Frame style:") {
+                frameCombo = comboBox(FRAME_IDS)
+                    .bindItem(
+                        { state.calloutFrame },
+                        { state.calloutFrame = it ?: AudioExplainerSettings.CALLOUT_FRAME_BAR },
+                    )
+                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { frameLabel(it) } }
+                    .component
+            }.rowComment("All five place the same text. None is the lightest thing to put over code; Outline keeps an edge without filling the line; Comment block disguises the aside as a <code>//</code> comment in the scheme's own comment colour.")
+            row("Description font:") {
+                proseFontCombo = comboBox(proseFonts())
+                    .bindItem(
+                        { state.calloutProseFont },
+                        { state.calloutProseFont = it ?: "" },
+                    )
+                    .applyToComponent {
+                        renderer = SimpleListCellRenderer.create("") { proseFontLabel(it) }
+                        // Fires on a pick *and* on every reset (`setSelectedItem` always fires), so the sample
+                        // below never shows a family the combo isn't on.
+                        addActionListener { refreshProseFontPreview() }
+                    }
+                    .component
+            }.rowComment("The prose aside and the relation pointer lines. The worked example always stays on the editor's code font — an example is code. Size follows “Text size” below.")
+            row("") {
+                cell(proseFontPreview)
+            }.rowComment("Sample at the editor's italic face in the chosen family, at the size below.")
+            row("Tint strength (%):") {
+                calloutTintSpinner = clampedSpinner(0..100).bindIntValue(state::calloutTintPercent).component
+            }.rowComment("How far the box's background is pulled toward the accent colour.")
+            row("Opacity (%):") {
+                calloutOpacitySpinner = clampedSpinner(0..100).bindIntValue(state::calloutOpacityPercent).component
+            }.rowComment("100 is a solid box. Lower it to let code — or a relationship arrow with nowhere else to run — read through the callout. Only the fill fades: at 0 the text, bar and outline all still draw.")
+            row("Corner radius (px):") {
+                calloutRadiusSpinner = clampedSpinner(0..16).bindIntValue(state::calloutCornerRadius).component
+            }.rowComment("0 squares the box off.")
+            row("Accent bar width (px):") {
+                calloutBarSpinner = clampedSpinner(1..10).bindIntValue(state::calloutBarWidth).component
+            }.rowComment("Only the Bar frame style draws one.")
+            row("Text size (% of editor font):") {
+                calloutScaleSpinner = clampedSpinner(60..160).bindIntValue(state::calloutTextScalePercent).component
+                // This size is half of what the description sample above is showing.
+                calloutScaleSpinner.addChangeListener { refreshProseFontPreview() }
+            }.rowComment("The wrap follows the size, so a larger box fits fewer words per line — the per-paragraph line caps don't move.")
+            row {
+                calloutBelowCheck = checkBox("Dock the callout below the active lines")
+                    .bindSelected(state::calloutBelow).component
+            }.rowComment("Default is above, which matches reading order: the aside, then the code it describes.")
+            row {
+                leaderCheck = checkBox("Draw a leader to the annotated line")
+                    .bindSelected(state::calloutLeader).component
+            }.rowComment("A speech-bubble tail off the box's near edge, a quarter of the way along it, pointing the way the box is docked. Takes the box's own tint where the frame paints one; every style but Bar also outlines it. Costs a few px of editor height per step.")
+            // Both fields the sample depends on exist by now. Reset fires the combo listener anyway, so this
+            // only matters for the instant between building the panel and the platform's first reset.
+            refreshProseFontPreview()
+        }
+
+        group("Relationship arrows") {
+            row {
+                arrowAccentCheck = checkBox("Use the accent colour for arrows")
+                    .bindSelected(state::arrowUseAccent).component
+                // Enable/disable the picker live rather than only on reset, so unticking this has a visible
+                // effect before OK is pressed.
+                arrowAccentCheck.addActionListener { arrowColorPanel.isEnabled = !arrowAccentCheck.isSelected }
+            }
+            row("Arrow colour:") {
+                cell(arrowColorPanel)
+                    .onReset {
+                        arrowColorPanel.selectedColor = parseColor(state.arrowColor)
+                        arrowColorPanel.isEnabled = !state.arrowUseAccent
+                    }
+                    .onApply { arrowColorPanel.selectedColor?.let { state.arrowColor = toHex(it) } }
+                    .onIsModified {
+                        toHex(arrowColorPanel.selectedColor ?: return@onIsModified false) != state.arrowColor
+                    }
+            }.rowComment("Used when the box above is unticked. The arrow's own note follows it; the callout's pointer line stays on the accent, since that belongs to the box.")
+            row("Thickness (tenths of a px):") {
+                arrowThicknessSpinner = clampedSpinner(8..40).bindIntValue(state::arrowThicknessTenths).component
+            }.rowComment("14 is the 1.4 px hairline arrows shipped with; 30 draws a bold diagram line.")
+            row("Arrowhead size (px):") {
+                arrowHeadSpinner = clampedSpinner(4..16).bindIntValue(state::arrowHeadSize).component
+            }
+            row {
+                arrowSquareCheck = checkBox("Square the elbow corners")
+                    .bindSelected(state::arrowSquareElbow).component
+            }
+            row {
+                arrowLabelsCheck = checkBox("Show the relationship note beside the arrow")
+                    .bindSelected(state::arrowLabels).component
+            }.rowComment("Off leaves that text to the callout box and the gutter pointer's tooltip, which carry it anyway.")
         }
 
         group("Narration (audio)") {
@@ -167,7 +323,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                     .component
             }.rowComment("Voices for the explanation language above — updates when you change it. A loaded walkthrough narrates with a voice matching its own language.")
             row("Speed (%):") {
-                spinner(25..400).bindIntValue(state::ttsSpeedPercent)
+                clampedSpinner(25..400).bindIntValue(state::ttsSpeedPercent)
             }.rowComment("100 = normal. The sidebar's speed buttons write here too.")
         }
 
@@ -269,16 +425,56 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 glowSpinner.value = AudioExplainerSettings.DEF_ACTIVE_GLOW
                 tintSpinner.value = AudioExplainerSettings.DEF_NONACTIVE_TINT
                 gapWidthSpinner.value = AudioExplainerSettings.DEF_GAP_WIDTH
+                calloutTintSpinner.value = AudioExplainerSettings.DEF_CALLOUT_TINT
+                calloutOpacitySpinner.value = AudioExplainerSettings.DEF_CALLOUT_OPACITY
+                calloutRadiusSpinner.value = AudioExplainerSettings.DEF_CALLOUT_ARC
+                calloutBarSpinner.value = AudioExplainerSettings.DEF_CALLOUT_BAR_W
+                calloutScaleSpinner.value = AudioExplainerSettings.DEF_CALLOUT_TEXT_SCALE
+                arrowThicknessSpinner.value = AudioExplainerSettings.DEF_ARROW_THICKNESS
+                arrowHeadSpinner.value = AudioExplainerSettings.DEF_ARROW_HEAD
+                flashMsSpinner.value = AudioExplainerSettings.DEF_TOKEN_FLASH_MS
                 overviewCheck.isSelected = true
                 tintCheck.isSelected = true
                 gapCheck.isSelected = true
+                calloutCheck.isSelected = true
+                exampleCheck.isSelected = true
+                flashCheck.isSelected = true
+                relationsCheck.isSelected = true
+                calloutBelowCheck.isSelected = false
+                arrowSquareCheck.isSelected = false
+                arrowLabelsCheck.isSelected = true
+                arrowAccentCheck.isSelected = true
+                leaderCheck.isSelected = true
+                frameCombo.selectedItem = AudioExplainerSettings.CALLOUT_FRAME_BAR
+                proseFontCombo.selectedItem = ""
                 accentPanel.selectedColor = parseColor(AudioExplainerSettings.DEF_ACCENT_COLOR)
                 glowPanel.selectedColor = parseColor(AudioExplainerSettings.DEF_ACTIVE_GLOW_COLOR)
+                arrowColorPanel.selectedColor = parseColor(AudioExplainerSettings.DEF_ACCENT_COLOR)
+                arrowColorPanel.isEnabled = false
             }
                 // Runs after every binding/colour write above (cells apply in creation order), so the
                 // live re-render sees the just-applied values.
                 .onApply { refreshLiveWalkthrough() }
         }.rowComment("Applies to the fields above; save with OK/Apply.")
+    }
+
+    /**
+     * Re-face [proseFontPreview] from the current combo family and text size, by the same rule
+     * `CalloutRenderer.font` applies to a prose block: the editor's italic face, in the named family if one
+     * is named, scaled by the text-size percentage. An unavailable family falls back inside `Font` here just
+     * as it does there, so a family that won't render is visible in the sample rather than only in the editor.
+     */
+    private fun refreshProseFontPreview() {
+        val base = EditorColorsManager.getInstance().globalScheme.getFont(EditorFontType.ITALIC)
+        val family = (proseFontCombo.selectedItem as? String)?.trim().orEmpty()
+        val named = if (family.isEmpty()) base else Font(family, base.style, base.size)
+        // The size spinner is built after this row, so before it exists the persisted value is the truth.
+        val scale = if (this::calloutScaleSpinner.isInitialized) {
+            calloutScaleSpinner.number
+        } else {
+            state.calloutTextScalePercent
+        }
+        proseFontPreview.font = if (scale == 100) named else named.deriveFont(named.size2D * scale / 100f)
     }
 
     /** Re-style the currently-showing walkthrough (if any) with the new settings. */
@@ -432,6 +628,47 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         private fun needsPack(lang: Language): Boolean =
             lang.requiresExtraDeps && lang.code !in TtsService.getInstance().cachedLanguagesReady()
 
+        /** Callout frame styles, in the order they read as "least to most decoration" reversed — see [frameLabel]. */
+        private val FRAME_IDS = listOf(
+            AudioExplainerSettings.CALLOUT_FRAME_BAR,
+            AudioExplainerSettings.CALLOUT_FRAME_OUTLINE,
+            AudioExplainerSettings.CALLOUT_FRAME_SOLID,
+            AudioExplainerSettings.CALLOUT_FRAME_NONE,
+            AudioExplainerSettings.CALLOUT_FRAME_COMMENT,
+        )
+
+        /** Combo label for a frame style. Unknown ids read as Bar, matching the renderer's own fallback. */
+        private fun frameLabel(id: String?): String = when (id) {
+            AudioExplainerSettings.CALLOUT_FRAME_OUTLINE -> "Outline — accent border"
+            AudioExplainerSettings.CALLOUT_FRAME_SOLID -> "Solid — tinted panel, no bar"
+            AudioExplainerSettings.CALLOUT_FRAME_NONE -> "None — text only, no panel"
+            AudioExplainerSettings.CALLOUT_FRAME_COMMENT -> "Comment block — “// ” lines, comment colour"
+            else -> "Bar — accent bar down the left"
+        }
+
+        /**
+         * Families for the description-font combo: the empty id (the editor's own font) first, then whatever
+         * this machine has. Enumerating fonts is slow enough to be worth doing once — `by lazy` in a
+         * companion, warmed off the EDT by [init] — and it cannot be a compile-time list because the answer
+         * is per-machine.
+         */
+        private val PROSE_FONTS: List<String> by lazy {
+            listOf("") + GraphicsEnvironment.getLocalGraphicsEnvironment().availableFontFamilyNames.sorted()
+        }
+
+        /** Guarded accessor: a font-enumeration failure costs the choice of family, not the settings page. */
+        private fun proseFonts(): List<String> = runCatching { PROSE_FONTS }.getOrDefault(listOf(""))
+
+        private fun proseFontLabel(family: String?): String =
+            if (family.isNullOrEmpty()) "Editor font (default)" else family
+
+        /**
+         * The description-font sample. A real sentence rather than a pangram or "AaBbCc": what is being judged
+         * is whether a callout-length aside is comfortable to read at a glance beside code, and letterforms
+         * alone don't answer that.
+         */
+        private const val PROSE_PREVIEW_TEXT = "The aside about this line reads like this."
+
         private fun parseColor(hex: String): Color = try {
             Color(hex.trim().removePrefix("#").toInt(16))
         } catch (_: Exception) {
@@ -439,5 +676,52 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         }
 
         private fun toHex(color: Color): String = String.format("%06X", color.rgb and 0xFFFFFF)
+    }
+}
+
+/**
+ * A `spinner` whose text field clamps what you type instead of refusing it.
+ *
+ * `JSpinner`'s number editor gives its formatter the model's min/max, so `InternationalFormatter`
+ * answers out-of-range *text* with `ParseException("Value not within min/max range")` — and the
+ * settings dialog commits every formatted field in `doOKAction`. One typed digit outside the range
+ * (a 0 in a 0..100-now, 20..100-then opacity spinner, say) therefore threw from OK: the dialog
+ * refused to close and the platform logged a SEVERE against whichever plugin owned the page. Every
+ * spinner here was exposed, not just the appearance ones.
+ *
+ * Clamping in `stringToValue` keeps the bounds meaningful — type 500 and the commit rewrites the
+ * field to the maximum, so you see what you got — while making OK unblockable. Unparseable text
+ * reverts to the last committed number for the same reason.
+ */
+private fun Row.clampedSpinner(range: IntRange, step: Int = 1): Cell<JBIntSpinner> =
+    spinner(range, step).applyToComponent {
+        val field = (editor as? JSpinner.DefaultEditor)?.textField ?: return@applyToComponent
+        val format = (field.formatter as? NumberFormatter)?.format as? NumberFormat
+            ?: NumberFormat.getIntegerInstance()
+        field.formatterFactory = DefaultFormatterFactory(ClampingIntFormatter(format, range))
+    }
+
+/** Parses like the editor's own formatter, then folds the result into [range] rather than rejecting it. */
+private class ClampingIntFormatter(
+    format: NumberFormat,
+    private val range: IntRange,
+) : NumberFormatter(format) {
+
+    init {
+        // No minimum/maximum on purpose: the bounds are applied by clamping below, and setting them here
+        // would restore the very ParseException this class exists to avoid.
+        valueClass = Int::class.javaObjectType
+    }
+
+    override fun stringToValue(text: String?): Any {
+        val typed = try {
+            super.stringToValue(text) as? Number
+        } catch (_: ParseException) {
+            null
+        }
+        val n = typed?.toInt()
+            ?: (formattedTextField?.value as? Number)?.toInt()
+            ?: range.first
+        return n.coerceIn(range.first, range.last)
     }
 }

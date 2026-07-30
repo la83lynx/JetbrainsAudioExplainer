@@ -104,21 +104,35 @@ class WalkthroughStorage(private val workspaceRoot: Path) {
     }
 
     private fun toRelativePaths(segments: List<Segment>): List<Segment> = segments.map { seg ->
-        val rel = try {
-            workspaceRoot.relativize(Path.of(seg.file)).toString().replace('\\', '/')
-        } catch (_: Exception) {
-            seg.file // e.g. different drive on Windows — keep absolute.
-        }
-        seg.copy(file = rel)
+        seg.copy(file = relativize(seg.file), relations = mapEndpointFiles(seg.relations, ::relativize))
     }
 
     private fun toAbsolutePaths(segments: List<Segment>): List<Segment> = segments.map { seg ->
-        val abs = try {
-            workspaceRoot.resolve(seg.file).normalize().toString()
-        } catch (_: Exception) {
-            seg.file
-        }
-        seg.copy(file = abs)
+        seg.copy(file = absolutize(seg.file), relations = mapEndpointFiles(seg.relations, ::absolutize))
+    }
+
+    private fun relativize(file: String): String = try {
+        workspaceRoot.relativize(Path.of(file)).toString().replace('\\', '/')
+    } catch (_: Exception) {
+        file // e.g. different drive on Windows, or already relative — keep as written.
+    }
+
+    private fun absolutize(file: String): String = try {
+        workspaceRoot.resolve(file).normalize().toString()
+    } catch (_: Exception) {
+        file
+    }
+
+    /**
+     * Apply the same path rewrite to relation endpoints that carry their own [Endpoint.file] — a saved
+     * walkthrough must survive being opened from a different absolute root, and a cross-file relation is
+     * exactly as root-dependent as [Segment.file] is. Endpoints without a file (the common case: the
+     * segment's own file) are untouched.
+     */
+    private fun mapEndpointFiles(relations: List<Relation>, f: (String) -> String): List<Relation> {
+        if (relations.isEmpty()) return relations
+        fun map(ep: Endpoint) = ep.file?.let { ep.copy(file = f(it)) } ?: ep
+        return relations.map { it.copy(from = map(it.from), to = map(it.to)) }
     }
 
     companion object {

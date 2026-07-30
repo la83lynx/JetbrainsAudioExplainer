@@ -44,10 +44,11 @@ Complete these steps in order:
 
 Walkthroughs carry a top-level `language` code (`en` default; also `es`, `fr`, `hi`, `it`, `pt`, `ja`,
 `zh`). If the user asks for a walkthrough in one of these languages, set `language` in the `set_plan` and
-write ALL prose (title, segment titles/explanations, highlight `ttsText`/labels) in that language, keeping
-code identifiers/paths/API names verbatim. One language per walkthrough. The plugin loads that language's
-voices automatically. No new question is required — infer it from the user's request. See
-`docs/walkthrough.md` and `docs/tts.md`.
+write ALL prose (title, segment titles/explanations, highlight `ttsText`/labels/notes) in that language,
+keeping code identifiers/paths/API names verbatim — including any `token` anchor, which must match the
+source text exactly. One language per walkthrough. The plugin loads that
+language's voices automatically. No new question is required — infer it from the user's request. See
+`docs/plan-schema.md` (schema), `docs/walkthrough.md` and `docs/tts.md`.
 
 ## Q&A on Active Walkthrough
 
@@ -72,7 +73,9 @@ If `state` returns `status: "idle"` (no active walkthrough), check `.walkthrough
 | Ignoring complexity tags | `[core]` = thorough, `[wiring]` = breeze through, `[supporting]` = brief |
 | Text output when sidebar active | If health check returned ok, send plan JSON only — no terminal text |
 | Sub-highlights too many or too granular | Deep Dive: 6-12 highlights per segment, 1-4 lines each. Highlights are a moving pointer over one continuous voice stream — ttsText across highlights is concatenated and spoken as one TTS call, so write it as flowing narration, not self-contained slides. Overview: 1-8 lines, 3-6 per segment |
-| Wrong field names in sidebar JSON | Use `start`/`end`/`title`/`ttsText`/`highlights` — NOT `startLine`/`endLine`/`label`/`subHighlights`. See `docs/plan.md` for exact schema |
+| Wrong field names in sidebar JSON | Use `start`/`end`/`title`/`ttsText`/`highlights` — NOT `startLine`/`endLine`/`label`/`subHighlights`. **`docs/plan-schema.md` is the single source of truth** for the schema (`docs/plan.md` is the Deep-Dive planner step, a different object) |
+| `token` anchor that isn't in the code | `token` must be a literal substring of the highlight's own lines, copied verbatim. A paraphrase or a remembered name resolves to nothing and the flash silently doesn't happen |
+| A `relations` entry that never appears | Relations are drawn per step: one endpoint must fall **inside the line range of a highlight**, or nothing shows. Cross-file targets render as a clickable pointer, not an arrow — that is expected, not a failure. Max 2-3 per segment |
 | Skipping `set_plan` before `goto` | Sidebar needs the full plan loaded first. Always send `set_plan` before any `goto` messages |
 | Sending plan before agents finish | Wait for ALL parallel segment agents to complete. Each writes to a unique temp dir (created via `mktemp -d`). Assemble from files with `jq`, then send one `set_plan`. Clean up temp dir after. Never send stubs or partial plans |
 | Scout generating highlights | Scout only maps files and call chain. Highlights are generated in step 2 (Overview: single agent, Deep Dive: parallel agents) |

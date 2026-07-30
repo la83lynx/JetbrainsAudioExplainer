@@ -43,3 +43,25 @@ intellijPlatform {
 kotlin {
     jvmToolchain(21)
 }
+
+/**
+ * Dev-run diagnostics.
+ *
+ * Where the log actually is — this cost a debugging session, so it is written down:
+ *  1. NOT `build/idea-sandbox/`. That tree is a leftover from an older Gradle-plugin sandbox layout
+ *     and its `log/`+`system/` dirs are empty forever, which looks exactly like "no log is written".
+ *     The live sandbox is under `.intellijPlatform/sandbox/<project>/<ide>/`, so the log is:
+ *         .intellijPlatform/sandbox/JetbrainsAudioExplainer/RD-2026.1.4/log/idea.log
+ *     The IDE prints its own log location during startup ("Log directory: file:///…") — trust that
+ *     line over any remembered path.
+ *  2. `runIde`'s **stdout carries WARN and above only**, so `debug`/`info` never appear there. Teeing
+ *     the console (`.\gradlew.bat runIde 2>&1 | Tee-Object -FilePath build\runIde.log`) is still worth
+ *     doing for startup/crash diagnosis — and never pipe through `Select-Object -Last N`, which buffers
+ *     the whole stream and then discards the startup lines — but read idea.log for our own output.
+ *  3. Our `log.debug` calls are dropped unless the category is enabled. This turns them on for every
+ *     `runIde`, so the decoration/narration timeline is visible without touching code. They land in
+ *     idea.log at level FINE (java.util.logging's name for DEBUG) — grep for `#com.audioexplainer`.
+ */
+tasks.runIde {
+    systemProperty("idea.log.debug.categories", "#com.audioexplainer")
+}

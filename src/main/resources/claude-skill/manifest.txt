@@ -2,6 +2,7 @@ SKILL.md
 VERSION
 docs/assess.md
 docs/explain-at-cursor.md
+docs/plan-schema.md
 docs/plan.md
 docs/podcast.md
 docs/read.md

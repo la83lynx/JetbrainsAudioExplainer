@@ -42,6 +42,8 @@ let genLastPhase = "idle";
 let deferredPlaybackComplete = false;
 /** Guard: true while waitForActiveSourcesToFinish has a pending wrapper or sent playback_complete */
 let playbackCompleteWired = false;
+/** True once `playback_started` was sent for the current step — one per step, cleared by resetStepAudioModel. */
+let playbackStartedSent = false;
 
 /** @type {{base64: string, sampleRate: number}[]} */
 let pendingChunks = [];
@@ -388,6 +390,7 @@ function resetStepAudioModel() {
 	stepSentences = [];
 	stepAudioDuration = 0;
 	stepAudioEnded = false;
+	playbackStartedSent = false;
 }
 
 /** Start the rAF loop driving the read-along cursor, if audio is playing and it isn't already running. */
@@ -399,6 +402,18 @@ function ensureProgressLoop() {
 function updateStepProgress() {
 	progressRaf = 0;
 	if (audioCtx && stepStartClock !== null) {
+		// The playhead has reached this step's first scheduled buffer, so the user is NOW hearing it. Tell the
+		// plugin once per step: the editor's token flash keys off this, because "audio requested" is 1.8-6.0s
+		// too early (MoreUI.md §2.8). Reported from here rather than when the buffer is scheduled so a
+		// non-zero start offset, or a step whose first chunk lands mid-queue, is still honoured.
+		if (!playbackStartedSent && audioCtx.currentTime >= stepStartClock) {
+			playbackStartedSent = true;
+			vscode.postMessage({
+				type: "playback_started",
+				segmentId: state.currentSegment,
+				highlightIndex: currentHighlightIndex,
+			});
+		}
 		applyReadAlong(audioCtx.currentTime - stepStartClock);
 	}
 	if (audioPlaying) progressRaf = requestAnimationFrame(updateStepProgress);

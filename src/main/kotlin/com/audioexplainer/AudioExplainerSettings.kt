@@ -71,6 +71,122 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         @JvmField var gapGutter: Boolean = true
         @JvmField var gapGutterWidth: Int = DEF_GAP_WIDTH
 
+        // ── Step decorations (MoreUI step 1) ───────────────────────────────────
+
+        /**
+         * Docked callout above the active highlight, showing that highlight's own short label. Renders
+         * nothing when the walkthrough carries no per-highlight label, so plain plans are unaffected.
+         */
+        @JvmField var callout: Boolean = true
+
+        /** Callout box background: [accentColor] blended this far toward the editor background. */
+        @JvmField var calloutTintPercent: Int = DEF_CALLOUT_TINT
+
+        /**
+         * How opaque that background is. 100 = solid (the default, and how the box has always looked).
+         * Lower it and code or a relation arrow underneath the box reads through it — which matters when an
+         * arrow's leg has nowhere to run but across the box, on an editor too narrow to route around it.
+         */
+        @JvmField var calloutOpacityPercent: Int = DEF_CALLOUT_OPACITY
+
+        /**
+         * How the box is drawn *around* its text: [CALLOUT_FRAME_BAR] (accent bar down the left, the
+         * original), [CALLOUT_FRAME_OUTLINE] (accent border), [CALLOUT_FRAME_SOLID] (tinted panel alone),
+         * [CALLOUT_FRAME_NONE] (text with no panel at all — the lightest thing to put over code) or
+         * [CALLOUT_FRAME_COMMENT] (no panel either, but every line prefixed `//` and painted in the scheme's
+         * own comment colour, so the aside reads as a comment somebody wrote in the file).
+         *
+         * Decoration only in the sense that matters: the text, the per-block line caps and the measure/paint
+         * path are shared by all five. [CALLOUT_FRAME_COMMENT] does move the wrap, because its prefix takes
+         * real width — see `EditorHighlighter.CalloutRenderer.prefix`.
+         */
+        @JvmField var calloutFrame: String = CALLOUT_FRAME_BAR
+
+        /**
+         * Font family for the callout's *description* text — the prose aside and the relation pointer lines.
+         * Blank = the editor's own font, which is what it has always used. The worked example ignores this
+         * and stays on the editor font deliberately: it is code, and code that isn't in the code font reads
+         * as prose about code.
+         *
+         * An unknown family costs the family, not the callout — `java.awt.Font` falls back to a default.
+         */
+        @JvmField var calloutProseFont: String = ""
+
+        /**
+         * Draw a short leader from the callout down (or up, when [calloutBelow] is set) to the line it
+         * annotates. Costs a few px of the inlay's reserved height, which is why it is a setting rather than
+         * always-on: on a dense file that height is the scarce thing.
+         */
+        @JvmField var calloutLeader: Boolean = true
+
+        /** Corner radius of the callout box in px; 0 is a square box. */
+        @JvmField var calloutCornerRadius: Int = DEF_CALLOUT_ARC
+
+        /** Width of the left accent bar in px. Only [CALLOUT_FRAME_BAR] draws one. */
+        @JvmField var calloutBarWidth: Int = DEF_CALLOUT_BAR_W
+
+        /**
+         * Callout text size as a percentage of the editor font. The wrap follows it, because the renderer
+         * measures and paints through the same [java.awt.FontMetrics] either way.
+         */
+        @JvmField var calloutTextScalePercent: Int = DEF_CALLOUT_TEXT_SCALE
+
+        /**
+         * Dock the callout *below* the active lines instead of above them. Anchors to the last active line
+         * and relates to the preceding text, so an edit still carries the box with the code it describes.
+         */
+        @JvmField var calloutBelow: Boolean = false
+
+        /**
+         * Relation arrows follow [accentColor] like every other decoration unless this is off, in which case
+         * they use [arrowColor]. A flag plus a colour rather than "blank means inherit", so the colour picker
+         * always has a real colour to show.
+         */
+        @JvmField var arrowUseAccent: Boolean = true
+        @JvmField var arrowColor: String = DEF_ACCENT_COLOR
+
+        /** Arrow line width in tenths of a px — 14 is the 1.4 px hairline the arrows shipped with. */
+        @JvmField var arrowThicknessTenths: Int = DEF_ARROW_THICKNESS
+
+        /** Arrowhead length (and width) in px. */
+        @JvmField var arrowHeadSize: Int = DEF_ARROW_HEAD
+
+        /** Square the elbow's corners instead of rounding them. */
+        @JvmField var arrowSquareElbow: Boolean = false
+
+        /**
+         * Draw a relation's note beside the arrow's leg. Off leaves that text to the callout box and the
+         * gutter pointer's tooltip, which carry it anyway — useful on a busy file.
+         */
+        @JvmField var arrowLabels: Boolean = true
+
+        /**
+         * Include a highlight's one-line `example` (an `input → output` illustration) in the callout box,
+         * below the prose aside and drawn upright so it reads as code. Gated *inside* [callout] — the example
+         * lives in that box, so turning the box off hides it too. Does nothing on highlights with no
+         * `example`, which is most of them.
+         */
+        @JvmField var calloutExample: Boolean = true
+
+        /**
+         * Briefly flash the identifier named by a highlight's `token` anchor when that step goes active,
+         * fading from [accentColor] into the line's own glow. Does nothing on highlights with no `token`,
+         * or when the token can't be found in the highlighted lines.
+         */
+        @JvmField var tokenFlash: Boolean = true
+
+        /** Total flash duration in milliseconds; the fade is spread over this. */
+        @JvmField var tokenFlashMs: Int = DEF_TOKEN_FLASH_MS
+
+        /**
+         * Draw the relationships a walkthrough declares (`relations`): an arrow between two lines of the file
+         * on screen, and a clickable gutter pointer + callout line for a target the editor can't point at
+         * (another file, an off-screen symbol). One toggle covers both forms — they are two renderings of the
+         * same authored fact, and a reader who doesn't want arrows over their code doesn't want half of them
+         * either. Does nothing on walkthroughs that declare no relations, which is most of them.
+         */
+        @JvmField var relations: Boolean = true
+
         // ── TTS / narration (Phase 7) ──────────────────────────────────────────
 
         /**
@@ -152,6 +268,26 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         const val DEF_ACTIVE_GLOW = 10
         const val DEF_NONACTIVE_TINT = 14
         const val DEF_GAP_WIDTH = 3
+        const val DEF_CALLOUT_TINT = 18
+
+        /** Solid, i.e. the box exactly as it looked before opacity was a setting. */
+        const val DEF_CALLOUT_OPACITY = 100
+
+        // Callout/arrow geometry defaults. These were renderer constants until they became settings; the
+        // values are unchanged, so a fresh install draws exactly what it drew before.
+        const val DEF_CALLOUT_ARC = 6
+        const val DEF_CALLOUT_BAR_W = 3
+        const val DEF_CALLOUT_TEXT_SCALE = 100
+        const val DEF_ARROW_THICKNESS = 14
+        const val DEF_ARROW_HEAD = 7
+
+        const val CALLOUT_FRAME_BAR = "bar"
+        const val CALLOUT_FRAME_OUTLINE = "outline"
+        const val CALLOUT_FRAME_SOLID = "solid"
+        const val CALLOUT_FRAME_NONE = "none"
+        const val CALLOUT_FRAME_COMMENT = "comment"
+
+        const val DEF_TOKEN_FLASH_MS = 700
         const val DEF_ACTIVE_GLOW_COLOR = "FFFFFF"
         const val DEF_ACCENT_COLOR = "FFBE3C"
 

@@ -12,6 +12,10 @@ Agent tool parameters:
 
 ### Prompt template
 
+Substitute every `{placeholder}` before dispatching — including `{skillDir}`, the absolute path to this
+skill's directory, so the sub-agent can read the schema doc. A sub-agent that cannot find
+`plan-schema.md` will guess field names, which is exactly the failure this avoids.
+
 ```
 You are generating walkthrough highlights for one segment of a code explanation.
 
@@ -30,24 +34,11 @@ Narrative context:
 Read the code:
 {file_content}   ← use offset={start} limit={end-start+1}
 
-Generate a JSON segment object:
+Generate one JSON segment object, using id={id}, file="{file}", start={start}, end={end}, title="{title}".
 
-{
-  "id": {id},
-  "file": "{file}",
-  "start": {start},
-  "end": {end},
-  "title": "{title}",
-  "explanation": "<markdown explanation of the full segment>",
-  "highlights": [
-    {
-      "start": <line>,
-      "end": <line>,
-      "ttsText": "<1-2 sentence plain-text narration for this highlight>",
-      "explanation": "<optional markdown label shown in sidebar>"
-    }
-  ]
-}
+READ {skillDir}/docs/plan-schema.md FIRST — it is the single source of truth for the segment and
+highlight field names. Do not guess field names from memory: unknown fields are dropped silently, so a
+wrong name produces a walkthrough with pieces mysteriously missing.
 
 Highlight rules:
 
@@ -59,6 +50,10 @@ Think of highlights as a **teacher's pointer moving across the board while talki
 - **Highlight what's interesting**: non-obvious logic, key design decisions, the "why" lines, surprising patterns, error handling strategies, the lines that make this code *this* code rather than generic boilerplate.
 - `ttsText`: **1-2 sentences**, plain text only. Explain the *intent* or *why*, not just what the line does. Because highlights are spoken as one continuous stream, each ttsText should flow naturally from the previous one — use connectives ("Next," "From here," "Once that's done,") rather than restating context. "The retry budget is set to three — enough to recover from a nonce collision but not so many that a broken transaction loops forever." not "This sets the retry limit to three."
 - `explanation`: 2-5 word label shown in sidebar. "Retry budget", "Nonce recovery", "Balance gate". Think tooltip, not prose.
+- `note` (optional): ONE plain-text sentence, drawn as a callout box next to the code in the editor. Use it for the aside a reader would want in the margin — a constraint, a gotcha, the reason behind a magic number, a consequence not visible locally. "Capped at 3 so a broken transaction can't loop forever." Be **sparse**: a note on every highlight becomes wallpaper. Skip it when it would restate the line, and don't repeat `ttsText` — the user already hears that.
+- `example` (optional): ONE line showing the code in action, drawn under the `note` in the same callout box — an input→output pair with concrete values. `"Parse(\"2024-01\") → DateOnly(2024, 1, 1)"`. One line is a hard limit (the box wraps text, so extra lines are dropped with an ellipsis): no fences, no diffs, no multi-statement snippets. Use it where a concrete case clarifies a tricky transformation, a non-obvious default or a surprising return shape — and, like `note`, be sparse.
+- `token` (optional): the ONE identifier this highlight is really about, **copied verbatim from lines `start`–`end`** (matching is exact, so retyping from memory breaks it). The plugin flashes it, pointing the eye at the right word inside a multi-line range. `"maxRetries"`, not `"the maxRetries constant"`. Omit it when the highlight has no single focal name — a range about control flow as a whole doesn't. Add `"occurrence": 2` only when you mean a later match of a repeated name. An unfound token is ignored silently.
+- `relations` (optional, on the **segment** not the highlight): 2-3 at most, each linking two places that are genuinely connected — a value produced on one line and consumed on another (`{"kind":"flow","from":{"line":44,"token":"raw"},"to":{"line":51,"token":"parsed"},"note":"parsed value"}`), a back-and-forth pair (`"kind":"backforth"`), or a call whose target is in another file (`"to":{"file":"Pricing/RateTable.cs","symbol":"RateTable.Lookup","line":88}`). The plugin draws an arrow when both ends are nearby lines of this file and a clickable gutter pointer otherwise — **you don't choose which**. One endpoint must be inside the highlight the relation belongs to, or it is never shown. Get the line numbers right; give a `token` on both ends and the plugin catches a miscount. See `docs/plan-schema.md`.
 - First highlight: open with a one-liner referencing previousContext. ("Picking up from the controller, here's where credentials are actually checked.")
 - `[wiring]` segments: **3-5 highlights max**. Hit only the non-obvious config choices. "Registers the auth module." and move on.
 - `[core]` segments: **8-12 highlights**. Cover every important decision, skip standard patterns.
@@ -71,7 +66,7 @@ Create a unique temp directory for this session: `TMPDIR=$(mktemp -d)` (run once
 Good — pointer style, flowing narration (these are spoken as one continuous stream):
 ```json
 "highlights": [
-  { "start": 12, "end": 16, "ttsText": "Four services are injected — the interesting ones are UserRepository for database access and JwtService for token signing. The mailer and config service are standard NestJS plumbing.", "explanation": "DI dependencies" },
+  { "start": 12, "end": 16, "ttsText": "Four services are injected — the interesting ones are UserRepository for database access and JwtService for token signing. The mailer and config service are standard NestJS plumbing.", "explanation": "DI dependencies", "token": "UserRepository" },
   { "start": 18, "end": 18, "ttsText": "And right below, token expiry is set from config in the constructor — no magic number buried deep in a method where you'd never find it.", "explanation": "Token expiry from config" }
 ]
 ```
