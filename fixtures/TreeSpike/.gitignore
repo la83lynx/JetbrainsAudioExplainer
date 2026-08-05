@@ -1,0 +1,5 @@
+# Build output only — the sources are the fixture and are meant to be tracked.
+bin/
+obj/
+.vs/
+*.user

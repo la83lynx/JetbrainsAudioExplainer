@@ -29,7 +29,7 @@ class EspeakProfile {
  * Persisted, user-tunable appearance settings for the editor spotlight (Phase 3.5).
  *
  * App-level (IDE-wide, not per-project) so one set of preferences applies wherever a walkthrough runs.
- * Values survive restarts in `audioExplainer.xml`. [EditorHighlighter] reads [state] on every render,
+ * Values survive restarts in `audioExplainer.xml`. [SpotlightRenderer] reads [state] on every render,
  * so a change takes effect on the next repaint (the settings page also forces a live re-render on apply).
  *
  * Fields are plain public mutables so the platform's XML serializer round-trips them without ceremony;
@@ -42,7 +42,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
     /**
      * "Brightness" percentages are the blend fraction of the syntax foreground that survives:
      * 100 = untouched syntax colour, 0 = fully flattened to the editor background. Lower = more dimmed.
-     * (This is the `t` in [EditorHighlighter]'s `blend(fg, bg, t)`.)
+     * (This is the `t` in [SpotlightRenderer]'s `blend(fg, bg, t)`.)
      */
     class State {
         /** Lines outside the segment. Should be clearly dimmer than [withinDimPercent]. */
@@ -98,7 +98,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
          *
          * Decoration only in the sense that matters: the text, the per-block line caps and the measure/paint
          * path are shared by all five. [CALLOUT_FRAME_COMMENT] does move the wrap, because its prefix takes
-         * real width — see `EditorHighlighter.CalloutRenderer.prefix`.
+         * real width — see `SpotlightRenderer.CalloutRenderer.prefix`.
          */
         @JvmField var calloutFrame: String = CALLOUT_FRAME_BAR
 

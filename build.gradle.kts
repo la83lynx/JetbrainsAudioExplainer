@@ -64,4 +64,24 @@ kotlin {
  */
 tasks.runIde {
     systemProperty("idea.log.debug.categories", "#com.audioexplainer")
+
+    /*
+     * Phase 1 (TreeOfCode.md) — put the bench's fixture solution in front of it:
+     *
+     *     ./gradlew runIde -PspikeFixture
+     *
+     * Opens the C# fixture SOLUTION instead of this plugin project, because every Arch B question needs
+     * ReSharper to be analysing real C#, and a node view is a view of a live document its backend produced
+     * colour for. Without the flag the sandbox reopens whichever solution was last used, which is a silent way
+     * to have every probe skip. Each bench writes under `<the fixture solution>/scratchpad/`, which is
+     * gitignored. Remove with the com.audioexplainer.spike package.
+     *
+     * The unattended Phase 0b autorun this flag used to arm went with its bench in the cleanup pass; both
+     * surviving benches are opened from Tools → Audio Explainer.
+     *
+     * Close any running sandbox IDE first: a live one holds a Windows jar lock and prepareSandbox fails.
+     */
+    if (project.hasProperty("spikeFixture")) {
+        args(layout.projectDirectory.file("fixtures/TreeSpike/TreeSpike.sln").asFile.absolutePath)
+    }
 }

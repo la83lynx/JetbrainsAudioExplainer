@@ -24,7 +24,7 @@ data class Highlight(
     /**
      * Optional sentence-length aside for the in-editor callout — the margin note a reader would want
      * next to this code ("Capped at 3 so a broken transaction can't loop forever."). [explanation] is a
-     * 2-5 word sidebar label and reads thin in a callout box, so [EditorHighlighter] prefers this when
+     * 2-5 word sidebar label and reads thin in a callout box, so [SpotlightRenderer] prefers this when
      * present and falls back to [explanation]. Purely additive: plans without it render as before.
      */
     val note: String? = null,
@@ -34,14 +34,14 @@ data class Highlight(
      * editor callout, in the editor's *upright* font so it reads as code rather than as prose.
      *
      * Deliberately one line: the callout word-wraps, so a multi-line snippet would be reflowed into a
-     * run-on paragraph and lose exactly the structure that made it a snippet. [EditorHighlighter] keeps
+     * run-on paragraph and lose exactly the structure that made it a snippet. [SpotlightRenderer] keeps
      * the first line and marks the cut; fenced multi-line examples need a different renderer
      * (MoreUI.md §4.3 B4) and are not supported yet.
      */
     val example: String? = null,
     /**
      * Optional **text anchor**: a literal substring of these lines naming the one identifier this step is
-     * really about (`"customerId"`). [EditorHighlighter] resolves it by plain text search over
+     * really about (`"customerId"`). [SpotlightRenderer] resolves it by plain text search over
      * `[start, end]` — never PSI, so it behaves identically in Rider — and briefly flashes it.
      *
      * Deliberately a string rather than a column: the agent can copy it out of the code it just read,
@@ -83,7 +83,7 @@ data class Endpoint(
 )
 
 /**
- * A relationship between two places in the code, drawn by [EditorHighlighter] as an arrow when both ends
+ * A relationship between two places in the code, drawn by [SpotlightRenderer] as an arrow when both ends
  * are lines of the file on screen, and as a clickable gutter pointer + callout line when they are not.
  *
  * The division of labour is deliberate: **the agent describes the semantics, the plugin picks the picture.**

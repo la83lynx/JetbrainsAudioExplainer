@@ -7,3 +7,5 @@ out/
 .intellijPlatform/
 __pycache__/
 *.pyc
+# Phase 0 spike artefacts (PNGs + report) — evidence, not source.
+scratchpad/

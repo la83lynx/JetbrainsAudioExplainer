@@ -25,6 +25,11 @@
                     icon="AllIcons.Toolwindows.Documentation"
                     factoryClass="com.audioexplainer.AudioExplainerToolWindowFactory"/>
         <postStartupActivity implementation="com.audioexplainer.ServerStartupActivity"/>
+        <!-- THROWAWAY, Phase 0b of TreeOfCode.md (probe B2), and the host the surviving benches open their tab
+             in — both of them build a SpikeTreeVirtualFile, so this outlives the bench it was written for.
+             Removed with the com.audioexplainer.spike package. It only ever accepts SpikeTreeVirtualFile, so no
+             file of the user's can reach it. -->
+        <fileEditorProvider implementation="com.audioexplainer.spike.SpikeNodeTreeEditorProvider"/>
         <applicationService serviceImplementation="com.audioexplainer.ExplainerServerService"/>
         <applicationService serviceImplementation="com.audioexplainer.AudioExplainerSettings"/>
         <applicationService serviceImplementation="com.audioexplainer.ClaudeExplainer"/>
@@ -52,6 +57,17 @@
                     class="com.audioexplainer.ConfigureTtsAction"
                     text="Audio engines…"
                     description="Open the per-engine narration settings: status, install Kokoro / language packs, Windows voices"/>
+            <!-- THROWAWAY, Phase 1 of TreeOfCode.md. Removed together with the com.audioexplainer.spike
+                 package once the tree-of-code prototype has settled. The Phase 0 / 0b / 1a" benches were
+                 deleted in the cleanup pass with the surfaces they judged. -->
+            <action id="AudioExplainer.SpikeNodeView"
+                    class="com.audioexplainer.spike.SpikeNodeViewAction"
+                    text="Spike: node view bench (Phase 1a')"
+                    description="Open the interactive CodeNodeView bench over fixtures/TreeSpike: step through nodes, switch every Phase 1c alternative, write report.txt + PNGs to scratchpad/spike-nodeview"/>
+            <action id="AudioExplainer.SpikeNestedNode"
+                    class="com.audioexplainer.spike.SpikeNestedNodeAction"
+                    text="Spike: nested node bench (Phase 1a&#x2057;, Arch C polish)"
+                    description="Open the Arch C bench over fixtures/TreeSpike: a child node embedded inside its parent at the call site, with the chrome &#xd7; leader pair, the padded token box and one collapse affordance, with report.txt + a PNG in scratchpad/spike-nestview"/>
         </group>
     </actions>
 </idea-plugin>

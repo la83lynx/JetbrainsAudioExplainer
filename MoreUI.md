@@ -15,10 +15,18 @@
 
 ## §1 — What shipped
 
-Baseline (`EditorHighlighter.kt`): whole-line `RangeHighlighter`s on `editor.markupModel`
-(`LINES_IN_RANGE`), four layers (dim / segmentDim / gap / active-gold), gap gutter bar via
-`LineMarkerRenderer`. Driven by `WalkthroughListener.onSegment/onHighlight` marshalled to the EDT; all
-decorations tracked in `tracked`, torn down in `clearTracked()`.
+Baseline (`SpotlightRenderer.kt`, split out of `EditorHighlighter.kt` in `TreeOfCode.md` Phase 1a — every
+`EditorHighlighter.<draw-method>` named in older sections below now lives there): whole-line
+`RangeHighlighter`s on `editor.markupModel` (`LINES_IN_RANGE`), four layers (dim / segmentDim / gap /
+active-gold), gap gutter bar via `LineMarkerRenderer`. Driven by
+`WalkthroughListener.onSegment/onHighlight` marshalled to the EDT by `EditorHighlighter`; all decorations
+tracked in `tracked`, torn down in `clear()` (was `clearTracked()`).
+
+**`SpotlightRenderer` now has two callers.** `TreeOfCode.md` Phase 1a′ added `tree/CodeNodeView`, which builds
+one renderer per node editor. Anything below that changes the renderer's API, its palette or its
+`revealCenter` behaviour lands on the node views as well — and two of its assumptions are already known to
+break there: the callout is laid out at *node* width rather than tab width, and `revealCenter` scrolls the
+editor while nothing scrolls the node into the tree's viewport (`CodeNodeView.onRevealRequest`).
 
 Added since, all settings-gated and additive — **a plan with none of the new fields renders exactly as
 it did before**:
@@ -445,7 +453,8 @@ ExplainThisAction
 ExplainerServer.dispatchAgentMessage("set_plan")
   └─ json.decodeFromJsonElement<Plan>(obj)   // ignoreUnknownKeys = true (ExplainerServer.kt:54)
        └─ walkthrough.setPlan(...) → fires WalkthroughListener
-            ├─ EditorHighlighter (spotlight + callout + flash + relations)
+            ├─ EditorHighlighter (resolve file → open editor → drive a per-editor
+            │                     SpotlightRenderer: spotlight + callout + flash + relations)
             └─ NarrationController (audio + per-highlight advance on `playback_complete`)
 ```
 
@@ -693,8 +702,9 @@ on the rendering axis.
   `SKILL.md` — these keep *pointing*, not restating.
 - **Skill install (§2.1):** `claude-skill/manifest.txt` **and** `claude-skill/VERSION` — both needed for
   any new or changed skill file to reach users.
-- **Rendering:** `EditorHighlighter.kt` — extend `tracked` (markup-owned) or `trackedDisposables`
-  (everything else).
+- **Rendering:** `SpotlightRenderer.kt` — extend `tracked` (markup-owned) or `trackedDisposables`
+  (everything else). `EditorHighlighter.kt` is only the listener side (file resolution, editor opening,
+  threading) since `TreeOfCode.md` Phase 1a split the two.
 - **Settings:** `AudioExplainerSettings.kt` + `HighlightSettingsConfigurable.kt` — each visual decoration
   gets a toggle, and the toggle goes in Reset-to-defaults too.
 - **Interaction wiring:** `AudioExplainerSidebar.forEachOwnHighlighter` (§2.6) — also how a webview

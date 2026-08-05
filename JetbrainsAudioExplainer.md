@@ -11,6 +11,14 @@ markup + a tool window + a loopback server + a CLI subprocess, it is a **pure JV
 plugin** (no ReSharper backend module) and therefore runs unchanged in Rider, IDEA, PyCharm,
 WebStorm, etc.
 
+> **This document is a build log, phase by phase, and is not edited retroactively.** One rename since
+> matters when following its code references: `TreeOfCode.md` Phase 1a split the drawing half out of
+> `EditorHighlighter.kt` into **`SpotlightRenderer.kt`**, so `EditorHighlighter.colors()` /
+> `.refresh()` / `clearTracked()` below are now `SpotlightRenderer.colors()` / `.flashToken()` +
+> `EditorHighlighter.refresh()` / `SpotlightRenderer.clear()`. Where a section says `EditorHighlighter`
+> means "the thing that draws", read `SpotlightRenderer`; where it means "the `WalkthroughListener`", the
+> name is still right.
+
 ## License / attribution
 
 code-explainer is **MIT (Copyright (c) 2026 Srujan Gurram)**. Reuse (including on the public
