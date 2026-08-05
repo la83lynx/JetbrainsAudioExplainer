@@ -567,7 +567,7 @@ last in each block (the 1a′ round produced a report taken before the steps it 
 |---|---|---|
 | 1 | Bench opens on `case: chain` | Three nested frames, `leader: corners`. **[JUDGE]** does the box→leader→frame read as *one outline* rather than three drawings that meet? |
 | 2 | Look at the nested nodes' tops | **[JUDGE]** the frames have **no top edge** — the diagonals are it. A ghost line across the top is the defect `edgesAgree` exists for |
-| 3 | Look at a nested node's first visible line | **[JUDGE]** it opens on its **member**, not on the class header; the root still opens on its class header |
+| 3 | Look at a nested node's first visible line | **[JUDGE]** it opens on its **member**, not on the class header; the root still opens on its class header. **In `case: chain` only `SubInvoker.Apply` lands** — `MidInvoker` both hosts and is hosted, so `growHosts` overrides its excerpt target. Click `hosts: cap 600` to make it land too, which is the more interesting picture |
 | 4 | Scroll inside a nested node | **[WATCH]** it *has* a scrollbar now — constraint 19's room, which no nested editor had in the 1a⁗ round |
 | 5 | `write report` | `reportOutline`, `reportHeaderRule`, `reportLanding` all pass |
 | 6 | `leader: brace` | **[JUDGE]** two L-halves out of the box's bottom corners, one right angle each at the outer end. No stem, no spine. Does it beat `corners` on the caption row? |
