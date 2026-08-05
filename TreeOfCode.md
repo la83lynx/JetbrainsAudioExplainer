@@ -5,13 +5,19 @@ showing only the relevant code with the rest collapsed, each independently scrol
 caller→callee chain. The existing in-place spotlight is preserved as a second view mode, not replaced.
 
 **Status:** Phase 0 ✅ · 0b ✅ · 1a ✅ · 1a′ ✅ · 1a″ ✅ · 1a‴ ✅ (G1c PASSED — Arch C nesting is the chosen
-layout) · 1a⁗ ✅ (built and judged: 6 items accepted, 4 sent back, 2 rejected) · cleanup pass ✅ → next:
-**§1a⁵**, then gate **G1c′**.
+layout) · 1a⁗ ✅ (built and judged: 6 items accepted, 4 sent back, 2 rejected) · cleanup pass ✅ · **§1a⁵ BUILT**
+(pre-flight probe 20 pass / 0 fail with 4 discriminating controls; `compileKotlin` clean) → next: **the G1c′
+sandbox round**, then §1b's fixture.
 
-**§1a⁵ is now a specification, not a punch list.** After the cleanup pass the reader specified the three leader
-modes to the pixel, scrapped `NodeChrome.TITLED_BORDER` outright, and decided the header rule — so the remaining
-Phase 1 work is transcription plus one bench fix. The governing idea is **constraint 16**: the token box, the
-leader and the child's frame are *one outline*, so a leader mode decides which border edges each part draws.
+**§1a⁵ was a specification and is now code.** The reader specified the three leader modes to the pixel, scrapped
+`NodeChrome.TITLED_BORDER` outright, decided the header rule and named the landing mechanism, so this sub-phase was
+transcription plus one bench fix rather than exploration. The governing idea is **constraint 16**: the token box,
+the leader and the child's frame are *one outline*, so a leader mode decides which border edges each part draws.
+
+**Two decisions the reader took before coding, both of which shrink the code rather than grow it.** §1a⁵ 4's open
+question — target height vs the 600 px ceiling — is answered **`min(excerpt, content, cap)` with no floor**: a
+6-line member is a six-line node. And the docked callout gets **no reserved room** in that height; the per-node
+reveal handles it, at the cost of the viewport moving when a callout appears. Both are visible in the round below.
 
 **Architecture: Arch B — one editor per node, over the real document — laid out as Arch C, each child embedded
 in its parent's editor at the call site.** Settled by measurement rather than preference: the semantic
@@ -30,7 +36,8 @@ under it is gone, and **there is no built fallback**. If that API is removed, th
 layout, which is a week rather than an afternoon. The reader has the measurement (6/6 embeddings, no exceptions,
 clean disposal across 25 rebuilds) and took the scope reduction knowingly. **And rebuilding it will not be a
 `git revert`:** the whole `tree/` and `spike/` package was still untracked when the cleanup pass ran, so the
-deleted code was never committed — see the cleanup record below.
+deleted flat layout was never committed — see the cleanup record below. Everything *surviving* is committed now
+(`f917e0f`, taken before §1a⁵ began deleting things), which fixes the habit but not the missing history.
 
 **Where the rest of the record lives:**
 
@@ -103,11 +110,23 @@ keeps its number.
    so an overlapping sibling with the default `contains` takes **every click and wheel notch in the nested
    editor's top rows**, which reads as the editor being dead at the top rather than as something being in the
    way. Measured both ways, twice: on the flat overlay and again on the leader strip.
+
+   **§1a⁵ removed the last overlap, so the `contains()` override is gone and the rule is not.** The strip now ends
+   exactly where the child begins (constraint 16, measured at zero), so its bounds *are* its band and there is
+   nothing left to disclaim. The check stays, aimed at the child's first rows: it now measures the *absence* of the
+   problem rather than the fix for it, because a future overlap would reintroduce the defect in silence. **Re-add
+   the override the moment the strip covers anything again.**
 8. **`maxHeight` = 600 px is a *ceiling*, and it is a boundary rather than a limit.** Measured on the chain:
    folded **484 / 550 / 585–612 px** against unfolded 2464–3740, so exactly one of three nodes crosses it. A
    220 px cap was so aggressive that all 12 nodes exceeded it and grow-vs-scroll never got compared; 600 lets
-   both behaviours appear in one screen. Capped beat grow by eye. §1a⁵ 4 adds a second number beside it: a
-   nested child also wants a **target** height — its excerpt's — and ceiling and target can disagree.
+   both behaviours appear in one screen. Capped beat grow by eye.
+
+   **Three numbers now, and the order is settled** (§1a⁵ 4): a nested child's height is
+   **`min(excerpt, content, cap)`, with no floor.** The *target* is the excerpt of interest, the *ceiling* is this
+   600, and the *content* is in the min because a target taller than the folded document would leave blank rows
+   below the last line. No floor is the reader's decision: a 6-line member gets six lines. `content` is what makes
+   this safe on a short file; the ceiling is what makes it safe on a 200-line member. The **root is exempt** and
+   keeps `min(content, cap)`.
 9. **A node's height depends on its own width, and on what is drawn in it.** The docked callout is a block
    inlay that *wraps*, so the same node at the same step measured 612 px at 1050 px wide and 585 px at 1268 px
    wide. **A measured number is meaningless without the thing it was measured against** — see constraint 16 for
@@ -185,13 +204,22 @@ UI looked perfect and the spike report said `0 fail`.
 
     **The strip needs no container-side paint**, because the strip and the child are *siblings*: a strip at
     z-order 0 is constraint 7's own mechanism. Measured with its control — strip above, tips drawn; strip sent
-    to back, the child's opaque background erases them entirely. What changes is *how far* it reaches: it no
-    longer has to cover a caption inset, only to leave no seam where the leader meets the frame's side walls.
-    **Whether that seam needs a 1 px overlap or exact adjacency is a probe question** (the pre-flight probe
-    already measured that a stroke drawn to `y == height` is clipped away, so the leader ends at `height − 1`
-    and the frame's walls start at its own row 0 — a 1 px stagger unless something absorbs it). If the answer is
-    zero overlap, the strip stops covering any of the editor's rows and constraint 7's `contains()` **cost**
-    disappears; the rule itself stays, because it has bitten twice.
+    to back, the child's opaque background erases them entirely.
+
+    **The seam is closed at zero overlap, and it was a probe question that had a measurable answer.**
+    `spikes/tree1a5/OutlineProbe.java` labels the outline's ink into 8-connected components: the box, the leader and
+    the frame are **one** component in `CORNERS`/`BRACE` and **two** in `ARROW`, whose head deliberately stops
+    4 px short. So the leader's last row at `height − 1` and the frame's wall at its own row 0 are *adjacent*, and
+    adjacency is continuity — the 1 px stagger needed nothing to absorb it. Two consequences: the strip covers none
+    of the child's rows, so constraint 7's `contains()` cost is gone (the rule is not, see there); and **the whole
+    outline needs one row constant**, `boxBottomRow == callRowY + lineHeight == the strip's row 0`, which is the
+    origin every one of the three shapes measures from. That is the *only* place a 1 px disagreement is visible —
+    on a vertical wall it reads as adjacency, in `ARROW`'s collinear horizontal extension it reads as a kink.
+
+    **And one question the probe cannot answer.** That row is one *below* the box's own text line — it is where the
+    nested frame starts — so `ARROW`'s box is four-sided only if a `CustomHighlighterRenderer` may paint there.
+    Java2D cannot say; the bench's `reportOutline` samples the pixels in a snapshot of the host editor and reports
+    which way it went.
 17. **Height propagation up a nesting chain costs one deferred pass per level.** A nested child's re-measure
     reaches its *host's* inlay only through the host node's geometry callback, which coalesces onto an
     `invokeLater` — so at depth 2 the outer inlay is one EDT turn behind. It was a real failure first
@@ -219,9 +247,14 @@ UI looked perfect and the spike report said `0 fail`.
     path, so a divergence would show as a seam in a continuous stroke rather than as two similar lines.
 
     **And the box loses its bottom edge in `CORNERS`/`BRACE`** (constraint 16), which the padded-box renderer
-    has to express: 2 px of padding on three sides, and the fourth side is where the leader takes over. The
+    expresses: 2 px of padding on three sides, and the fourth side is where the leader takes over. The
     vertical padding still matters on the surviving bottom corners, since that is where the leader's origin sits
     — the box's *padded* bottom corners, not the glyphs'.
+
+    **One number moved when the outline became one path**: the box's height is now `lineHeight`, not
+    `lineHeight − 1`, so its bottom-edge row *is* the strip's row 0 (constraint 16's row constant). That grew the
+    box **away** from the text — the extra row belongs to the nested frame, not to a glyph row — so the vertical
+    clearance measured here is unaffected, and the horizontal cost above is unchanged.
 19. **A nested node does not scroll at its natural size, so nothing can be revealed by scrolling it.** Measured
     by the reader: "nested subeditor does not have scrollbar, innermost subeditor only gets one if I expand some
     collapsed block" — and when one does appear, the wheel reaches it and "scrolling feels natural and ok". Not
@@ -317,12 +350,24 @@ Three carry-forwards are worth naming here because they are still open:
 - **Collapsing an opened `⋯ N lines ⋯` back needs the small hover-only gutter arrow.** The standing annoyance
   from 1a′ onward; acceptable, since opening one should be rare.
 
-### 1a⁵. What the 1a⁗ round sent back · **NEXT**
+### 1a⁵. What the 1a⁗ round sent back · **BUILT — awaiting the G1c′ round**
 
-Ordered by whether the answer is already known. **Nothing here is exploratory** — the reader specified the leader
+Ordered by whether the answer is already known. **Nothing here was exploratory** — the reader specified the leader
 geometry, the chrome rule and the landing mechanism directly, so this section is a transcription of decisions
 rather than a list of options. Three items of the original list were deletions and are done; see the cleanup
-record.
+record. The specifications below are kept **as the reference the round is judged against**, each with what was
+actually built under it.
+
+**Where it landed.** `compileKotlin` clean; every `plugin.xml` registration re-checked against a real class.
+
+| Item | Built | Where |
+|---|---|---|
+| 1 — three leader modes as one outline | `leaderPath` rewritten for all three; `closesTokenBox` / `drawsFrameTop` are the one place a mode maps onto edge ownership; one `ARC` and one row constant shared by box, leader and frame | `LeaderArt.kt` |
+| 2 — chrome by rule | `NodeChrome` down to `HEADER_STRIP`/`PLAIN`, selected by `CodeNestView.chromeFor`; `TITLED_BORDER`, `CaptionBorder`, `chromeDrawnTopOffset()` deleted; a `NodeFrameBorder` that can leave its top edge to the leader | `CodeNestView.kt`, `CodeNodeView.kt` |
+| 3 — what the outline rule deletes | `NestLeader.NONE`, the `TokenMark` enum, `leaderOverlap()`, the strip's `contains()` override, `reportLeaderLanding` | all four files |
+| 4 — landing | `landsOnExcerpt` + `excerptTargetHeight()` + `landOnExcerpt()`, `min(excerpt, content, cap)`, bounded landing retry for constraint 17 | `CodeNodeView.kt`, `CodeNestView.kt` |
+| 5 — the bench's own defect | `reportMouseReach` samples the frame **intersected with the host**, and "outside the host" is now *not measured* rather than FAIL | `SpikeNestedNodeAction.kt` |
+| pre-flight | `OutlineProbe.java` — 20 pass / 0 fail, 4 discriminating controls, PNG sweeps for `stripHeight` and `ARROW`'s turn | `spikes/tree1a5/` |
 
 #### 1. The three leader modes — specified, and they are the user setting
 
@@ -389,21 +434,22 @@ down, and ends in an **arrowhead** pointing at the frame's top border without to
   ╰---------------------------------------╯
 ```
 
-Four things to get right, in rough order of how easily they go wrong:
+Four things to get right, in rough order of how easily they go wrong — **all four now measured:**
 
 - **Top corners are square in `CORNERS`/`BRACE`, and that is what dissolves the rounding defect.** With no top
   edge there is no top corner to round: the "corner" is just where a side wall begins, and the leader arrives
   into it. Bottom corners stay rounded as they are today. `ARROW`'s frame keeps four rounded corners, and the
-  arrowhead lands mid-span where rounding cannot reach it.
+  arrowhead lands mid-span where rounding cannot reach it. **Built as one `GeneralPath` in `NodeFrameBorder` with
+  one `wallTop`**, so square-vs-rounded is expressed once rather than at four corners.
 - **`stripHeight` stops being cosmetic.** All three leaders originate at the box's bottom-edge level and have to
   arrive at the frame's top, so the strip's height *is* that vertical distance — which sets a diagonal's slope,
-  a brace's drop, and how far `ARROW` descends before its head. Every one of the three shapes changes character
-  if it changes, so it is a number to judge by eye at a stated width (constraint 9), not a spacing default.
-- **The seam.** See constraint 16: a stroke drawn to `y == height` is clipped, so the leader ends at
-  `height − 1` while the frame's walls start at their own row 0. Measure whether that leaves a visible notch
-  before choosing an overlap.
-- **`ARROW`'s turn-down x is the only free parameter in any of the three.** Pick a fraction, look at it, write
-  the number down with the width it was judged at (constraint 9).
+  a brace's drop, and how far `ARROW` descends before its head. **Judged on the probe's 14/22/30 sweep at 640 px:
+  22 px.** 14 steepens the funnel until the diagonals read as one wedge; 30 is airy but spends a code row and a
+  half of the host's height on a join. On the bench as a knob, because a PNG is not real code.
+- **The seam. Answered: exact adjacency, no overlap** — see constraint 16. The probe measures the whole outline as
+  one 8-connected component with the leader ending at `height − 1` and the frame's wall starting at its own row 0.
+- **`ARROW`'s turn-down x is the only free parameter in any of the three. 0.5**, the midpoint, judged on the
+  probe's 30/50/70 % sweep at 640 px, and clamped so the arc has room going in and half a head coming out.
 
 **These three are the user setting** — one choice, three values, exposed in Phase 4. There is no fourth value:
 "no leader" is incoherent once the leader carries border segments (constraint 16).
@@ -471,33 +517,74 @@ Three consequences, and they are why this is a redesign rather than a revert:
 And it hands Phase 3 something: once a nested node has a viewport smaller than its content, "reveal the active
 range in *its* node" becomes expressible for the first time.
 
-**Open, and it needs a decision before coding:** constraint 8's 600 px was a *ceiling* and this is a *target*,
-and the two can disagree — a 200-line member wants the ceiling, a 6-line member wants six lines. Which wins,
-and is there a floor below which a subeditor is too short to read?
+**Decided before coding, and it shrank the code:** `min(excerpt, content, cap)`, **no floor** — a 6-line member is
+a six-line node. `content` is in the min so a target taller than the folded document cannot leave blank rows;
+`cap` is constraint 8's 600. See constraint 8 for the whole rule.
 
-#### 5. One defect in the bench's own checks (found by reading the reports, not the UI)
+**And a second decision, about the callout:** the target reserves **no room** for the docked callout inlay. It is a
+block inlay *inside* the node, so in a tightly-capped node it pushes the excerpt out of the viewport; the answer is
+to let the **per-node reveal** re-reveal the active range, at the cost of the viewport moving when a callout arrives
+or leaves. The alternative — `excerpt + calloutHeight` while active — would make a node change height on every step
+advance, which is constraint 9's "rendering a step changes a node's height" deliberately amplified. **Watch this in
+the round:** stepping through a nested node is where it will show.
 
-**`reportMouseReach` measures before a depth-2 frame is placed.** It guards on the *child's* `isShowing` and
-size, which pass while the ancestor chain is still settling, so the first report of a session fails on the
-doubly-nested node and a later one passes. Fix: sample the centre of the child's frame **intersected with the
-host's bounds** (`frameBoundsIn`), and treat "point outside the host" as *not measured* rather than as a
-failure — a stolen event returns the host's component, a `null` means the check aimed into space. Keep the real
-assertion: a point genuinely inside the child that resolves to the host is still a FAIL.
+**One thing the plan expected here and got wrong.** It said `firstVisibleKeptLine()` would "score the scroll version
+without a change". It cannot: §1a⁗ landed on the member by *eliding* everything above it, so the first **unfolded**
+line was what the reader saw; this mechanism leaves `keep` as authored and scrolls, so the first unfolded line is
+the class header again while the reader looks at the member. A check on the old number would report the class header
+and call the landing broken. `firstVisibleLineInViewport()` is the measurement; the old one stays as the elision's.
 
-**Gate G1c′, restated for the specified geometry:**
+#### 5. One defect in the bench's own checks (found by reading the reports, not the UI) · **FIXED**
 
-- Each of the three leader modes draws the outline constraint 16 describes — **the box's bottom edge and the
-  frame's top edge absent in `CORNERS`/`BRACE`, both present in `ARROW`** — with no seam where the leader meets
-  the frame's walls, and `ARROW` ending in an arrowhead short of the frame.
-- `BRACE` is two stepped halves from the box's bottom corners, and its horizontal run clears the caption row.
-- The header appears exactly when the node is top-level or in a different file from its parent, and nowhere else.
-- A nested child opens scrolled to its member inside a viewport sized to it; the root opens on its first kept line.
-- All three modes reachable from one setting, and switching between them leaves no stale border segment behind —
-  the mode changes which edges are drawn, so a restyle that only repaints the leader would leave a visible ghost.
+**`reportMouseReach` measured before a depth-2 frame was placed.** It guarded on the *child's* `isShowing` and
+size, which pass while the ancestor chain is still settling, so the first report of a session failed on the
+doubly-nested node and a later one passed. Now: it samples the child's frame **intersected with the host's bounds**
+(`frameBoundsIn` ∩ the host's rect), and an empty intersection is **NOT MEASURED** rather than a failure — a stolen
+event returns the host's component, an unplaced frame means the check aimed into space. The real assertion is
+intact: a point genuinely inside the child that resolves to the host is still a FAIL.
+
+**Gate G1c′, restated for the specified geometry — and what now asserts each half:**
+
+| Criterion | Asserted by |
+|---|---|
+| Each mode draws the outline constraint 16 describes — box bottom and frame top **absent** in `CORNERS`/`BRACE`, **both present** in `ARROW` — with no seam at the frame's walls, and `ARROW` ending short of the frame | `reportOutline` (adjacency + edge agreement + **pixels sampled in a snapshot of the host editor**) and `spikes/tree1a5/` for the shapes |
+| `BRACE` is two stepped halves from the box's bottom corners, horizontal run clearing the caption row | `spikes/tree1a5/` (interior-emptiness test, with the built brace as the control) — **and the eye, because a geometric probe cannot review intent** |
+| The header appears exactly when the node is top-level or in a different file from its parent | `reportHeaderRule` — and it is the *only* thing that would notice now, since the chrome knob is gone from the toolbar |
+| A nested child opens scrolled to its member inside a viewport sized to it; the root opens on its first kept line | `reportLanding` (three assertions: the line, the height, and constraint 19's scroll room) |
+| All three modes from one setting, and switching leaves no stale border segment | `reportOutline`'s `edgesAgree` — the failure is invisible in one direction, since an `ARROW` frame missing its top edge looks like a `CORNERS` frame with an arrow |
 
 The log grep and the open-close-repeat editor count are **already banked** from the 1a⁗ artifacts and clean
-(0 `SEVERE`, 6 → 5 editors across 25 rebuilds), so the next round inherits them rather than owing them. None of
-it is a gate on Arch C itself — that gate is passed.
+(0 `SEVERE`, 6 → 5 editors across 25 rebuilds), so this round inherits them rather than owing them — but §1a⁵
+touched three border owners and the landing, so **both are worth re-taking** rather than assumed. None of it is a
+gate on Arch C itself — that gate is passed.
+
+#### The G1c′ round · **the next thing to do**
+
+`gradlew runIde -PspikeFixture`, then `Tools → Spike: nested node view (1a‴)`. Numbered reports; `write report`
+last in each block (the 1a′ round produced a report taken before the steps it was meant to cover).
+
+| # | Do | Expect / judge |
+|---|---|---|
+| 1 | Bench opens on `case: chain` | Three nested frames, `leader: corners`. **[JUDGE]** does the box→leader→frame read as *one outline* rather than three drawings that meet? |
+| 2 | Look at the nested nodes' tops | **[JUDGE]** the frames have **no top edge** — the diagonals are it. A ghost line across the top is the defect `edgesAgree` exists for |
+| 3 | Look at a nested node's first visible line | **[JUDGE]** it opens on its **member**, not on the class header; the root still opens on its class header |
+| 4 | Scroll inside a nested node | **[WATCH]** it *has* a scrollbar now — constraint 19's room, which no nested editor had in the 1a⁗ round |
+| 5 | `write report` | `reportOutline`, `reportHeaderRule`, `reportLanding` all pass |
+| 6 | `leader: brace` | **[JUDGE]** two L-halves out of the box's bottom corners, one right angle each at the outer end. No stem, no spine. Does it beat `corners` on the caption row? |
+| 7 | `leader: arrow` | **[JUDGE]** box **closed**, frame **closed**, the run leaves the box's bottom-right corner *collinearly*, and the head stops short of the frame. **The collinearity is the one thing the probe could not check in the IDE** — a 1 px kink at the box's corner means the row constant lost |
+| 8 | `arrow turn: 30/50/70%` | **[JUDGE]** which fraction, at this width |
+| 9 | `write report` | `reportOutline`'s **pixel** section: `ARROW`'s box measures ~100 % inked on its bottom row. If it reads 0 %, the editor is clipping the renderer at the frame's first row |
+| 10 | `strip: 14 / 22 / 30px` on `corners` and `brace` | **[JUDGE]** the number, on real code rather than on the probe's PNGs |
+| 11 | Back to `leader: corners`, then `write report` | **[WATCH]** no stale border: `edgesAgree` must hold after every switch |
+| 12 | `case: same-file` | **[JUDGE]** the nested `Normalize` node has **no caption band** (same file as its caller); the root does. `reportHeaderRule` asserts it |
+| 13 | `case: wide`, `write report` | Three children in one host; each lands on its own member |
+| 14 | `step ▸` through a nested node | **[JUDGE]** the callout arrives inside a tightly-capped node — does the viewport moving read as acceptable, or does the target need to reserve room? |
+| 15 | Flip the IDE theme, then `write report` | `requests=<node count> dispatches=1`; no dark tints left behind (constraint 11), and the **frame's border and the leader recolour together** — they share one derivation now |
+| 16 | `collapse all`, `expand all`, `write report` | Multi-level collapse still exact (constraint 17); the landing re-asserts |
+| 17 | Close the tab | No leaked-editor notification |
+
+Then **grep the sandbox log immediately** — `idea.log` is truncated in place when it grows, and this round has more
+new painting code in it than any since 1a″.
 
 ### 1b. Fixture + prototype types
 
@@ -520,12 +607,12 @@ to redo, and the cleanup pass deleted the code behind each one.
 | **Chrome** | **a rule, not a knob**: header iff the node is top-level or in a different file from its parent | one value per tree until constraint 16 re-opened it; the reader then specified the rule outright (§1a⁵ 2). `TITLED_BORDER` **scrapped** — it was the only chrome drawing its line off its bounds edge — and a borderless variant **rejected** earlier as "strictly worse than plain". What is left is background-tinted caption band or nothing, chosen by role. **Not a user setting** |
 | **Path** | `PROJECT_RELATIVE` | full is unusable at depth, basename is ambiguous in exactly the same-file case the fixture exists for |
 | **De-emphasis** | `TINT` alone | tint+border was the old default and read as too much; border-only too little |
-| **Sizing** | **capped**, 600 px as a *ceiling* | capped "looks more convenient" than grow. A nested child also wants a **target** height — its excerpt's (§1a⁵ 4) — and ceiling and target can disagree |
+| **Sizing** | **capped**; a nested child is `min(excerpt, content, 600)` with **no floor** | capped "looks more convenient" than grow. §1a⁵ 4 settled the disagreement between ceiling and target: the excerpt wins where it is smaller, `content` guards a short file, 600 guards a 200-line member, and a 6-line member gets six lines. The root is exempt |
 | **Elision** | `OPENABLE` | and it earns it: hovering a collapsed run shows the elided code in a tooltip, for free. Collapsing it back needs the gutter arrow |
 | **Layout** | **nested (Arch C), and now the only one** | "nested is absolute winner", then 1a⁗ scrapped the flat and split layouts rather than carry them |
-| **Leader mode** | three modes, **user-selectable**: `CORNERS` / `BRACE` / `ARROW` | `FLARE` dismissed unbuilt; `NONE` removed as incoherent. All three specified to the pixel by the reader (§1a⁵ 1) and all three **still to build** — the shipped versions were sent back. The mode decides which border edges the box and the frame draw, so it is one setting with three values and no independent chrome knob beside it |
+| **Leader mode** | three modes, **user-selectable**: `CORNERS` / `BRACE` / `ARROW` | `FLARE` dismissed unbuilt; `NONE` removed as incoherent. All three specified to the pixel by the reader (§1a⁵ 1) and **now built and probe-measured** — awaiting the round's eye. The mode decides which border edges the box and the frame draw, so it is one setting with three values and no independent chrome knob beside it |
 | **Token mark** | **always a box** — not a choice at all | the background tint was "still bad" at every padding; then constraint 16 made the box *structural* (every leader mode starts at its corners), so the off-switch went too. Padded 2 px, sharing the leader's colour, and **three-sided** in `CORNERS`/`BRACE` (constraint 18) |
-| **Node landing** | **scroll inside a capped nested node** | the elision version was judged better in a nested node and *worse* in the root; the mechanism the reader wants is a default scroll in a subeditor sized to its excerpt. §1a⁵ 4 |
+| **Node landing** | **scroll inside a capped nested node** | the elision version was judged better in a nested node and *worse* in the root; the mechanism is a default scroll in a subeditor sized to its excerpt, root exempt. **Built** (§1a⁵ 4) — and it is what finally gives a nested node a scrollbar, which constraint 19 says is the precondition for Phase 3's per-node attention |
 | **Nesting indent** | **0 px** | the nested node's own gutter already reads as nesting, so no width is spent on an indent — and past ~24 px the frame's left edge passes the invoking token and the left diagonal runs backwards, so the non-default values were a defect rather than a choice. The knob is deleted |
 
 **Retired by containment**, and recorded as answered so nobody re-opens them: **depth expression** (indentation
@@ -566,8 +653,8 @@ now met**: G1c passed on the layout question and the stability half is measured 
 6/6 embeddings, elision intact, semantic colour unchanged, no editor leak across 25 rebuilds. After the cleanup
 pass the `impl`-package dependency has no built fallback — see the top of this file.
 
-**Estimate: 1–1.5 days remaining** (1a through 1a⁗ and the cleanup pass spent; **0.5–1 for §1a⁵ and G1c′** —
-the leader redesign touches three border owners rather than one drawing — plus 0.5 fixture).
+**Estimate: 0.5–1 day remaining** (1a through 1a⁗, the cleanup pass and **§1a⁵ itself** spent; what is left is the
+G1c′ round — an hour of the reader's attention plus whatever it sends back — and 0.5 for §1b's fixture).
 
 ### Cleanup pass · **DONE**
 
@@ -602,8 +689,10 @@ indistinguishable from a supported option to whoever reads it next.** `compileKo
   compiler instead of by review.
 - `SpikeNodeViewAction` (the single-node bench is still the cheapest way to judge a node in isolation) and
   `SpikeNestedNodeAction` minus its dead branches.
-- `spikes/tree1a4/NestPolishProbe.java` — **§1a⁵'s brace and arrow geometry is exactly what it measures**, in
-  two seconds rather than a 4–7 minute sandbox launch.
+- `spikes/tree1a4/NestPolishProbe.java` — kept then on the claim that it measured §1a⁵'s brace and arrow geometry.
+  **It did not**: it measures the *sent-back* shapes plus the scrapped chrome's drawn-line offset, so §1a⁵ needed a
+  new probe (`spikes/tree1a5/OutlineProbe.java`) rather than a re-run. It stays as the 1a⁗ artifact its numbers
+  belong to, and its brace path is inlined in the new probe as the control that must fail.
 - `CodeTreeEdge`, **moved** into `CodeNestView.kt` rather than deleted: it was declared in `CodeTreeView.kt` and
   it is how the nested surface learns where a call site is. Kept under its old name — Phase 2 rewrites the whole
   vocabulary, so a rename now would churn every call site for a name with one release to live.
@@ -877,9 +966,10 @@ usually a precise bug report about a mechanism. That one was constraint 11.
   containing **no frame of ours** — the platform's own class-initialisation order, attributed to whichever plugin
   first touched JCEF. It appears only when a `set_plan` is POSTed *during* startup (~8 s in); POST after the IDE
   settles and it does not fire. Read the stack before believing the blame line.
-- **`com.audioexplainer.tree` and `spike/` were still untracked as of the cleanup pass.** Commit them before the
-  next destructive change: this pass deleted files that turned out to have no git copy, and one of them
-  (`lineOfAnchor`) had to be recovered from `javap -c` on the previous build's bytecode.
+- **`com.audioexplainer.tree`, `spike/`, `spikes/` and `fixtures/` are committed as of §1a⁵** (`f917e0f`, taken
+  *before* the leader redesign started deleting things). That closes the hole the cleanup pass found: it deleted
+  files with no git copy, and one of them (`lineOfAnchor`) had to be recovered from `javap -c` on the previous
+  build's bytecode. **Keep the habit — commit before each destructive pass, not after it.**
 - The spike package (`com.audioexplainer.spike`, `spikes/`) stays as the fixture harness through Phase 1, then
   is deleted with `proto/`. `com.audioexplainer.tree` is **production** and stays.
 
@@ -897,7 +987,8 @@ usually a precise bug report about a mechanism. That one was constraint 11.
 | **1a‴** ✅ | `CodeNestView`: Arch C nesting, 3 layouts on one fixture | **G1c PASSED** — 65 pass / 1 fail; 1c layout rows retired | done |
 | **1a⁗** ✅ | Polish: chrome×leader, padded box, one affordance, landing, multi-level collapse fix; probe 23/0 | **6 accepted, 4 back, 2 rejected**; 111 pass / 1 fail (the check's own) / 0 SEVERE | done |
 | **cleanup** ✅ | Flat+split layouts, rejected knobs, 3 retired benches and 3 probe spikes deleted; docs compressed | `compileKotlin` clean, every `plugin.xml` registration re-checked | done |
-| **1** | **§1a⁵** — three specified leader modes as one outline (`CORNERS`/`BRACE`/`ARROW`), `TITLED_BORDER` scrapped, header-by-rule, scroll-in-capped-node landing, 1 check fix + fixture | **G1c′** restated per mode; the log grep and editor count already banked | 1–1.5 |
+| **1a⁵** ✅ built | Three leader modes as one outline, `TITLED_BORDER` scrapped, header-by-rule, scroll-in-capped-node landing, `reportMouseReach` fixed; pre-flight probe 20/0 with 4 controls | **G1c′ round pending** — script in §1a⁵; the log grep and editor count banked but worth re-taking | 0.5 spent |
+| **1** | The G1c′ round itself, then §1b's file-driven fixture (`callchain.json` + `proto/`) | **G1c′** per the table in §1a⁵ | 0.5–1 |
 | **2** | `frames` + `steps` schema; renderer API generalised; docs, skill four-file update | agent plan renders in both modes | 2–3 |
 | **3** | Flatten position state; two-level attention; per-node scroll; multi-callout; sidebar tree | — | 3–4 |
 | **4** | Storage, settings, entry points, N-editor disposal audit, live-document invalidation | — | 3–4 |

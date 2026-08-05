@@ -284,7 +284,7 @@ internal class NodeViewBench(
         )
         rows.add(
             row(
-                button("chrome: titled") { cycleChrome(it) },
+                button("chrome: header_strip") { cycleChrome(it) },
                 button("path: relative") { cyclePath(it) },
                 button("dim: tint") { cycleDeemphasis(it) },
                 button("font −") { fontDelta(-1) },

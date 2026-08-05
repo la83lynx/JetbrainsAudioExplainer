@@ -371,6 +371,49 @@ that was actually needed came from a build artefact.
 
 ---
 
+## Phase 1a⁵ pre-flight probe — `spikes/tree1a5/OutlineProbe.java` · MEASURED, 20 pass / 0 fail
+
+**What it set out to answer.** §1a⁵ 1 specifies the three leader modes to the pixel and leaves exactly one
+question open — *"whether that seam needs a 1 px overlap or exact adjacency is a probe question"* — plus three
+transcription risks that are pure Java2D and therefore answerable in two seconds rather than in a 4–7 minute
+sandbox launch.
+
+| Question | Measured |
+|---|---|
+| **Is the outline one outline?** | **Yes, at zero overlap.** `CORNERS` and `BRACE` are **one 8-connected component** from the box's top edge to the frame's bottom; `ARROW` is **two**, because its arrowhead deliberately stops short |
+| **The seam** (§1a⁵ 1's open question) | **Exact adjacency, no overlap.** The leader's last row is `height − 1` (a stroke at `y == height` is clipped — re-measured: 0 px vs 36 px) and the frame's wall starts on its own row 0; adjacent rows read as continuous |
+| **Which edges each mode draws** | box bottom / frame top: **0 % / 0 %** inked in `CORNERS` and `BRACE`, **100 % / 100 %** in `ARROW` |
+| **Is `BRACE` two L-halves?** | horizontal runs **100 % / 100 %** inked at the box's bottom level, **0 px** of ink in the strip's interior — no stem, no spine |
+| **Does `ARROW` stop short?** | head ends **4 px** above the frame's top row; turn-down x at 30/50/70 % lands at 481/522/563 against a box right edge of 420 and a frame right edge of 625 |
+| **Is `ARROW`'s run collinear?** | **100 %** inked on the box's bottom row, **0 % / 0 %** two rows above and below |
+| **`stripHeight`, by eye at 640 px** | **22 px.** 14 steepens the funnel until the diagonals read as one wedge; 30 is airy but spends a code row and a half of the host's height on a join |
+
+**Four controls, all of which fail as required** — without them the PASSes above are worthless, which is `spikes/b3a/`'s
+lesson: a leader staggered 3 px at both ends leaves **three** components; the 1a‴ brace's stem and spine measure
+**1739 px** of interior ink; an arrow drawn to the strip's last row is caught touching; and an unsuppressed
+box+frame measures both edges present, so the two absences above are the suppression and not the sampling.
+
+**The first run was a report on the probe, exactly as the loop says to expect: 19 pass / 5 fail, and all five
+failures were the probe's own.** It asked "is the outline continuous" as an ink-free-row walk down a fixed column
+at the box's wall — and a diagonal legitimately leaves that column at ~6 px per row, while `BRACE`'s horizontal run
+and `ARROW`'s extension leave it entirely. **A column scan cannot follow a path that moves.** Connectivity is what
+the words "one outline" actually mean, and asking it that way also made the check discriminate `ARROW` *in the
+opposite direction* — one component for the joining modes, two for the reference — which the continuity version
+would have called a defect.
+
+**One thing the probe cannot answer, and the bench now does.** `LeaderArt`'s single row definition puts the token
+box's bottom edge on `callRowY + lineHeight` — one row **below** its own text line, which is where the nested
+frame starts — so `ARROW`'s box is only four-sided if a `CustomHighlighterRenderer` may paint there. That is an IDE
+question, not a Java2D one, so `reportOutline` samples the pixels in a snapshot of the host editor and says which
+way it went.
+
+**Retired here: `reportLeaderLanding`.** It asserted that the chrome's drawn-line offset and the strip's overlap
+agreed — a question that stopped existing when `TITLED_BORDER` was scrapped. Its replacement, `reportOutline`,
+asserts the rule that took its place (adjacency, edge ownership, and no stale border segment after a restyle) and
+adds the pixel measurement above.
+
+---
+
 ## Criteria that were wrong — the standing lesson
 
 Several spikes reported a verdict their test could not actually support. This is the most reusable thing on

@@ -378,24 +378,32 @@ class CodeNodeView(
      * there is nothing to put a control *in*, so it goes just inside the top corner.
      */
     fun headerBandHeight(): Int = when (style.chrome) {
-        NodeChrome.TITLED_BORDER -> insets.top
         NodeChrome.HEADER_STRIP -> headerStrip?.preferredSize?.height ?: 0
         NodeChrome.PLAIN -> 0
     }
 
     /**
-     * **The y of the row this node's chrome actually draws its top line in** — constraint 16, as a number.
+     * **Whether this node's frame draws its own top edge, or the leader draws it instead** — constraint 16.
      *
-     * The whole of 1a‴'s eye finding is the gap between this and zero: a leader that ends at the component's
-     * bounds edge visibly stops short of a titled border, whose line is drawn at the caption's mid-height.
-     * Measured at **7 px** in `spikes/tree1a4/` for the caption metrics this class uses, and **0** for every other
-     * chrome — which is why picking a different chrome is a real fix and not a hope.
+     * The node cannot work this out: which border segments it owns is a property of the *leader mode* above it, so
+     * whatever draws them has to be told. [CodeNestView] sets it per nesting — false in `CORNERS`/`BRACE`, true in
+     * `ARROW` — and a top-level node never has a leader, so it keeps its top edge.
      *
-     * A value rather than an inference: Swing's own `TitledBorder` puts its line at the caption's middle and does
-     * not say where that is, so [CaptionBorder] replaces it and this reads the answer off the border itself. Same
-     * discipline as 1a‴'s `tokenBox()` — one definition, used by the painter and by whatever has to meet it.
+     * There is no `chromeDrawnTopOffset()` any more, and its absence is the point: every surviving chrome draws its
+     * line **at** its bounds edge, so the drawn-line offset is 0 by construction rather than by agreement. The
+     * whole apparatus that existed to make a non-zero offset queryable — `NodeChrome.TITLED_BORDER`, its
+     * `CaptionBorder`, the 7-vs-9 px font-dependent measurement, the rounded-corner defect its fix introduced —
+     * went with the chrome the reader scrapped. See `TreeOfCode.completed.md`.
      */
-    fun chromeDrawnTopOffset(): Int = (border as? CaptionBorder)?.drawnTopOffset ?: 0
+    var topEdgeDrawn: Boolean = true
+        private set
+
+    /** Told, not inferred: [CodeNestView] owns the leader mode and therefore owns this. */
+    fun setTopEdgeDrawn(drawn: Boolean) {
+        if (topEdgeDrawn == drawn) return
+        topEdgeDrawn = drawn
+        rebuildChrome()
+    }
 
     // ── Content: what the node shows ──
 
@@ -562,27 +570,40 @@ class CodeNodeView(
     }
 
     /**
-     * The height the node actually asks its container for: the content, or the cap, whichever binds.
+     * The height the node actually asks its container for: the content, the **excerpt target**, or the cap,
+     * whichever binds.
      *
      * The distinction from [contentHeight] is what [resync] coalesces on, and it is not pedantry — measured
      * on the 1a′ bench: toggling grow⇄cap changes this and leaves [contentHeight] untouched, so coalescing on
      * the content height suppressed the very layout pass the toggle needed. The bench hid it by revalidating
      * its own container as well; a caller that trusted [restyle] alone would have seen nothing move.
+     *
+     * **Three numbers now, and the plan settled the order** (§1a⁵ 4): the *target* is the excerpt of interest, the
+     * *ceiling* is [CodeNodeStyle.maxHeight], and the *content* is what there actually is to show. The reader's
+     * decision was **no floor** — a 6-line member gets six lines — so the answer is simply the smallest of the
+     * three that applies. `content` is in the min because a target taller than the folded document would leave
+     * blank rows below the last line, which reads as a broken node rather than as a generous one.
      */
-    private fun publishedHeight(): Int {
+    fun publishedHeight(): Int {
         val content = contentHeight()
-        return if (style.grow) content else minOf(content, style.maxHeight)
+        if (style.grow) return content
+        val target = excerptTargetHeight()
+        return if (target == null) minOf(content, style.maxHeight) else minOf(target, content, style.maxHeight)
     }
 
     fun unfoldedContentHeight(): Int =
         if (disposed || editor.isDisposed) 0 else editor.lineHeight * editor.document.lineCount
 
     /**
-     * True when the node is over its cap and therefore keeps its own vertical scrollbar — the
-     * independently-scrollable behaviour the brief asked for, which falls out of the node being a real editor
-     * rather than having to be built.
+     * True when the node's viewport is smaller than its content and it therefore keeps its own vertical
+     * scrollbar — the independently-scrollable behaviour the brief asked for, which falls out of the node being a
+     * real editor rather than having to be built.
+     *
+     * **Constraint 19 is why this is computed and not assumed**: a node sized to its content has nothing to
+     * scroll, so "reveal the active range in *its* node" is not expressible for it. That is what §1a⁵ 4's excerpt
+     * target buys — it is not merely a landing fix, it is what creates the viewport attention can be moved inside.
      */
-    fun scrolls(): Boolean = !style.grow && contentHeight() > style.maxHeight
+    fun scrolls(): Boolean = !style.grow && contentHeight() > publishedHeight()
 
     override fun getPreferredSize(): Dimension {
         val body = publishedHeight()
@@ -602,15 +623,92 @@ class CodeNodeView(
     // ── Landing: where the node opens ──
 
     /**
-     * The first 1-based line of this node's document that is **not** inside a collapsed region — what the reader
-     * actually sees at the top.
+     * **§1a⁵ 4 — size this node to its excerpt of interest and open scrolled to it.** Nested children only.
      *
-     * The honest measurement of the landing, and it reads the folding model rather than the spec: the daemon adds
-     * folds of its own (constraint 5), so "what the first kept range says" and "what is on screen" are two
-     * different claims and only the second is the feature. Mechanism-independent on purpose, which is why it
-     * outlived the mechanism: §1a⁗ landed on the member by *eliding* the context above it, the round judged that
-     * better in a nested node and worse in the root, and §1a⁵ 5 replaces it with a node capped to its excerpt and
-     * scrolled inside that. This still measures the answer either way.
+     * The mechanism the reader asked for by name, after the elision version was judged better in a nested node and
+     * *worse* in the root: *"leave the class line as before, but inside subeditor SCROLL by default to a member …
+     * This requires subeditor with initial height capped exactly to height of exerpt of interest."*
+     *
+     * **The root is exempt**, and that is the answer to why the elision version read worse at the top: the root is
+     * the reader's entry point and its class header is the one place the file's identity is not already implied by
+     * a caller. So this is off by default and [CodeNestView] switches it on per embedded child.
+     *
+     * It is also constraint 19's precondition rather than only a landing: a node sized to its content cannot be
+     * scrolled, so until something caps a node below its content, "reveal the active range in *its* node" is not
+     * expressible at all.
+     */
+    var landsOnExcerpt: Boolean = false
+        private set
+
+    fun setLandsOnExcerpt(on: Boolean) {
+        if (landsOnExcerpt == on) return
+        landsOnExcerpt = on
+        resync(TRIGGER_LANDING)
+    }
+
+    /**
+     * The height of the excerpt of interest, or null when this node does not land on one.
+     *
+     * In lines × `lineHeight` rather than in pixels, because the same excerpt is a different number of pixels at a
+     * different font size — constraint 9's shape, arriving as a font rather than as a width.
+     *
+     * The excerpt is [CodeNodeSpec.focusRange], which Phase 1 **guesses from range order** and Phase 2's schema
+     * will state outright (decision 3). The guess is named there rather than here so there is one place to change.
+     */
+    fun excerptTargetHeight(): Int? {
+        if (!landsOnExcerpt || disposed || editor.isDisposed) return null
+        val focus = spec.focusRange() ?: return null
+        return (focus.last - focus.first + 1).coerceAtLeast(1) * editor.lineHeight
+    }
+
+    /**
+     * Scroll this node's viewport to the excerpt of interest — the second half of the landing.
+     *
+     * **Deferred by the caller, deliberately.** `scrollVertically` clamps to the scrollable extent, which is
+     * `content − viewport`, and the viewport is 0 until the node has been laid out inside its inlay inside its
+     * host: called too early it silently clamps to 0 and the node opens at the top of the file, which looks
+     * exactly like the landing not being implemented. [CodeNestView] schedules it after the embedding settles.
+     *
+     * Animation off, so the offset is readable by the check that runs immediately after — B3b's retraction was
+     * partly an async scroll being measured before it finished.
+     */
+    fun landOnExcerpt() {
+        if (!landsOnExcerpt || disposed || editor.isDisposed) return
+        val focus = spec.focusRange() ?: return
+        val y = ReadAction.compute<Int?, RuntimeException> {
+            val doc = editor.document
+            val lastLine = (doc.lineCount - 1).coerceAtLeast(0)
+            val line0 = (focus.first - 1).coerceIn(0, lastLine)
+            editor.offsetToXY(doc.getLineStartOffset(line0)).y
+        } ?: return
+        val sm = editor.scrollingModel
+        sm.disableAnimation()
+        try {
+            sm.scrollVertically(y)
+        } finally {
+            sm.enableAnimation()
+        }
+        lastLandingRequest = y
+    }
+
+    /** The y [landOnExcerpt] last asked for, so a check can say "asked for 380px, got 0" rather than only "wrong". */
+    var lastLandingRequest: Int = -1
+        private set
+
+    /** Where the viewport actually is. Paired with [lastLandingRequest]: a clamp to 0 is the failure mode. */
+    fun scrollOffset(): Int =
+        if (disposed || editor.isDisposed) -1 else editor.scrollingModel.verticalScrollOffset
+
+    /**
+     * The first 1-based line of this node's document that is **not** inside a collapsed region — the top of the
+     * node's *content*, which is not the same thing as the top of its *viewport*.
+     *
+     * It reads the folding model rather than the spec, because the daemon adds folds of its own (constraint 5) and
+     * "what the first kept range says" is a different claim from "what survived the folding". Both matter, and
+     * **the plan expected this one to score the new landing and it cannot** — §1a⁗ landed on the member by
+     * *eliding* everything above it, so the first unfolded line *was* what the reader saw; §1a⁵ 4 leaves `keep` as
+     * authored and **scrolls**, so the first unfolded line is the class header again while the reader is looking at
+     * the member. That is [firstVisibleLineInViewport]'s job now, and this stays as the measurement of the elision.
      */
     fun firstVisibleKeptLine(): Int? {
         if (disposed || editor.isDisposed) return null
@@ -621,6 +719,21 @@ class CodeNodeView(
                 if (editor.foldingModel.getCollapsedRegionAtOffset(offset) == null) return@compute line + 1
             }
             null
+        }
+    }
+
+    /**
+     * The first 1-based line actually **in the viewport** — what the reader sees at the top of this node.
+     *
+     * The honest measurement of §1a⁵ 4's landing, and the one that can distinguish it from a node that merely
+     * *wanted* to scroll: a `scrollVertically` that clamped to 0 for want of a laid-out viewport leaves this at the
+     * first kept line, which is precisely what "the landing is not implemented" looks like.
+     */
+    fun firstVisibleLineInViewport(): Int? {
+        if (disposed || editor.isDisposed) return null
+        return ReadAction.compute<Int?, RuntimeException> {
+            val y = editor.scrollingModel.verticalScrollOffset
+            editor.xyToLogicalPosition(Point(0, y)).line + 1
         }
     }
 
@@ -770,14 +883,8 @@ class CodeNodeView(
         val weight = if (isActive) 2 else 1
 
         when (style.chrome) {
-            // Our own border rather than Swing's `TitledBorder`, so [chromeDrawnTopOffset] is a value the leader
-            // can meet instead of a number inferred from caption metrics (constraint 16).
-            NodeChrome.TITLED_BORDER -> {
-                border = CaptionBorder(line, weight, displayPath(), titleFont(), titleColor())
-            }
-
             NodeChrome.HEADER_STRIP -> {
-                border = BorderFactory.createLineBorder(line, weight, true)
+                border = NodeFrameBorder(line, weight, topEdgeDrawn)
                 val strip = JBLabel(" " + displayPath()).apply {
                     font = titleFont()
                     foreground = titleColor()
@@ -796,9 +903,10 @@ class CodeNodeView(
             }
 
             // A border and no caption — what 1a‴ verdict 16 actually asked for, and the 1a⁗ round's answer to
-            // the borderless variant that overshot it: "no border is strictly worse than plain".
+            // the borderless variant that overshot it: "no border is strictly worse than plain". §1a⁵ 2 made it
+            // the value the *rule* picks for a nested child in the same file as its caller.
             NodeChrome.PLAIN -> {
-                border = BorderFactory.createLineBorder(line, weight, true)
+                border = NodeFrameBorder(line, weight, topEdgeDrawn)
             }
         }
         // The corner control is a child like the others, so re-adding the header strip changed the child order it
@@ -808,8 +916,15 @@ class CodeNodeView(
         repaint()
     }
 
-    private fun activeBorderColor(): Color =
-        SpotlightRenderer.blendToward(SpotlightRenderer.accentColor(), JBColor.border(), BORDER_ACCENT_MIX)
+    /**
+     * The frame's line colour — **[LeaderArt.leaderBase], not a second derivation of it.**
+     *
+     * It used to be the accent blended 0.75 toward the border while the leader used 0.80: two numbers that happened
+     * to look alike. Constraint 16 makes them one path, so a divergence would read as a colour seam in the middle
+     * of a continuous stroke rather than as two similar lines — the same mistake constraint 18 caught between the
+     * box and the leader, one level up.
+     */
+    private fun activeBorderColor(): Color = LeaderArt.leaderBase()
 
     private fun titleFont(): Font = editor.colorsScheme.getFont(EditorFontType.PLAIN)
         .deriveFont(Font.BOLD, (editor.colorsScheme.editorFontSize - 1).coerceAtLeast(9).toFloat())
@@ -871,30 +986,25 @@ class CodeNodeView(
     class LineAnchor(val point: Point, val visible: Boolean)
 
     /**
-     * A titled border that **says where it draws its top line** — the whole of constraint 16's fix.
+     * The node's frame: a rounded rectangle that **can leave its top edge to the leader** (constraint 16).
      *
-     * Swing's `TitledBorder` draws its line at the caption's mid-height and offers no way to ask where that is,
-     * so a leader aiming at the frame's top edge lands ~7 px above the line the reader sees and visibly stops
-     * short. That was 1a‴'s first eye finding, and it is unfixable from the outside: the only honest options are
-     * to infer the offset from font metrics (two implementations of one number, which the ledger calls a false
-     * defect waiting to be believed) or to own the border. This owns the border.
+     * Every edge is drawn *at* the component's bounds edge, which is the whole reason this replaced
+     * `CaptionBorder`: the drawn-line offset is now 0 by construction rather than by agreement, so there is no
+     * number for a leader to query and nothing for two implementations to disagree about.
      *
-     * Visually the same thing: a rounded rectangle whose top run is broken around a caption at the leading edge.
+     * **The top corners are square when [drawTop] is false**, and that is what dissolved 1a⁗'s rounded-corner
+     * defect rather than working around it: with no top run there is no top corner to round — the "corner" is just
+     * where a side wall begins, and the leader arrives into it. The bottom corners keep [LeaderArt.ARC], the one
+     * radius the brace's turn and the token box also use.
      */
-    class CaptionBorder(
+    class NodeFrameBorder(
         private val line: Color,
         private val weight: Int,
-        private val caption: String,
-        private val captionFont: Font,
-        private val captionColor: Color,
+        private val drawTop: Boolean,
     ) : AbstractBorder() {
 
-        /** The row the top line is drawn in, relative to the component's top edge. What a leader must meet. */
-        val drawnTopOffset: Int = captionHeight(captionFont) / 2
-
         override fun getBorderInsets(c: Component?, insets: Insets): Insets {
-            val h = captionHeight(captionFont)
-            insets.set(h, weight + SIDE_PAD, weight, weight + SIDE_PAD)
+            insets.set(weight, weight + SIDE_PAD, weight, weight + SIDE_PAD)
             return insets
         }
 
@@ -904,58 +1014,38 @@ class CodeNodeView(
             val g2 = g.create() as Graphics2D
             try {
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
-                g2.font = captionFont
-                val fm = g2.fontMetrics
-                val textX = x + TEXT_INSET
-                val textW = fm.stringWidth(caption)
-                val lineY = y + drawnTopOffset
-                val bottom = y + h - 1
-                val right = x + w - 1
-
                 g2.color = line
                 g2.stroke = BasicStroke(weight.toFloat())
-                // The top run, broken around the caption — the break is what makes it read as a title.
-                g2.drawLine(x + ARC, lineY, (textX - TEXT_GAP).coerceAtLeast(x + ARC), lineY)
-                g2.drawLine((textX + textW + TEXT_GAP).coerceAtMost(right - ARC), lineY, right - ARC, lineY)
-                // Sides and bottom, with the corners rounded to match `createLineBorder(…, rounded = true)` on
-                // the other chromes — the node should not change shape when the caption is switched off.
-                g2.drawArc(x, lineY, 2 * ARC, 2 * ARC, 90, 90)
-                g2.drawArc(right - 2 * ARC, lineY, 2 * ARC, 2 * ARC, 0, 90)
-                g2.drawLine(x, lineY + ARC, x, bottom - ARC)
-                g2.drawLine(right, lineY + ARC, right, bottom - ARC)
-                g2.drawArc(x, bottom - 2 * ARC, 2 * ARC, 2 * ARC, 180, 90)
-                g2.drawArc(right - 2 * ARC, bottom - 2 * ARC, 2 * ARC, 2 * ARC, 270, 90)
-                g2.drawLine(x + ARC, bottom, right - ARC, bottom)
-
-                g2.color = captionColor
-                g2.drawString(caption, textX, y + fm.ascent)
+                val arc = LeaderArt.ARC.toFloat()
+                val left = x.toFloat()
+                val right = (x + w - 1).toFloat()
+                val top = y.toFloat()
+                val bottom = (y + h - 1).toFloat()
+                val p = java.awt.geom.GeneralPath()
+                // One path from the left wall round to the right wall, so the corners cannot drift apart the way
+                // two `drawArc` calls and four `drawLine`s did. The walls start at `top` when the leader owns the
+                // top edge and at `top + arc` when this border draws it — which is the square-vs-rounded top
+                // corner, expressed once.
+                val wallTop = if (drawTop) top + arc else top
+                p.moveTo(left, wallTop)
+                p.lineTo(left, bottom - arc)
+                p.quadTo(left, bottom, left + arc, bottom)
+                p.lineTo(right - arc, bottom)
+                p.quadTo(right, bottom, right, bottom - arc)
+                p.lineTo(right, wallTop)
+                if (drawTop) {
+                    p.quadTo(right, top, right - arc, top)
+                    p.lineTo(left + arc, top)
+                    p.quadTo(left, top, left, wallTop)
+                }
+                g2.draw(p)
             } finally {
                 g2.dispose()
             }
         }
 
         private companion object {
-            const val ARC = 5
-            const val TEXT_INSET = 10
-            const val TEXT_GAP = 5
             const val SIDE_PAD = 1
-
-            /**
-             * The caption row's height, and therefore twice [drawnTopOffset].
-             *
-             * Derived from the font once, in one place, because two derivations of one number is the mistake the
-             * 1a‴ probe made about a rectangle and reported as a half-drawn box.
-             */
-            fun captionHeight(font: Font): Int {
-                val scratch = java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB)
-                val g = scratch.createGraphics()
-                return try {
-                    g.getFontMetrics(font).height + 2
-                } finally {
-                    g.dispose()
-                }
-            }
         }
     }
 
@@ -968,6 +1058,7 @@ class CodeNodeView(
         const val TRIGGER_RESTYLE = "restyle"
         const val TRIGGER_INLAY = "inlay"
         const val TRIGGER_WIDTH = "width"
+        const val TRIGGER_LANDING = "landing"
 
         /**
          * Below [SpotlightRenderer]'s own layer (`SELECTION - 1`), so the active glow and the dim roles drawn
@@ -978,7 +1069,6 @@ class CodeNodeView(
         /** How far the non-active wash is pulled toward the background. Faint on purpose: it must not read as a highlight. */
         private const val DEEMPHASIS_MIX = 0.10
 
-        private const val BORDER_ACCENT_MIX = 0.75
         private const val HEADER_ACCENT_MIX = 0.18
         private const val STRIP_PAD = 3
 
@@ -1004,25 +1094,51 @@ class CodeNodeSpec(
     /** Depth in the call tree. Carried for the container; [CodeNodeView] never reads it. */
     val depth: Int,
     val keep: List<IntRange>,
-)
+    /**
+     * The **excerpt of interest** — the range §1a⁵ 4 sizes a nested node to and scrolls it to.
+     *
+     * Optional because Phase 1's fixture cannot state it: the schema decision that will (Phase 2 decision 3 —
+     * `context` vs `focus` roles on a frame's ranges) is not taken yet, so [focusRange] falls back to a guess from
+     * range order. Carrying the field now means the guess has exactly one home and Phase 2 deletes it rather than
+     * hunting for it.
+     */
+    val focus: IntRange? = null,
+) {
+    /**
+     * The excerpt of interest, or null if this node has nothing to land on.
+     *
+     * **The guess is "the second kept range"**, and it is a guess about *authoring* rather than about code: a node
+     * keeps its class header first and the member it is about second, which is what every case in
+     * `fixtures/TreeSpike` does and what `plan-schema.md` will require. A single-range node has no separate header,
+     * so its one range *is* the excerpt.
+     */
+    fun focusRange(): IntRange? {
+        focus?.let { return it }
+        val sorted = keep.sortedBy { it.first }
+        return sorted.getOrNull(1) ?: sorted.firstOrNull()
+    }
+}
 
 /**
- * How a node names itself. 1c compares these by eye; the node only has to be able to draw each.
+ * Whether a node shows its caption band. **Two values, and they are picked by a rule rather than by a knob.**
  *
- * **Coupled to the leader shape, not independent of it** (constraint 16). Only [TITLED_BORDER] draws its line
- * away from its bounds edge — at the caption's mid-height, a font-dependent offset rather than a constant — so it
- * is the only one whose leader needs extending into the child's inset. A settings UI that offers chrome and leader
- * as two free choices will ship the combination where the leader stops short, which is why Phase 4 has to present
- * them as a pair.
+ * §1a⁵ 2 decided the rule: show the header when the node is **top-level** *or* **in a different file from its
+ * parent**; hide it when a nested child is in the same file as its caller. A cross-file child keeps its caption
+ * because that caption is the only place its file name appears. [CodeNestView.chromeFor] is the one implementation,
+ * and Phase 4 must **not** offer this in the settings dialog — there is nothing left to choose.
  *
- * **Not one value per tree any more** (§1a⁵ 4): the 1a⁗ round wanted a caption on the root and [PLAIN] on a child
- * in the same file as its caller, so the shipping rule is per node *role*. A fourth borderless variant was built
- * and rejected — "no border is strictly worse than plain" — and is not coming back; verdict 16 asked for no
- * *header*, which [PLAIN] is.
+ * Two values because the other two are gone and neither is coming back: `TITLED_BORDER` was **scrapped** (it was
+ * the only chrome whose drawn line was not its bounds edge, and the entire drawn-line-offset problem went with it —
+ * constraint 16), and a borderless variant was **rejected** earlier as "no border is strictly worse than plain".
+ *
+ * What is *not* independent of the leader is the frame's top edge, and that is a separate switch on the node
+ * ([CodeNodeView.setTopEdgeDrawn]) precisely so the two questions cannot be confused again.
  */
 enum class NodeChrome {
-    TITLED_BORDER,
+    /** A background-tinted caption band with the path and the member, and no line below it. */
     HEADER_STRIP,
+
+    /** A frame and no caption. What a nested child in its caller's own file gets. */
     PLAIN,
 }
 
@@ -1061,7 +1177,11 @@ enum class NodeDeemphasis(val tints: Boolean, val dimsBorder: Boolean) {
  */
 class CodeNodeStyle(
     val maxHeight: Int = DEFAULT_MAX_HEIGHT,
-    val chrome: NodeChrome = NodeChrome.TITLED_BORDER,
+    /**
+     * **Assigned by role, not chosen** — see [NodeChrome] and [CodeNestView.chromeFor]. It stays on the style
+     * object because that is how a node is restyled, not because it is a preference.
+     */
+    val chrome: NodeChrome = NodeChrome.HEADER_STRIP,
     val path: NodePath = NodePath.PROJECT_RELATIVE,
     val elision: NodeElision = NodeElision.OPENABLE,
     /** [NodeDeemphasis.TINT] rather than `TINT_AND_BORDER`: chosen by eye on the 1a′ bench, over real code. */

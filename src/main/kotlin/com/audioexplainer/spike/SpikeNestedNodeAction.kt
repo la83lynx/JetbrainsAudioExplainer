@@ -12,7 +12,6 @@ import com.audioexplainer.tree.LeaderState
 import com.audioexplainer.tree.NestLeader
 import com.audioexplainer.tree.NestStyle
 import com.audioexplainer.tree.NodeChrome
-import com.audioexplainer.tree.TokenMark
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.actionSystem.ActionUpdateThread
@@ -30,7 +29,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.components.JBLabel
 import java.awt.BorderLayout
 import java.awt.FlowLayout
-import java.awt.Point
+import java.awt.Rectangle
 import java.nio.file.Path
 import java.nio.file.Paths
 import javax.swing.BorderFactory
@@ -175,11 +174,18 @@ internal class NestBench(
     // ────────────────────────────── toolbar ──────────────────────────────
 
     /**
-     * Three rows, and the middle one is 1a⁗'s whole lesson.
+     * Three rows, and the middle one has changed shape twice for the same reason.
      *
-     * 1a‴ left `chrome` off this toolbar because 1a′ had settled it — and the round came back with "it's a pity the
-     * chrome switch was not included and I could not test it", because nesting had changed what the question meant
-     * (constraint 16: chrome and leader are one design). **Every visual knob is on the bench now, settled or not.**
+     * 1a‴ left `chrome` off because 1a′ had settled it, and the round came back with "it's a pity the chrome switch
+     * was not included and I could not test it" — nesting had changed what the question meant. 1a⁗ put it back, and
+     * §1a⁵ **removed it again**, this time correctly: the chrome is now a *rule* (header iff top-level or a
+     * different file from the parent), so there is nothing for the eye to choose and a knob would only let the round
+     * photograph a combination that cannot ship. The report asserts the rule instead.
+     *
+     * What replaced it are the two numbers §1a⁵ 1 says to judge by eye at a stated width: the strip's height, which
+     * *is* every leader's slope, and `ARROW`'s turn-down x, the only free parameter in any of the three shapes.
+     * `token:` is gone for a different reason — constraint 16 made the box structural, so there is no off-switch to
+     * offer.
      */
     private fun toolbar(): JComponent {
         val rows = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
@@ -194,10 +200,10 @@ internal class NestBench(
         )
         rows.add(
             row(
-                JBLabel("chrome × leader: "),
-                button("chrome: titled_border") { cycleChrome(it) },
+                JBLabel("the one outline: "),
                 button("leader: corners") { cycleLeader(it) },
-                button("token: box") { cycleTokenMark(it) },
+                button("strip: 22px") { cycleStripHeight(it) },
+                button("arrow turn: 50%") { cycleArrowTurn(it) },
                 button("toggle: header") { toggleToggle(it) },
             ),
         )
@@ -375,24 +381,35 @@ internal class NestBench(
     }
 
     /**
-     * The knob 1a‴ was missing, and the reason this bench has three toolbar rows instead of two.
+     * **The setting**, and the only one of the three §1a⁵ knobs that ships: one choice, three values.
      *
-     * Switching it while watching the leader's tips is the fastest way to see constraint 16 rather than read about
-     * it: only `TITLED_BORDER` draws its line below its own bounds, so only there does the leader need the
-     * overlapping strip to reach it.
+     * Switching it is also the fastest way to see constraint 16 rather than read about it — the box's bottom edge and
+     * the frame's top edge appear and disappear with the mode, which is what "one outline" means and what a restyle
+     * that only repainted the leader would leave behind as a ghost.
      */
-    private fun cycleChrome(b: JButton) {
-        val values = NodeChrome.entries
-        val next = values[(values.indexOf(nodeStyle.chrome) + 1) % values.size]
-        restyleNodes(nodeStyle.with(chrome = next))
-        b.text = "chrome: ${next.name.lowercase()}"
-    }
-
     private fun cycleLeader(b: JButton) {
         val values = NestLeader.entries
         val next = values[(values.indexOf(nestStyle.leader) + 1) % values.size]
         restyleNest(nestStyle.with(leader = next))
         b.text = "leader: ${next.name.lowercase()}"
+    }
+
+    /** The strip's height *is* every leader's slope, so it is judged on real code and not only on the probe's PNGs. */
+    private fun cycleStripHeight(b: JButton) {
+        val values = intArrayOf(14, 22, 30)
+        val i = values.indexOfFirst { it == nestStyle.stripHeight }
+        val next = values[(if (i < 0) 0 else i + 1) % values.size]
+        restyleNest(nestStyle.with(stripHeight = next))
+        b.text = "strip: ${next}px"
+    }
+
+    /** `ARROW`'s one free parameter. Visible only in `ARROW`, which the button says by staying available anyway. */
+    private fun cycleArrowTurn(b: JButton) {
+        val values = floatArrayOf(0.30f, 0.50f, 0.70f)
+        val i = values.indexOfFirst { kotlin.math.abs(it - nestStyle.arrowTurn) < 0.01f }
+        val next = values[(if (i < 0) 0 else i + 1) % values.size]
+        restyleNest(nestStyle.with(arrowTurn = next))
+        b.text = "arrow turn: ${Math.round(next * 100)}%"
     }
 
     /** One affordance or none: the strip takes the click either way, so this asks whether a mark is needed. */
@@ -405,13 +422,6 @@ internal class NestBench(
         nodeStyle = next
         nest?.restyleNodes(next)
         refreshStatus()
-    }
-
-    private fun cycleTokenMark(b: JButton) {
-        val values = TokenMark.entries
-        val next = values[(values.indexOf(nestStyle.tokenMark) + 1) % values.size]
-        restyleNest(nestStyle.with(tokenMark = next))
-        b.text = "token: ${next.name.lowercase()}"
     }
 
     /** The interaction worth seeing: a host capped at 600 px holding a 500 px child shows two lines of caller. */
@@ -473,9 +483,9 @@ internal class NestBench(
             if (ns != null) {
                 append("  ·  nested: ").append(ns.count { it.state == EmbedState.EMBEDDED }).append("/").append(ns.size)
                 append(" [").append(ns.joinToString("; ") { "${it.child.spec.title}@${it.callLine}:${it.state}/${it.leaderState}${if (it.collapsed) " ⏷" else ""}" }).append("]")
-                // The overlap is the number constraint 16 is about, so it belongs where it can be watched changing
-                // as the chrome knob is cycled rather than only in a report written afterwards.
-                append("  ·  overlap: ").append(ns.firstOrNull()?.leaderOverlap() ?: 0).append("px")
+                // The seam replaces the overlap the status line used to carry, and it is the same discipline: the
+                // number constraint 16 is about, where it can be watched not moving as the leader is cycled.
+                append("  ·  seam: ").append(ns.firstOrNull()?.seamRows() ?: 0).append("px")
                 append("  ·  roots: ").append(nest?.roots?.size ?: 0)
             } else {
                 append("  ·  slots: ").append(nodes().joinToString(", ") { "${it.x}+${it.width}x${it.height}" })
@@ -495,12 +505,13 @@ internal class NestBench(
         rep.line("rebuilds  : $rebuilds")
         rep.line(
             "nest style: strip=${nestStyle.stripHeight} leader=${nestStyle.leader} " +
-                "token=${nestStyle.tokenMark} toggleInHeader=${nestStyle.toggleInHeader} " +
+                "arrowTurn=${Math.round(nestStyle.arrowTurn * 100)}% toggleInHeader=${nestStyle.toggleInHeader} " +
                 "gapBelow=${nestStyle.gapBelow} growHosts=${nestStyle.growHosts}",
         )
         rep.line(
-            "node style: chrome=${nodeStyle.chrome} path=${nodeStyle.path} elision=${nodeStyle.elision} " +
-                "dim=${nodeStyle.deemphasis} maxHeight=${nodeStyle.maxHeight} grow=${nodeStyle.grow}",
+            "node style: path=${nodeStyle.path} elision=${nodeStyle.elision} " +
+                "dim=${nodeStyle.deemphasis} maxHeight=${nodeStyle.maxHeight} grow=${nodeStyle.grow} " +
+                "(chrome is per node, by §1a⁵ 2's rule — see the header-rule section)",
         )
         rep.line("tokenPad  : ${LeaderArt.TOKEN_PAD}px (measured in spikes/tree1a4; EffectType.BOXED is 0)")
         rep.line("step      : ${if (steps.isEmpty()) 0 else stepIndex + 1}/${steps.size}")
@@ -510,7 +521,8 @@ internal class NestBench(
         reportEmbedding(rep)
         reportPushdown(rep)
         reportHostHeight(rep)
-        reportLeaderLanding(rep)
+        reportOutline(rep)
+        reportHeaderRule(rep)
         reportCollapse(rep)
         reportMultiLevelCollapse(rep)
         reportAffordance(rep)
@@ -524,12 +536,14 @@ internal class NestBench(
         rep.line("(one theme switch should show requests=<node count> and dispatches=1 — flip the IDE theme, then re-run)")
 
         rep.section("Captures")
-        // The chrome is in the filename now: 1a‴'s captures were indistinguishable once the chrome became a knob,
-        // and a PNG whose name does not carry the alternative it shows is a screenshot of nothing in particular.
+        // The alternative is in the filename: 1a‴'s captures were indistinguishable once the shape became a knob,
+        // and a PNG whose name does not carry what it shows is a screenshot of nothing in particular. The chrome is
+        // no longer part of the name because it is no longer a choice — the leader mode and the two numbers §1a⁵ 1
+        // says to judge by eye are.
         captureComponent(
             this, out,
-            "nest-${NodeViewRun.CASES[caseIndex].name}" +
-                "-${nodeStyle.chrome.name.lowercase()}-${nestStyle.leader.name.lowercase()}.png",
+            "nest-${NodeViewRun.CASES[caseIndex].name}-${nestStyle.leader.name.lowercase()}" +
+                "-strip${nestStyle.stripHeight}-turn${Math.round(nestStyle.arrowTurn * 100)}.png",
             rep,
         )
 
@@ -754,59 +768,221 @@ internal class NestBench(
     }
 
     /**
-     * **Constraint 16, as a number per chrome.**
+     * **The one outline (constraint 16, §1a⁵ 1) — measured on the real thing, in three ways that fail differently.**
      *
-     * The 1a‴ finding the report could not see and the eye could: with `TITLED_BORDER` the frame's drawn line sits
-     * ~8 px below the component's top edge, so diagonals ending at the component's corner stop short. The fix is a
-     * strip that extends by exactly that offset and is z-ordered above the child. This prints the offset the node
-     * reports and the overlap the frame took, per nesting — the two must agree, and on three of the four chromes
-     * both must be zero, which is what makes "pick a different chrome" a real fix rather than a hope.
+     * The check this replaces asserted that the chrome's *drawn-line offset* and the leader's *overlap* agreed. That
+     * question stopped existing when `TITLED_BORDER` was scrapped: every surviving chrome draws its line at its
+     * bounds edge, so the offset is 0 by construction. What is left is what the outline rule actually claims.
      *
-     * Pre-flight measured the geometry outside the IDE (`spikes/tree1a4/`, with the control that shows the tips
-     * disappear when the z-order is reversed); what remains for the sandbox is whether the *real* chrome reports
-     * the same numbers the mock did.
+     *  1. **Adjacency** — the strip ends exactly where the child begins ([Nesting.seamRows] == 0) and spans the same
+     *     columns, so the leader's tips land on the frame's top corners. §1a⁵ 1 left "1 px overlap or exact
+     *     adjacency" open; `spikes/tree1a5/` measured the outline as one 8-connected component at zero overlap, and
+     *     this is that answer holding in the real component hierarchy rather than in a mock.
+     *  2. **No stale border segment** — the node's drawn top edge agrees with what the mode wants
+     *     ([Nesting.edgesAgree]). This is the G1c′ criterion that catches a restyle which repainted the leader and
+     *     forgot the borders, and it is invisible to the eye in exactly one direction: an `ARROW` frame missing its
+     *     top edge looks like a `CORNERS` frame that happens to have an arrow.
+     *  3. **Pixels** — the box's bottom edge and the frame's top edge, counted in a snapshot of the host editor.
+     *     This is the half the probe *cannot* answer: the box's bottom row is one row below its own text line, and
+     *     whether a `CustomHighlighterRenderer` may paint there is an IDE question, not a Java2D one. If the answer
+     *     is no, `ARROW`'s box will measure three-sided here while the source says four.
      */
-    private fun reportLeaderLanding(rep: Report) {
-        rep.section("Leader landing per chrome (constraint 16)")
+    private fun reportOutline(rep: Report) {
+        rep.section("The one outline: which edges are drawn, and where they meet (constraint 16, §1a⁵ 1)")
         val ns = nest?.nestings?.filter { it.state == EmbedState.EMBEDDED }
         if (ns.isNullOrEmpty()) {
-            rep.skip("leader landing", "nothing embedded — no edge in this case resolved a call-site line")
+            rep.skip("outline", "nothing embedded — no edge in this case resolved a call-site line")
             return
         }
-        val expectOverlap = nodeStyle.chrome == NodeChrome.TITLED_BORDER
-        var wrong = 0
+        var seams = 0
+        var misaligned = 0
+        var stale = 0
         for (n in ns) {
-            val drawn = n.child.chromeDrawnTopOffset()
-            val overlap = n.leaderOverlap()
+            val strip = n.stripBounds()
+            val child = n.childBoundsInFrame()
+            rep.line("── ${n.child.spec.title}: ${n.edgeReport()}")
             rep.line(
-                "── ${n.child.spec.title}: chrome=${nodeStyle.chrome} drawnTopOffset=${drawn}px " +
-                    "leaderOverlap=${overlap}px stripHeight=${nestStyle.stripHeight}px leader=${nestStyle.leader}",
+                "   junction        : strip=$strip child=$child seam=${n.seamRows()}px " +
+                    "stripHeight=${nestStyle.stripHeight}px",
             )
-            if (drawn != overlap) wrong++
-            if (expectOverlap && drawn == 0) wrong++
-            if (!expectOverlap && drawn != 0) wrong++
+            if (n.seamRows() != 0) seams++
+            if (strip.x != child.x || strip.width != child.width) misaligned++
+            if (!n.edgesAgree()) stale++
         }
-        if (wrong == 0 && expectOverlap) {
+        if (seams == 0) {
             rep.pass(
-                "TITLED_BORDER's line is drawn inside the child's bounds and the leader extends by exactly that " +
-                    "much — the 1a‴ eye defect, closed as a number",
-            )
-        } else if (wrong == 0) {
-            rep.pass(
-                "${nodeStyle.chrome} draws its line on its bounds edge, so the leader needs no overlap and is " +
-                    "exact for free — the 'safe fix' the punch list offered, confirmed on the real chrome",
+                "every leader's last row is adjacent to its frame's first — seam 0px, no overlap needed, which is " +
+                    "§1a⁵ 1's open question closed and constraint 7's contains() cost gone with it",
             )
         } else {
             rep.fail(
-                "leader landing",
-                "$wrong mismatch(es) between the chrome's drawn offset and the leader's overlap, or an offset " +
-                    "that contradicts the chrome — the leader will stop short of the frame the reader sees",
+                "seam",
+                "$seams nesting(s) leave a gap between the strip and the child, so the outline visibly breaks " +
+                    "where the leader meets the frame's walls — the 1px stagger §1a⁵ 1 predicted, arrived",
             )
         }
-        rep.info(
-            "switch chrome on the toolbar and re-run: the numbers here should move to 0 for HEADER_STRIP, PLAIN " +
-                "and NONE, and back to a positive offset for TITLED_BORDER",
-        )
+        if (misaligned == 0) {
+            rep.pass("the strip spans exactly the child's columns, so the leader's tips land on the frame's top corners")
+        } else {
+            rep.fail(
+                "tip alignment",
+                "$misaligned strip(s) are a different width or x from their child, so the tips cannot coincide " +
+                    "with the frame's top corners however the path is drawn",
+            )
+        }
+        if (stale == 0) {
+            rep.pass("every node's border agrees with the leader mode — no stale border segment after a restyle")
+        } else {
+            rep.fail(
+                "stale border",
+                "$stale node(s) draw a top edge the current leader mode does not want (or omit one it does) — " +
+                    "switching modes repainted the leader and left the border behind, which is what G1c′ names",
+            )
+        }
+        reportOutlinePixels(rep, ns)
+    }
+
+    /**
+     * The two suppressed edges, counted in a snapshot rather than trusted from the source.
+     *
+     * Ink is measured **adaptively**: a pixel counts if it is closer to the outline's colour than half way back to
+     * the editor's background. A fixed tolerance would either miss every antialiased pixel of a 1.2 px stroke or
+     * count the caption band, and the answer has to hold in both themes.
+     */
+    private fun reportOutlinePixels(rep: Report, ns: List<CodeNestView.Nesting>) {
+        val host = ns.first().parent
+        val img = snapshotOf(host.editor.contentComponent)
+        if (img == null) {
+            rep.skip("outline pixels", "the host editor's content component is not laid out yet")
+            return
+        }
+        val ink = LeaderArt.leaderBase()
+        val bg = host.editor.colorsScheme.defaultBackground
+        val closed = nestStyle.leader == NestLeader.ARROW
+        var wrong = 0
+        var measured = 0
+        for (n in ns) {
+            val xr = n.tokenXRange()
+            val row = n.boxBottomRow()
+            if (xr == null || row == null || row >= img.height) {
+                rep.line("── ${n.child.spec.title}: box bottom row not measurable (x=$xr row=$row)")
+                continue
+            }
+            measured++
+            val from = xr.first + LeaderArt.ARC + 3
+            val to = xr.second - LeaderArt.ARC - 3
+            val fraction = inkFractionAlongRow(img, from, to, row, ink, bg)
+            val ok = if (closed) fraction > 0.80 else fraction < 0.10
+            if (!ok) wrong++
+            rep.line(
+                "── ${n.child.spec.title}: box bottom row y=$row x=$from..$to → " +
+                    "${Math.round(fraction * 100)}% inked (expected ${if (closed) "an edge" else "no edge"})",
+            )
+        }
+        if (measured == 0) {
+            rep.skip("outline pixels", "no token box could be located in the host's painted content")
+            return
+        }
+        if (wrong == 0 && closed) {
+            rep.pass(
+                "ARROW's token box really is closed in the painted host — a markup renderer may draw on the row " +
+                    "below its own line, which is the one thing spikes/tree1a5 could not answer",
+            )
+        } else if (wrong == 0) {
+            rep.pass("the token box's bottom edge is absent where the leader owns it, measured in pixels")
+        } else {
+            rep.fail(
+                "outline pixels",
+                "$wrong of $measured token boxes disagree with the mode. If this fails only in ARROW, the box's " +
+                    "bottom edge sits on the row the nested frame starts on and the editor is clipping the " +
+                    "renderer there — LeaderArt's one-row definition is the thing to change, not the leader",
+            )
+        }
+    }
+
+    /** The fraction of columns in [from]..[to] carrying outline ink within one row of [y]. See [reportOutlinePixels]. */
+    private fun inkFractionAlongRow(
+        img: java.awt.image.BufferedImage,
+        from: Int,
+        to: Int,
+        y: Int,
+        ink: java.awt.Color,
+        bg: java.awt.Color,
+    ): Double {
+        if (to <= from) return 0.0
+        val half = colourDistance(ink.rgb, bg.rgb) / 2
+        var hit = 0
+        var total = 0
+        for (x in from.coerceAtLeast(0)..to.coerceAtMost(img.width - 1)) {
+            total++
+            for (dy in -1..1) {
+                val yy = y + dy
+                if (yy < 0 || yy >= img.height) continue
+                if (colourDistance(img.getRGB(x, yy), ink.rgb) < half) {
+                    hit++
+                    break
+                }
+            }
+        }
+        return if (total == 0) 0.0 else hit.toDouble() / total
+    }
+
+    private fun colourDistance(a: Int, b: Int): Int {
+        val dr = Math.abs(((a shr 16) and 0xFF) - ((b shr 16) and 0xFF))
+        val dg = Math.abs(((a shr 8) and 0xFF) - ((b shr 8) and 0xFF))
+        val db = Math.abs((a and 0xFF) - (b and 0xFF))
+        return dr + dg + db
+    }
+
+    /**
+     * **§1a⁵ 2's header rule, asserted**: a caption when the node is top-level or in a different file from its
+     * parent, and nowhere else.
+     *
+     * A rule rather than a knob means the check is the only thing standing between it and a silent regression — with
+     * the chrome button gone from the toolbar, nobody will notice by clicking. The same-file case is what
+     * `Invokers.cs` is in the fixture for, so this section is only meaningful on `case: same-file`, and it says so
+     * rather than skipping.
+     */
+    private fun reportHeaderRule(rep: Report) {
+        rep.section("The header rule (§1a⁵ 2 — a rule, not a setting)")
+        val view = nest ?: run {
+            rep.skip("header rule", "the nested view is not built yet")
+            return
+        }
+        var wrong = 0
+        var sameFile = 0
+        for (node in view.nodes) {
+            val nesting = view.nestings.firstOrNull { it.child === node && it.state == EmbedState.EMBEDDED }
+            val parent = nesting?.parent
+            val expected = when {
+                parent == null -> NodeChrome.HEADER_STRIP
+                parent.spec.file == node.spec.file -> NodeChrome.PLAIN
+                else -> NodeChrome.HEADER_STRIP
+            }
+            if (parent != null && parent.spec.file == node.spec.file) sameFile++
+            val actual = node.style.chrome
+            rep.line(
+                "── ${node.spec.title}: ${if (parent == null) "top-level" else "nested in ${parent.spec.title}"}" +
+                    ", ${if (parent == null || parent.spec.file != node.spec.file) "different file" else "SAME file"}" +
+                    " → expected $expected, has $actual (header band ${node.headerBandHeight()}px)",
+            )
+            if (actual != expected) wrong++
+        }
+        if (wrong == 0) {
+            rep.pass("every node's chrome follows the rule: header iff top-level or a different file from its parent")
+        } else {
+            rep.fail(
+                "header rule",
+                "$wrong node(s) have the wrong chrome for their role — with the chrome knob gone from the toolbar " +
+                    "this check is the only thing that would notice",
+            )
+        }
+        if (sameFile == 0) {
+            rep.info(
+                "no nesting in this case has caller and callee in one file, so the PLAIN half of the rule is " +
+                    "untested here — switch to case: same-file, where InvokeOn calls Normalize 87 lines away",
+            )
+        }
     }
 
     /**
@@ -943,44 +1119,101 @@ internal class NestBench(
     }
 
     /**
-     * Where each node opens — **an observation, not an assertion, until §1a⁵ 6 lands.**
+     * **Where each node opens — now an assertion (§1a⁵ 4).**
      *
-     * 1a⁗ made nodes open on their member by *eliding* the context above it, and asserted first-visible-line ==
-     * member. The round accepted the effect in a nested node and rejected it in the root ("landing 'member' is
-     * better on subeditors, but worse on top editor"), and named a different mechanism: cap a nested child to the
-     * height of the excerpt of interest and let it **scroll** to the member, leaving `keep` as authored. The
-     * cleanup pass removed the elision version, so there is nothing to assert against yet — and reporting a PASS
-     * off a spec field while no mechanism is running would be exactly the kind of green report this project has
-     * learned not to trust.
+     * A nested child is sized to its excerpt of interest and opens *scrolled* to it; the root is exempt and opens on
+     * its first kept line. Three things are checked, and the middle one is the one that would otherwise pass for the
+     * wrong reason:
      *
-     * What stays is the measurement, because it is mechanism-independent: [CodeNodeView.firstVisibleKeptLine]
-     * reads the folding model, so it will score the scroll version without a change. The old check's SKIP also
-     * carried a defect of its own — the SKIP read "one range each, **or** landing is off", two causes in one
-     * message, and the round hit the second while the message suggested the first. Retired with the branch rather
-     * than fixed.
+     *  1. The nested child's published height is its excerpt's, subject to `min(target, content, cap)` — the
+     *     reader's decision was **no floor**, so a 6-line member is a six-line node.
+     *  2. The viewport really moved. The honest measurement is [CodeNodeView.firstVisibleLineInViewport], **not**
+     *     `firstVisibleKeptLine`: the plan expected the old measurement to score this mechanism, and it cannot —
+     *     §1a⁗ elided everything above the member, so the first *unfolded* line was what the reader saw; this
+     *     leaves `keep` as authored and scrolls, so the first unfolded line is the class header again. A check on
+     *     the old number would report the class header and call the landing broken.
+     *  3. `scrolls()` is true on a landed child — constraint 19, which is the whole point: a node sized to its
+     *     content has no viewport to move, so this is what makes Phase 3's per-node reveal expressible at all.
      */
     private fun reportLanding(rep: Report) {
-        rep.section("Where each node opens (§1a⁵ 5 — measured, not yet asserted)")
+        rep.section("Where each node opens (§1a⁵ 4 — capped to the excerpt, scrolled to the member)")
+        val view = nest
         val all = nodes()
-        if (all.isEmpty()) {
+        if (view == null || all.isEmpty()) {
             rep.skip("landing", "no nodes were built in this case")
             return
         }
+        var wrongLine = 0
+        var wrongHeight = 0
+        var noRoom = 0
+        var landed = 0
         for (node in all) {
+            val nested = view.nestings.any { it.child === node && it.state == EmbedState.EMBEDDED }
             val keep = node.spec.keep.joinToString(",") { "${it.first}-${it.last}" }
-            val member = node.spec.keep.sortedBy { it.first }.getOrNull(1)?.first
+            val focus = node.spec.focusRange()
+            val target = node.excerptTargetHeight()
+            val visible = node.firstVisibleLineInViewport()
+            rep.line("── ${node.spec.title}${if (nested) " (nested)" else " (root)"}: keep=$keep focus=$focus")
             rep.line(
-                "── ${node.spec.title}: keep=$keep member≈${member ?: "-"} " +
-                    "firstVisible=${node.firstVisibleKeptLine() ?: "-"} " +
-                    "content=${node.contentHeight()}px cap=${if (nodeStyle.grow) "grow" else "${nodeStyle.maxHeight}px"} " +
+                "   landing         : firstVisibleInViewport=${visible ?: "-"} firstKept=${node.firstVisibleKeptLine() ?: "-"} " +
+                    "asked=${node.lastLandingRequest}px offset=${node.scrollOffset()}px",
+            )
+            rep.line(
+                "   size            : target=${target ?: "-"} content=${node.contentHeight()}px " +
+                    "published=${node.preferredSize.height}px cap=${if (node.style.grow) "grow" else "${node.style.maxHeight}px"} " +
                     "scrolls=${node.scrolls()}",
             )
+            if (!nested) {
+                // The root is exempt, and that is a claim worth checking rather than assuming: it must NOT have a
+                // target, or the reader's "worse on top editor" verdict has been re-introduced silently.
+                if (target != null) wrongHeight++
+                continue
+            }
+            landed++
+            if (focus != null && visible != null && visible != focus.first) wrongLine++
+            if (target != null) {
+                val expected = minOf(target, node.contentHeight(), node.style.maxHeight)
+                if (node.style.grow) {
+                    // A host that is also a child: growHosts wins, and then there is no viewport to land in.
+                    rep.info("${node.spec.title} both hosts and is hosted, so growHosts overrides its excerpt target")
+                } else if (node.publishedHeight() != expected) {
+                    wrongHeight++
+                }
+            }
+            if (!node.scrolls() && !node.style.grow) noRoom++
         }
-        rep.info(
-            "§1a⁵ 5 will assert firstVisible == the member on every NESTED node and the first kept line on the " +
-                "root. `scrolls=false` on all of them is constraint 19 — a node sized to its content has no " +
-                "viewport to move, so the cap is what creates the scroll room rather than merely limiting height",
-        )
+        if (landed == 0) {
+            rep.skip("landing", "nothing is embedded in this case, so no node lands on an excerpt")
+            return
+        }
+        if (wrongLine == 0) {
+            rep.pass("every nested node opens with its excerpt's first line at the top of its own viewport")
+        } else {
+            rep.fail(
+                "landing line",
+                "$wrongLine nested node(s) do not open on their member. `asked=…px offset=0px` above means the " +
+                    "scroll clamped for want of a laid-out viewport — one deferred pass per level of nesting " +
+                    "(constraint 17), which is what CodeNestView's bounded landing retry is for",
+            )
+        }
+        if (wrongHeight == 0) {
+            rep.pass("nested heights are min(excerpt, content, cap) and the root carries no target — it is exempt")
+        } else {
+            rep.fail(
+                "landing height",
+                "$wrongHeight node(s) are not the height §1a⁵ 4 specifies (or the root grew a target it must not " +
+                    "have) — the excerpt target is what creates the viewport, so a wrong height is a missing reveal",
+            )
+        }
+        if (noRoom == 0) {
+            rep.pass("every landed node has a viewport smaller than its content, so constraint 19's scroll room exists")
+        } else {
+            rep.fail(
+                "scroll room",
+                "$noRoom landed node(s) still size to their content, so there is nothing to scroll in them and " +
+                    "Phase 3's 'reveal the active range in its node' is not expressible for them (constraint 19)",
+            )
+        }
     }
 
     /**
@@ -989,9 +1222,22 @@ internal class NestBench(
      * The objective half of "the wheel over the child scrolls the child". 1a″'s equivalent question cost the
      * whole tree when it was wrong (`contains()` on the overlay), and it is exactly as invisible here: an
      * embedded component the platform positions but does not hit-test would look like a picture of an editor.
+     *
+     * **Rewritten per §1a⁵ 5, because the old version measured before a depth-2 frame was placed.** It guarded on
+     * the *child's* `isShowing` and size, which pass while the ancestor chain is still settling, so the first
+     * report of a session failed on the doubly-nested node and a later one passed. Two changes, and they are
+     * different in kind:
+     *
+     *  - the sample point is the centre of the child's frame **intersected with the host's bounds**, so a frame the
+     *    host has not made room for yet cannot be aimed at;
+     *  - a point outside the host is **not measured** rather than failed. A stolen event returns the host's own
+     *    component and is a real defect; a `null` means the check aimed into space and has measured nothing. The
+     *    real assertion survives intact: a point genuinely inside the child that resolves to the host is a FAIL.
+     *
+     * This is constraint 17 recurring in a new check rather than once, which is what the constraint says to expect.
      */
     private fun reportMouseReach(rep: Report) {
-        rep.section("Does the mouse reach the nested editor, and the leader?")
+        rep.section("Does the mouse reach the nested editor, and the leader? (§1a⁵ 5)")
         val ns = nest?.nestings?.filter { it.state == EmbedState.EMBEDDED }
         if (ns.isNullOrEmpty()) {
             rep.skip("mouse reach", "nothing embedded — no edge in this case resolved a call-site line")
@@ -1000,84 +1246,84 @@ internal class NestBench(
         var childOk = 0
         var stripOk = 0
         var measured = 0
-        var overlapOk = 0
-        var overlapMeasured = 0
+        var unplaced = 0
+        var topRowsOk = 0
+        var topRowsMeasured = 0
         for (n in ns) {
             val hostContent = n.parent.editor.contentComponent
-            val childComp = n.child.editor.contentComponent
-            if (childComp.width <= 0 || childComp.height <= 0 || !childComp.isShowing) {
-                rep.line("── ${n.child.spec.title}: not laid out or not showing (${childComp.width}x${childComp.height}) — skipped")
+            val fb = n.frameBoundsIn(hostContent)
+            // The frame, clipped to the part of it the host has actually made room for. An empty intersection is
+            // the depth-2 case the old check failed on: the frame has bounds, and they are nowhere yet.
+            val room = fb?.intersection(Rectangle(0, 0, hostContent.width, hostContent.height))
+            if (fb == null || room == null || room.isEmpty) {
+                unplaced++
+                rep.line(
+                    "── ${n.child.spec.title}: frame=$fb host=${hostContent.width}x${hostContent.height} → " +
+                        "not placed inside the host yet, NOT MEASURED (the §1a⁵ 5 defect: this used to FAIL)",
+                )
                 continue
             }
             measured++
-            val inChild = SwingUtilities.convertPoint(
-                childComp, Point(childComp.width / 2, childComp.height / 2), hostContent,
-            )
-            val deepestInChild = SwingUtilities.getDeepestComponentAt(hostContent, inChild.x, inChild.y)
+            val cx = room.x + room.width / 2
+            // Below the strip by a whole strip's height, so the point is inside the child rather than in the band
+            // above it — and clamped into the room the host has made, which is the fix.
+            val childY = (room.y + n.stripHeight() + n.stripHeight() / 2).coerceAtMost(room.y + room.height - 1)
+            val deepestInChild = SwingUtilities.getDeepestComponentAt(hostContent, cx, childY)
             val reachesChild = deepestInChild != null && SwingUtilities.isDescendingFrom(deepestInChild, n.child)
 
-            val fb = n.frameBoundsIn(hostContent)
-            val deepestInStrip = fb?.let {
-                SwingUtilities.getDeepestComponentAt(hostContent, it.x + it.width / 2, it.y + n.stripHeight() / 2)
-            }
+            val deepestInStrip = SwingUtilities.getDeepestComponentAt(hostContent, cx, room.y + n.stripHeight() / 2)
             val reachesStrip = deepestInStrip != null &&
                 !SwingUtilities.isDescendingFrom(deepestInStrip, n.child) &&
                 deepestInStrip !== hostContent
 
-            // The rows the strip **overlaps into** still belong to the child. With the default `contains` the strip
-            // takes them and the nested editor is dead at the top — 1a″'s `contains()` trap one layer down, and
-            // just as silent. Only measurable where there is an overlap, i.e. on TITLED_BORDER.
-            val overlap = n.leaderOverlap()
-            val inOverlap = if (overlap > 0 && fb != null) {
-                SwingUtilities.getDeepestComponentAt(
-                    hostContent, fb.x + fb.width / 2, fb.y + n.stripHeight() + overlap / 2,
-                )
-            } else {
-                null
-            }
-            val overlapReachesChild = inOverlap != null && SwingUtilities.isDescendingFrom(inOverlap, n.child)
-            if (overlap > 0 && fb != null) {
-                overlapMeasured++
-                if (overlapReachesChild) overlapOk++
+            // The child's **first rows**, which the strip used to overlap and disclaim via `contains()`. With the
+            // overlap at zero there is nothing above them any more, so this now checks the absence of the problem
+            // rather than the fix for it — kept because the rule has bitten twice and its failure is silence.
+            val firstRowY = room.y + n.stripHeight() + 1
+            if (firstRowY < room.y + room.height) {
+                topRowsMeasured++
+                val inTopRows = SwingUtilities.getDeepestComponentAt(hostContent, cx, firstRowY)
+                if (inTopRows != null && SwingUtilities.isDescendingFrom(inTopRows, n.child)) topRowsOk++
             }
 
             rep.line(
-                "── ${n.child.spec.title}: at the child's centre → ${deepestInChild?.javaClass?.simpleName} " +
-                    "(reaches child=$reachesChild); at the strip → ${deepestInStrip?.javaClass?.simpleName} " +
-                    "(reaches leader=$reachesStrip); in the ${overlap}px overlap band → " +
-                    "${inOverlap?.javaClass?.simpleName ?: "n/a"} (reaches child=$overlapReachesChild)",
+                "── ${n.child.spec.title}: room=$room; inside the child → ${deepestInChild?.javaClass?.simpleName} " +
+                    "(reaches child=$reachesChild); in the strip → ${deepestInStrip?.javaClass?.simpleName} " +
+                    "(reaches leader=$reachesStrip); seam=${n.seamRows()}px",
             )
             if (reachesChild) childOk++
             if (reachesStrip) stripOk++
         }
         if (measured == 0) {
-            rep.skip("mouse reach", "no nested child is laid out and showing yet")
+            rep.skip(
+                "mouse reach",
+                "$unplaced nested frame(s) are not placed inside their host yet — not measured rather than failed, " +
+                    "which is the §1a⁵ 5 fix; re-run the report once the view has settled",
+            )
             return
         }
-        if (overlapMeasured == 0) {
-            rep.skip(
-                "overlap band",
-                "this chrome (${nodeStyle.chrome}) draws its line on its bounds edge, so the leader needs no " +
-                    "overlap and there is no band to pass through — switch chrome: titled_border and re-run",
-            )
-        } else if (overlapOk == overlapMeasured) {
+        if (unplaced > 0) {
+            rep.info("$unplaced nesting(s) were not measured because their frame is not placed in the host yet")
+        }
+        if (topRowsMeasured > 0 && topRowsOk == topRowsMeasured) {
             rep.pass(
-                "the rows the leader strip reaches into still belong to the nested editor's mouse — the strip's " +
-                    "contains() claims only its own band",
+                "the nested editor's first rows belong to its own mouse — with the strip's overlap at zero there is " +
+                    "nothing above them, which is why the contains() override could go",
             )
-        } else {
+        } else if (topRowsMeasured > 0) {
             rep.fail(
-                "overlap band",
-                "${overlapMeasured - overlapOk} of $overlapMeasured overlap bands are taken by the leader strip, " +
-                    "so the nested editor is dead in its top rows — this is 1a″'s contains() defect one layer down",
+                "child top rows",
+                "${topRowsMeasured - topRowsOk} of $topRowsMeasured nested editors are dead in their first rows — " +
+                    "something above them is taking the events, which is 1a″'s contains() defect returning by a " +
+                    "different route now that the strip no longer disclaims anything",
             )
         }
         if (childOk == measured) {
-            rep.pass("a click or wheel event at a nested editor's centre lands inside that editor, not on the host")
+            rep.pass("a click or wheel event inside a nested editor lands inside that editor, not on the host")
         } else {
             rep.fail(
                 "mouse reach",
-                "${measured - childOk} of $measured nested editors do not receive events at their own centre — " +
+                "${measured - childOk} of $measured nested editors do not receive events inside themselves — " +
                     "the host editor is hit-testing over them, which reads as the nested node being a picture",
             )
         }
