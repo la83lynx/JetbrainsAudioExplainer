@@ -373,6 +373,11 @@ that was actually needed came from a build artefact.
 
 ## Phase 1a⁵ pre-flight probe — `spikes/tree1a5/OutlineProbe.java` · MEASURED, 20 pass / 0 fail
 
+> **Three of the answers below were overturned by the G1c′ round** and are kept as recorded rather than rewritten,
+> because *which* of them a pre-flight probe got wrong is the transferable part. `ARROW` is no longer two
+> components, its head no longer stops short, and `stripHeight` is no longer one number. See "The G1c′ round"
+> below. The probe now stands at **23 pass / 0 fail with 5 controls**.
+
 **What it set out to answer.** §1a⁵ 1 specifies the three leader modes to the pixel and leaves exactly one
 question open — *"whether that seam needs a 1 px overlap or exact adjacency is a probe question"* — plus three
 transcription risks that are pure Java2D and therefore answerable in two seconds rather than in a 4–7 minute
@@ -411,6 +416,67 @@ way it went.
 agreed — a question that stopped existing when `TITLED_BORDER` was scrapped. Its replacement, `reportOutline`,
 asserts the rule that took its place (adjacency, edge ownership, and no stale border segment after a restyle) and
 adds the pixel measurement above.
+
+---
+
+## The G1c′ round — §1a⁵ judged on real code · 10 of 17 steps clean, 7 sent back and built
+
+**What it set out to answer.** §1a⁵ shipped three leader modes as one outline, a chrome rule, and a landing that
+caps a nested node to its excerpt and scrolls to it. The pre-flight probe had measured the geometry and the bench
+asserted the invisible half; what neither could answer is whether the result reads correctly over real code at real
+sizes. Seventeen steps, `[JUDGE]`/`[WATCH]` tagged.
+
+**The accepted half, so it is not re-opened**: the outline reads as one outline rather than three drawings that meet;
+the nested frames carry no ghost top edge; the landing works and the root correctly stays on its class header; a
+nested node has a scrollbar for the first time (constraint 19's room); `reportOutline` / `reportHeaderRule` /
+`reportLanding` pass, including the pixel section that answered the one question the probe could not (a
+`CustomHighlighterRenderer` **may** paint on the row where the block inlay starts, so `ARROW`'s box really is
+four-sided); the header rule holds on `case: same-file`; `case: wide` lands three children; a theme flip recolours
+the leader and the frame together; `arrow turn: 50 %` is confirmed; and the tab closes with no leaked editor.
+
+### The seven, and the one thing they have in common
+
+**Not one was a design question re-opened.** Six were a rule already written down and lost in transcription, or a
+number a PNG could not settle. The seventh was a defect older than the phase that only a capped node could expose.
+
+| Sent back | What it was | Where the answer already existed |
+|---|---|---|
+| *"diagonals top don't meet invoker box ends — off by 2px because of invoker box padding"* | **Half the origin was unshared.** Constraint 16's row constant held; the *column* did not — the leader started at the token's glyph, 2 px inside its own box's wall | Constraint 18: "the box's **padded** bottom corners, not the glyphs'". And the probe itself padded its endpoints correctly |
+| *"it stems immediately sideways from invocation token box, I expected smooth roundings span down from sides of box"* | **A T-junction, not a gap.** A run leaving at the box's bottom row exactly means the wall stops and something else starts — the reading constraint 16 exists to prevent, arriving as a *shape* rather than as a coordinate | Nowhere: this one is a genuine correction to the specified shape, and the only one of the seven that is |
+| *"arrow does not reach header top per 2px"* | **A correct measurement of the wrong claim.** "Points at, without touching" was the specification *and* the probe's assertion; 4 px of gap read as a misdrawn arrow | Nowhere — but see the lesson below, because the probe *asserted* the wrong claim confidently |
+| *"corners and brace — 14px enough, arrow needs 22px"* | **The PNG sweep gave one number and real code gave two** | Nowhere. This is the pre-flight's limit stated exactly: same three renders, different answer |
+| *"subhosts with subhosts should be sized to their excerpt size + full sizes of subnodes"* | **A ceiling measured on folded code was being charged for embedded children** — which is the whole reason `growHosts` existed. And it needed one thing the round did not say: the **root** is not a subhost, and capping it would give it a second scrollbar inside the outer pane | Constraint 8 measured 600 px on *code*; nothing said an inlay was code |
+| *"callout partially hidden (scrolled away under header)"* | **Older than this phase.** `ScrollType.CENTER` centres the active line and knows nothing about an inlay above it; a full-size editor always had the slack to hide it | §1a⁵ 4 said "let the per-node reveal handle it" and no reveal did |
+| *"collapsed subeditor should also have no top border"* | **Two drawings of one shape.** A collapse does not change who owns the top edge; the stub drew its own `drawRoundRect` | Constraint 16's own lesson, one component over |
+
+**The transferable finding: a probe and the code agreeing is not the same as sharing a definition.** The origin
+defect existed *while* the probe measured the geometry correctly, because each computed the box's corners itself. So
+both padded coordinates now come from one call (`LeaderArt.boxEdges`), and the probe checks the agreement with a
+glyph-origin control that must fail — the check exists because the agreement was untested, not because the rule was
+unknown.
+
+**And: what a pre-flight probe can and cannot settle, now with evidence on both sides.** It settled the seam, the
+edge suppression, the collinearity and `ARROW`'s turn — four questions, four answers that held. It did *not* settle
+`stripHeight`, and it actively misled on `ARROW`'s reach: a PNG at 640 px is a picture of a shape, and both of those
+are judgements about proportion over real code. **Send shapes to a probe and proportions to the round.**
+
+### Three probe defects in this pass, and the third is the useful one
+
+The re-measurement opened at **22 pass / 2 fail**, both the probe's own, which is the loop working:
+
+- **A window that measured its own size.** The first attempt at "`ARROW` needs 22 px" counted ink inside a window
+  whose bounds *were* `arc` and `HEAD_H` — fully inked at every height, so it reported the window and could only
+  restate arithmetic.
+- **A comparison across two stroke widths.** The origin check compared the leftmost inked column of the box's 1.2 px
+  border against the leader's 1.4 px one, which carries a systematic ±1 px bias — enough to make a genuine 2 px
+  control read as 1 px and fail. Fixed by measuring the offset in *both* renders and asserting the **difference** is
+  exactly `TOKEN_PAD`, where the bias cancels.
+- **"Is there enough shaft" is not a geometric claim.** The second attempt classified rows by where their ink sits
+  and still could not draw a clean line, because a chevron's arms converge onto the axis and its last rows are
+  indistinguishable from shaft by any local test. So it is an `INFO` line reporting the classification, not a check.
+  **Forcing a threshold there would have meant fitting one to the numbers already observed** — a PASS that measures
+  nothing, which is `spikes/b3a/`'s original mistake in a new costume. The round judged the proportion; the probe
+  records the number so the judgement is re-judgeable.
 
 ---
 

@@ -216,16 +216,60 @@ class CodeNestView(
      *  - **the landing** — a nested child is sized to its excerpt and scrolled to it; the root is exempt.
      */
     private fun applyRoles() {
-        val hosts = mutableNestings.filter { it.state == EmbedState.EMBEDDED }.map { it.parent }.toSet()
+        val embedded = mutableNestings.filter { it.state == EmbedState.EMBEDDED }
+        val hosts = embedded.map { it.parent }.toSet()
+        val nested = embedded.map { it.child }.toSet()
         for (node in mutableNodes) {
+            // **A top-level host grows; a nested one does not** — the G1c′ round's item 3 asked for the second
+            // ("subhosts with subhosts should be sized to their excerpt size + full sizes of subnodes") and said
+            // nothing about the first, and the difference matters: a root capped below its content grows an *inner*
+            // scrollbar inside the outer pane, which is two scrollbars for one node and a change nobody asked for.
+            // The root is the reader's entry point (constraint 19) and the pane it sits in already scrolls.
+            val topLevelHost = node in hosts && node !in nested
             node.restyle(
                 nodeStyle.with(
                     chrome = chromeFor(node),
-                    grow = nodeStyle.grow || (node in hosts && style.growHosts),
+                    grow = nodeStyle.grow || (topLevelHost && style.growHosts),
                 ),
             )
         }
         for (n in mutableNestings) n.applyLeaderRole()
+        refreshEmbeddedHeights()
+    }
+
+    /**
+     * **Tell every node how much embedded child frame it carries** — the G1c′ round's item 3.
+     *
+     * *"Subhosts with subhosts should be by default sized to their excerpt size + full sizes of subnodes."* A node
+     * cannot work this out: the frames are block inlays it did not create, and it knows nothing about the tree. So the
+     * two numbers [CodeNodeView.setEmbeddedHeights] takes are computed here — the total, which its cap must not count
+     * against its own code, and the part inside its excerpt, which its landing target has to include.
+     *
+     * **Children first, and that is load-bearing rather than tidy**: a frame's preferred height comes from the child
+     * node's published height, which now depends on what *that* child hosts. Parent-first would size an outer host
+     * against its inner frame's pre-update height and be wrong by exactly the delta — constraint 17's defect in a new
+     * place, which is what the constraint says to expect. Post-order, with a `seen` guard because the caller supplies
+     * the edges.
+     */
+    private fun refreshEmbeddedHeights() {
+        val seen = HashSet<CodeNodeView>()
+        fun visit(node: CodeNodeView) {
+            if (!seen.add(node)) return
+            val mine = mutableNestings.filter { it.state == EmbedState.EMBEDDED && it.parent === node }
+            for (n in mine) visit(n.child)
+            val focus = node.spec.focusRange()
+            var total = 0
+            var inExcerpt = 0
+            for (n in mine) {
+                val h = n.framePreferredHeight()
+                total += h
+                // Inside the excerpt means the *call* is on one of the excerpt's lines: that is where the frame is
+                // drawn, so that is when its height is part of what the landing has to fit.
+                if (focus != null && n.callLine != null && n.callLine in focus) inExcerpt += h
+            }
+            node.setEmbeddedHeights(total, inExcerpt)
+        }
+        for (node in mutableNodes) visit(node)
     }
 
     /**
@@ -256,6 +300,9 @@ class CodeNestView(
     private fun scheduleLanding(attempt: Int) {
         ApplicationManager.getApplication().invokeLater {
             if (disposed) return@invokeLater
+            // Before the scroll, not after: a host's target height includes the frames inside its excerpt, and the
+            // scrollable extent a `scrollVertically` clamps to is `content − viewport`.
+            refreshEmbeddedHeights()
             var unsettled = false
             for (n in mutableNestings) {
                 if (n.state != EmbedState.EMBEDDED) continue
@@ -301,6 +348,10 @@ class CodeNestView(
             inlayUpdatePending = false
             if (disposed) return@invokeLater
             mutableNestings.forEach { it.updateInlay() }
+            // A re-measured frame is a different number of pixels inside its host's excerpt, so the host's target
+            // moved with it. Idempotent — `setEmbeddedHeights` no-ops when nothing changed — which is what stops this
+            // and the geometry callback from taking turns.
+            refreshEmbeddedHeights()
         }
     }
 
@@ -796,7 +847,11 @@ class CodeNestView(
          * exactly the indent.
          */
         internal fun leaderEndpoints(target: JComponent): Pair<Int, Int>? {
-            val (x1, x2) = tokenXRange() ?: return null
+            val (tx1, tx2) = tokenXRange() ?: return null
+            // The **box's** corners, not the token's glyph bounds: the box is inflated by `TOKEN_PAD`, and starting
+            // the leader at the glyph left it 2 px inside the box's own wall — the G1c′ round's items 1 and 6, and
+            // one derivation of the origin rather than two ([LeaderArt.boxEdges]).
+            val (x1, x2) = LeaderArt.boxEdges(tx1, tx2)
             val content = parent.editor.contentComponent
             if (!SwingUtilities.isDescendingFrom(target, content)) {
                 leaderState = LeaderState.UNCONVERTIBLE
@@ -827,7 +882,7 @@ class CodeNestView(
         }
 
         /** The leader strip's height inside the frame — the band a collapse click is expected to land in. */
-        fun stripHeight(): Int = style.stripHeight
+        fun stripHeight(): Int = style.stripHeight()
 
         fun frameHeight(): Int = frame.height
 
@@ -920,7 +975,7 @@ class CodeNestView(
             val body = if (collapsed) stub else nesting.child
             return Dimension(
                 (width.takeIf { it > 0 } ?: MIN_NODE_WIDTH),
-                style.stripHeight + body.preferredSize.height + ins.top + ins.bottom,
+                style.stripHeight() + body.preferredSize.height + ins.top + ins.bottom,
             )
         }
 
@@ -928,12 +983,12 @@ class CodeNestView(
             val ins = insets
             val w = (width - ins.left - ins.right).coerceAtLeast(0)
             val body = if (collapsed) stub else nesting.child
-            val bodyY = ins.top + style.stripHeight
+            val bodyY = ins.top + style.stripHeight()
             body.setBounds(ins.left, bodyY, w, (height - bodyY - ins.bottom).coerceAtLeast(0))
             // Exactly its own band, with no overlap into the child — which is what makes the leader's last row and
             // the frame's first adjacent rather than overlapping, and what keeps the strip out of the nested
             // editor's mouse without needing a `contains()` override to do it.
-            strip.setBounds(ins.left, ins.top, w, style.stripHeight)
+            strip.setBounds(ins.left, ins.top, w, style.stripHeight())
         }
 
         fun setCollapsed(next: Boolean) {
@@ -961,6 +1016,12 @@ class CodeNestView(
      * 1a‴ shipped a bare `JBLabel` here and the reader's note was exact — a collapsed expansion looked like a line
      * of grey text in the middle of the caller's code rather than like something folded. Dashed, because dashed is
      * what "there is more of this" already means everywhere else in the surface.
+     *
+     * **It obeys the leader mode's border suppression like the expanded child does**, which it did not until the G1c′
+     * round: *"collapsed view in corners and braces mode — collapsed subeditor should also have no top border."* A
+     * collapse does not change who owns the top edge — the leader still arrives into this row — so a stub that drew
+     * its own put a second line where the leader already ended. Hence [LeaderArt.framePath] rather than a
+     * `drawRoundRect` of its own.
      *
      * No triangle: the affordance is the node's header control, and there is exactly one of it now.
      */
@@ -1001,7 +1062,7 @@ class CodeNestView(
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
                 g2.color = leaderBase()
                 g2.stroke = DASHED
-                g2.drawRoundRect(0, 0, width - 1, height - 1, STUB_ARC, STUB_ARC)
+                g2.draw(LeaderArt.framePath(0, 0, width, height, LeaderArt.drawsFrameTop(style.leader)))
             } finally {
                 g2.dispose()
             }
@@ -1036,7 +1097,7 @@ class CodeNestView(
             })
         }
 
-        override fun getPreferredSize(): Dimension = Dimension(MIN_LEADER_WIDTH, style.stripHeight)
+        override fun getPreferredSize(): Dimension = Dimension(MIN_LEADER_WIDTH, style.stripHeight())
 
         override fun paintComponent(g: Graphics) {
             val (x1, x2) = nesting.leaderEndpoints(this) ?: return
@@ -1166,7 +1227,6 @@ class CodeNestView(
         const val TOGGLE_W = 13
         const val TOGGLE_H = 11
         const val STUB_PAD = 3
-        const val STUB_ARC = 5
 
         /** How far a "next line is below the frame" comparison may miss by. One line of rounding, no more. */
         const val LINE_SLACK = 4
@@ -1323,18 +1383,20 @@ enum class NestLeader {
 class NestStyle(
     /**
      * Height of the leader strip — **the vertical distance from the box's bottom-edge level to the frame's top**,
-     * and therefore not a spacing default.
+     * and therefore not a spacing default. `null` means [LeaderArt.defaultStripHeight], which is the shipping
+     * behaviour; a number is the bench's override for the sweep.
      *
      * All three leaders originate on the box's bottom row and have to arrive at the frame's, so this number *is* a
      * diagonal's slope, a brace's drop and how far `ARROW` descends before its head. Every one of the three shapes
      * changes character with it, which makes it something to judge by eye at a stated width (constraint 9) rather
      * than a gap to pick.
      *
-     * **22 px, judged on `spikes/tree1a5/`'s sweep at 640 px wide**: 14 is cramped and steepens the funnel to the
-     * point where the diagonals read as a single wedge, 30 is airy but spends a code row and a half of the host's
-     * height on a join. On the bench as a knob, because the sweep was PNGs and the round is real code.
+     * **It is not one number, and the G1c′ round is what settled that** — 22 px was chosen on the probe's PNGs for
+     * all three, and on real code the answer split: *"corners and brace — 14px enough, arrow needs 22px."* Which is
+     * the shape of the thing rather than a preference, so it belongs to the mode ([LeaderArt.defaultStripHeight])
+     * and not to this class.
      */
-    val stripHeight: Int = 22,
+    val stripHeightOverride: Int? = null,
     val leader: NestLeader = NestLeader.CORNERS,
     /**
      * Where [NestLeader.ARROW] turns down, as a fraction of the span from the box's right edge to the frame's.
@@ -1354,17 +1416,26 @@ class NestStyle(
     /** Space between the nested frame and the host's next line of code. */
     val gapBelow: Int = 6,
     /**
-     * Grow a node that hosts a nesting to its content instead of capping it (constraint 8).
+     * Grow a **top-level** node that hosts a nesting to its content instead of capping it (constraint 8).
      *
-     * A knob rather than a constant because the interaction is worth seeing: with it off, a host capped at 600 px
-     * holds a 500 px child and the reader gets two lines of the caller behind a scrollbar.
+     * **Narrowed by the G1c′ round, not switched off.** Item 3 asked for *"subhosts with subhosts … sized to their
+     * excerpt size + full sizes of subnodes"*, so a *nested* host now lands on its excerpt like any other nested
+     * node, with the embedded frames counted at full height into both its target and its cap
+     * ([CodeNodeView.excerptTargetHeight] and `effectiveCap`). The round said nothing about the root, and capping the
+     * root would give it an inner scrollbar inside the outer pane — two scrollbars for one node — so it still grows.
+     *
+     * Kept as a knob because with it off the root is the comparison the knob was always for: a 600 px ceiling plus
+     * whatever is embedded, against the whole caller.
      */
     val growHosts: Boolean = true,
     val gap: Int = 12,
     val inset: Int = 14,
 ) {
+    /** The strip's height for this mode: the override if there is one, else the mode's own number. */
+    fun stripHeight(): Int = stripHeightOverride ?: LeaderArt.defaultStripHeight(leader)
+
     fun with(
-        stripHeight: Int = this.stripHeight,
+        stripHeightOverride: Int? = this.stripHeightOverride,
         leader: NestLeader = this.leader,
         arrowTurn: Float = this.arrowTurn,
         toggleInHeader: Boolean = this.toggleInHeader,
@@ -1372,5 +1443,5 @@ class NestStyle(
         growHosts: Boolean = this.growHosts,
         gap: Int = this.gap,
         inset: Int = this.inset,
-    ) = NestStyle(stripHeight, leader, arrowTurn, toggleInHeader, gapBelow, growHosts, gap, inset)
+    ) = NestStyle(stripHeightOverride, leader, arrowTurn, toggleInHeader, gapBelow, growHosts, gap, inset)
 }

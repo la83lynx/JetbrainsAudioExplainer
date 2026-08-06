@@ -123,6 +123,18 @@ class SpotlightRenderer(
      */
     private var flashTimer: Disposable? = null
 
+    /**
+     * The step's docked callout, held **outside** [trackedDisposables]'s anonymity so [revealCenter] can ask where it
+     * is. Its lifecycle is still that list's; this is a reference, not a second owner.
+     *
+     * It exists because of a defect the G1c′ round found in a **capped** node, which is the first place the surface
+     * has had one: *"callout partially hidden (scrolled away under header) in step 1, 2 of ValidationHandler.Handle."*
+     * `ScrollType.CENTER` centres the active *line*, and the callout is an inlay drawn in the rows above it — in a
+     * 9-line viewport there is not half a viewport of room up there, so the box hangs off the top. In a full-size
+     * editor the same code has always had enough slack for it to be invisible.
+     */
+    private var calloutInlay: Inlay<*>? = null
+
     // ── Render API (EDT only) — mirrors highlight.ts ──
 
     /** Dim everything outside `[startLine, endLine]` (1-based, inclusive) — the segment spotlight. */
@@ -324,6 +336,7 @@ class SpotlightRenderer(
             renderer,
         ) ?: return
         trackedDisposables += inlay
+        calloutInlay = inlay
     }
 
     /**
@@ -704,6 +717,7 @@ class SpotlightRenderer(
         trackedDisposables.clear()
         // The flash's cancel handle was in that list, so the fade is now stopped; drop the stale reference.
         flashTimer = null
+        calloutInlay = null
     }
 
     /** Add a whole-line highlighter over the 0-based inclusive line range; tracked for later clearing. */
@@ -731,6 +745,42 @@ class SpotlightRenderer(
         editor.selectionModel.removeSelection()
         val mid = ((zeroStart + zeroEnd) / 2).coerceIn(0, lastLine)
         editor.scrollingModel.scrollTo(LogicalPosition(mid, 0), ScrollType.CENTER)
+        // After the centring has actually happened, not beside it: `scrollTo` animates unless something disabled it,
+        // and a correction issued into a running animation is simply overwritten by its last frame. Registered only
+        // when there is a callout, so a bare plan's reveal is byte-for-byte what it was.
+        if (calloutInlay != null) {
+            editor.scrollingModel.runActionOnScrollingFinished { revealCallout(zeroStart) }
+        }
+    }
+
+    /**
+     * Bring the step's docked callout back into the viewport when centring the active line pushed it out.
+     *
+     * **The correction the G1c′ round asked for, and the alternative it is instead of.** §1a⁵ 4 chose to let the
+     * reveal handle the callout rather than have a node reserve room for it — reserving would make a node change
+     * height on every step advance, which is constraint 9's coupling deliberately amplified. The round then found
+     * that the reveal was *not* handling it: `ScrollType.CENTER` knows about the line and not about the inlay above
+     * it. This is that half arriving.
+     *
+     * The box's own edge is what has to be visible, so the measurement is [Inlay.getBounds] rather than a line
+     * arithmetic — the inlay's height is whatever [CalloutRenderer] wrapped to at this width, which nothing else
+     * knows. A scroll *up* to it never hides the active line, because the callout is adjacent to that line: at worst
+     * the far end of a taller-than-viewport box wins, which is the same trade a reader scrolling by hand would make.
+     * The below-placement case is the mirror, clamped so the active line's own top stays in view.
+     */
+    private fun revealCallout(zeroStart: Int) {
+        val inlay = calloutInlay ?: return
+        if (!inlay.isValid) return
+        val box = inlay.bounds ?: return
+        val view = editor.scrollingModel.visibleArea
+        if (view.height <= 0) return
+        val sm = editor.scrollingModel
+        if (box.y < view.y) {
+            sm.scrollVertically(box.y.coerceAtLeast(0))
+        } else if (box.y + box.height > view.y + view.height) {
+            val activeTop = editor.offsetToXY(editor.document.getLineStartOffset(zeroStart)).y
+            sm.scrollVertically(minOf(box.y + box.height - view.height, activeTop).coerceAtLeast(0))
+        }
     }
 
     /**

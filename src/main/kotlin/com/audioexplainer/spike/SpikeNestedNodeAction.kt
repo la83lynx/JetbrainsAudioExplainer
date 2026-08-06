@@ -156,6 +156,9 @@ internal class NestBench(
     private var nest: CodeNestView? = null
     private var centre: JComponent? = null
 
+    /** Held because the strip's height follows the leader mode: cycling the mode restates this button's label. */
+    private var stripButton: JButton? = null
+
     private var caseIndex = 0
     private var built: Built = Built(emptyList(), emptyList())
     private val segments = mutableListOf<Segment>()
@@ -202,14 +205,16 @@ internal class NestBench(
             row(
                 JBLabel("the one outline: "),
                 button("leader: corners") { cycleLeader(it) },
-                button("strip: 22px") { cycleStripHeight(it) },
+                button(stripLabel()) { cycleStripHeight(it) }.also { stripButton = it },
                 button("arrow turn: 50%") { cycleArrowTurn(it) },
                 button("toggle: header") { toggleToggle(it) },
             ),
         )
         rows.add(
             row(
-                button("hosts: grow") { toggleGrowHosts(it) },
+                button(if (nestStyle.growHosts) "hosts: grow" else "hosts: cap ${nodeStyle.maxHeight}") {
+                    toggleGrowHosts(it)
+                },
                 button("scroll host ▾") { scrollHost() },
                 button("reveal deepest") { revealDeepest() },
             ),
@@ -392,16 +397,26 @@ internal class NestBench(
         val next = values[(values.indexOf(nestStyle.leader) + 1) % values.size]
         restyleNest(nestStyle.with(leader = next))
         b.text = "leader: ${next.name.lowercase()}"
+        // The strip's height follows the mode now, so the other button's label is stale the moment this one changes.
+        stripButton?.text = stripLabel()
     }
 
-    /** The strip's height *is* every leader's slope, so it is judged on real code and not only on the probe's PNGs. */
+    /**
+     * The strip's height *is* every leader's slope, so it is judged on real code and not only on the probe's PNGs.
+     *
+     * **`auto` is a value now, and it is the first one** — the G1c′ round split the answer by mode (14 for the two
+     * joining shapes, 22 for `ARROW`), so the shipping number comes from the leader and the fixed ones are the sweep.
+     * The button says which is in force either way, because "auto" alone would hide the thing being judged.
+     */
     private fun cycleStripHeight(b: JButton) {
-        val values = intArrayOf(14, 22, 30)
-        val i = values.indexOfFirst { it == nestStyle.stripHeight }
-        val next = values[(if (i < 0) 0 else i + 1) % values.size]
-        restyleNest(nestStyle.with(stripHeight = next))
-        b.text = "strip: ${next}px"
+        val values = listOf<Int?>(null, 14, 22, 30)
+        val i = values.indexOfFirst { it == nestStyle.stripHeightOverride }
+        restyleNest(nestStyle.with(stripHeightOverride = values[(if (i < 0) 0 else i + 1) % values.size]))
+        b.text = stripLabel()
     }
+
+    private fun stripLabel(): String = nestStyle.stripHeightOverride
+        ?.let { "strip: ${it}px" } ?: "strip: auto (${nestStyle.stripHeight()}px)"
 
     /** `ARROW`'s one free parameter. Visible only in `ARROW`, which the button says by staying available anyway. */
     private fun cycleArrowTurn(b: JButton) {
@@ -424,7 +439,12 @@ internal class NestBench(
         refreshStatus()
     }
 
-    /** The interaction worth seeing: a host capped at 600 px holding a 500 px child shows two lines of caller. */
+    /**
+     * Cap the **root** host instead of growing it — the only thing this reaches since the G1c′ round narrowed it.
+     *
+     * The comparison it now offers is the honest version of the one it always claimed: a top-level host at
+     * `600 + embedded` against the whole caller. Nested hosts are sized to their excerpt either way.
+     */
     private fun toggleGrowHosts(b: JButton) {
         restyleNest(nestStyle.with(growHosts = !nestStyle.growHosts))
         b.text = if (nestStyle.growHosts) "hosts: grow" else "hosts: cap ${nodeStyle.maxHeight}"
@@ -477,8 +497,9 @@ internal class NestBench(
             append("step ${if (steps.isEmpty()) 0 else stepIndex + 1}/${steps.size}")
             append("  ·  active: ").append(ref?.let { nodes().getOrNull(it.nodeIndex)?.spec?.title } ?: "-")
             append("  ·  focus: ").append(focused?.spec?.title ?: "<none>")
-            append("  ·  ").append(nodeStyle.chrome.name.lowercase()).append(" × ")
-                .append(nestStyle.leader.name.lowercase())
+            append("  ·  ").append(nestStyle.leader.name.lowercase()).append(" strip ")
+                .append(nestStyle.stripHeight()).append("px")
+                .append(if (nestStyle.stripHeightOverride == null) " (by mode)" else " (forced)")
             val ns = nest?.nestings
             if (ns != null) {
                 append("  ·  nested: ").append(ns.count { it.state == EmbedState.EMBEDDED }).append("/").append(ns.size)
@@ -504,7 +525,8 @@ internal class NestBench(
         rep.line("case      : ${NodeViewRun.CASES[caseIndex].name}  (${nodes().size} node(s))")
         rep.line("rebuilds  : $rebuilds")
         rep.line(
-            "nest style: strip=${nestStyle.stripHeight} leader=${nestStyle.leader} " +
+            "nest style: strip=${nestStyle.stripHeight()}px (override=${nestStyle.stripHeightOverride ?: "auto, by mode"}) " +
+                "leader=${nestStyle.leader} " +
                 "arrowTurn=${Math.round(nestStyle.arrowTurn * 100)}% toggleInHeader=${nestStyle.toggleInHeader} " +
                 "gapBelow=${nestStyle.gapBelow} growHosts=${nestStyle.growHosts}",
         )
@@ -543,7 +565,7 @@ internal class NestBench(
         captureComponent(
             this, out,
             "nest-${NodeViewRun.CASES[caseIndex].name}-${nestStyle.leader.name.lowercase()}" +
-                "-strip${nestStyle.stripHeight}-turn${Math.round(nestStyle.arrowTurn * 100)}.png",
+                "-strip${nestStyle.stripHeight()}-turn${Math.round(nestStyle.arrowTurn * 100)}.png",
             rep,
         )
 
@@ -803,7 +825,7 @@ internal class NestBench(
             rep.line("── ${n.child.spec.title}: ${n.edgeReport()}")
             rep.line(
                 "   junction        : strip=$strip child=$child seam=${n.seamRows()}px " +
-                    "stripHeight=${nestStyle.stripHeight}px",
+                    "stripHeight=${nestStyle.stripHeight()}px",
             )
             if (n.seamRows() != 0) seams++
             if (strip.x != child.x || strip.width != child.width) misaligned++
@@ -1160,8 +1182,12 @@ internal class NestBench(
             )
             rep.line(
                 "   size            : target=${target ?: "-"} content=${node.contentHeight()}px " +
-                    "published=${node.preferredSize.height}px cap=${if (node.style.grow) "grow" else "${node.style.maxHeight}px"} " +
-                    "scrolls=${node.scrolls()}",
+                    "published=${node.preferredSize.height}px cap=${if (node.style.grow) "grow" else
+                        "${node.style.maxHeight}+${node.embeddedHeight}px"} scrolls=${node.scrolls()}",
+            )
+            rep.line(
+                "   embedded        : ${node.embeddedHeight}px of child frame, ${node.embeddedInExcerptHeight}px of " +
+                    "it inside the excerpt (§G1c′ 3 — a host's target is its member plus what is nested in it)",
             )
             if (!nested) {
                 // The root is exempt, and that is a claim worth checking rather than assuming: it must NOT have a
@@ -1172,10 +1198,14 @@ internal class NestBench(
             landed++
             if (focus != null && visible != null && visible != focus.first) wrongLine++
             if (target != null) {
-                val expected = minOf(target, node.contentHeight(), node.style.maxHeight)
+                // The cap computed from the *rule* — `maxHeight` plus what is embedded, since a child frame is not
+                // the node's own code — rather than read back from the node, which would only prove it agrees with
+                // itself. §G1c′ 3 is what put the second term in.
+                val expected = minOf(target, node.contentHeight(), node.style.maxHeight + node.embeddedHeight)
                 if (node.style.grow) {
-                    // A host that is also a child: growHosts wins, and then there is no viewport to land in.
-                    rep.info("${node.spec.title} both hosts and is hosted, so growHosts overrides its excerpt target")
+                    // Since the round, `growHosts` reaches only *top-level* hosts, so a landed node can be grown
+                    // only by the global `nodeStyle.grow` — and then there is no viewport to land in.
+                    rep.info("${node.spec.title} is grown to content, so it carries no excerpt viewport to land in")
                 } else if (node.publishedHeight() != expected) {
                     wrongHeight++
                 }

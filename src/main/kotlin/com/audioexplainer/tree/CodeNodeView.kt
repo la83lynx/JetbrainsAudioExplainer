@@ -579,7 +579,7 @@ class CodeNodeView(
      * its own container as well; a caller that trusted [restyle] alone would have seen nothing move.
      *
      * **Three numbers now, and the plan settled the order** (§1a⁵ 4): the *target* is the excerpt of interest, the
-     * *ceiling* is [CodeNodeStyle.maxHeight], and the *content* is what there actually is to show. The reader's
+     * *ceiling* is [effectiveCap], and the *content* is what there actually is to show. The reader's
      * decision was **no floor** — a 6-line member gets six lines — so the answer is simply the smallest of the
      * three that applies. `content` is in the min because a target taller than the folded document would leave
      * blank rows below the last line, which reads as a broken node rather than as a generous one.
@@ -588,7 +588,46 @@ class CodeNodeView(
         val content = contentHeight()
         if (style.grow) return content
         val target = excerptTargetHeight()
-        return if (target == null) minOf(content, style.maxHeight) else minOf(target, content, style.maxHeight)
+        val cap = effectiveCap()
+        return if (target == null) minOf(content, cap) else minOf(target, content, cap)
+    }
+
+    /**
+     * [CodeNodeStyle.maxHeight] **plus whatever is embedded in this node** — the cap on the node's *own* code.
+     *
+     * Constraint 8's 600 px was measured on folded *code*, and an embedded child is not code: a host capped at a flat
+     * 600 holding a 500 px child shows two lines of the caller behind a scrollbar, which is the interaction the
+     * `growHosts` knob existed to escape. Adding what is embedded makes the cap mean the thing it was measured as, so
+     * a host is capped exactly as hard as a leaf and its children are never the thing clipped.
+     *
+     * That is what lets [CodeNestView]'s `growHosts` default to **off** and hosts land on their excerpts like any
+     * other nested node — the G1c′ round's item 3.
+     */
+    private fun effectiveCap(): Int = style.maxHeight + embeddedHeight
+
+    /**
+     * Pixels of nested child frame embedded in this node, and how much of it falls **inside this node's excerpt**.
+     *
+     * Told by [CodeNestView], never inferred: a node knows its own document and nothing about the tree, and the
+     * frames are block inlays it did not create. Two numbers because they answer two questions — the total is what
+     * [effectiveCap] must not count against the node's own code, and the excerpt's share is what
+     * [excerptTargetHeight] has to include for a host to show its member *and* the expansion inside it.
+     *
+     * Deliberately **not** every inlay: the docked callout is one too, and counting it would make a node change
+     * height on every step advance — constraint 9's coupling amplified, which §1a⁵ 4 decided against in favour of
+     * letting the reveal move the viewport.
+     */
+    var embeddedHeight: Int = 0
+        private set
+
+    var embeddedInExcerptHeight: Int = 0
+        private set
+
+    fun setEmbeddedHeights(total: Int, inExcerpt: Int) {
+        if (embeddedHeight == total && embeddedInExcerptHeight == inExcerpt) return
+        embeddedHeight = total
+        embeddedInExcerptHeight = inExcerpt
+        resync(TRIGGER_EMBEDDED)
     }
 
     fun unfoldedContentHeight(): Int =
@@ -658,7 +697,12 @@ class CodeNodeView(
     fun excerptTargetHeight(): Int? {
         if (!landsOnExcerpt || disposed || editor.isDisposed) return null
         val focus = spec.focusRange() ?: return null
-        return (focus.last - focus.first + 1).coerceAtLeast(1) * editor.lineHeight
+        val ownRows = (focus.last - focus.first + 1).coerceAtLeast(1) * editor.lineHeight
+        // Plus whatever is nested *inside* those rows, at full height — the G1c′ round's item 3: "subhosts with
+        // subhosts should be sized to their excerpt size + full sizes of subnodes". Without it a host that lands on
+        // its member gets a viewport the size of the member's text and the expansion inside it fills the whole thing,
+        // so the member is present and unreadable.
+        return ownRows + embeddedInExcerptHeight
     }
 
     /**
@@ -996,6 +1040,8 @@ class CodeNodeView(
      * defect rather than working around it: with no top run there is no top corner to round — the "corner" is just
      * where a side wall begins, and the leader arrives into it. The bottom corners keep [LeaderArt.ARC], the one
      * radius the brace's turn and the token box also use.
+     *
+     * The path itself is [LeaderArt.framePath], shared with the collapsed stub — see there for why.
      */
     class NodeFrameBorder(
         private val line: Color,
@@ -1016,29 +1062,11 @@ class CodeNodeView(
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
                 g2.color = line
                 g2.stroke = BasicStroke(weight.toFloat())
-                val arc = LeaderArt.ARC.toFloat()
-                val left = x.toFloat()
-                val right = (x + w - 1).toFloat()
-                val top = y.toFloat()
-                val bottom = (y + h - 1).toFloat()
-                val p = java.awt.geom.GeneralPath()
                 // One path from the left wall round to the right wall, so the corners cannot drift apart the way
-                // two `drawArc` calls and four `drawLine`s did. The walls start at `top` when the leader owns the
-                // top edge and at `top + arc` when this border draws it — which is the square-vs-rounded top
-                // corner, expressed once.
-                val wallTop = if (drawTop) top + arc else top
-                p.moveTo(left, wallTop)
-                p.lineTo(left, bottom - arc)
-                p.quadTo(left, bottom, left + arc, bottom)
-                p.lineTo(right - arc, bottom)
-                p.quadTo(right, bottom, right, bottom - arc)
-                p.lineTo(right, wallTop)
-                if (drawTop) {
-                    p.quadTo(right, top, right - arc, top)
-                    p.lineTo(left + arc, top)
-                    p.quadTo(left, top, left, wallTop)
-                }
-                g2.draw(p)
+                // two `drawArc` calls and four `drawLine`s did — and it lives in [LeaderArt.framePath] rather than
+                // here, because the collapsed stub draws the same shape and drew it with its own top edge until the
+                // G1c′ round's item 16.
+                g2.draw(LeaderArt.framePath(x, y, w, h, drawTop))
             } finally {
                 g2.dispose()
             }
@@ -1059,6 +1087,7 @@ class CodeNodeView(
         const val TRIGGER_INLAY = "inlay"
         const val TRIGGER_WIDTH = "width"
         const val TRIGGER_LANDING = "landing"
+        const val TRIGGER_EMBEDDED = "embedded"
 
         /**
          * Below [SpotlightRenderer]'s own layer (`SELECTION - 1`), so the active glow and the dim roles drawn

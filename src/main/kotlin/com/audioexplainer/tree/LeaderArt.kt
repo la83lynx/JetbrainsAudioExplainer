@@ -20,8 +20,10 @@ import java.awt.geom.GeneralPath
  * *land on* a border — it **is** the border for the length of its run: the box gives up its bottom edge, the frame
  * gives up its top edge, and the three drawings form a single continuous path from the frame's bottom-left, up
  * and around the token, and back down to the frame's bottom-right. Measured as exactly that in
- * `spikes/tree1a5/OutlineProbe.java`: **one 8-connected component** in `CORNERS` and `BRACE`, and **two** in
- * `ARROW`, where the frame is a separate component by design because an arrow is a reference and not a join.
+ * `spikes/tree1a5/OutlineProbe.java`: **one 8-connected component**, in all three modes since the G1c′ round —
+ * `ARROW` was two while its head stopped short of the frame, and the round judged that gap a misdrawn arrow rather
+ * than a distinction. What still makes `ARROW` a reference and not a join is that **both outlines stay closed**: the
+ * box keeps its bottom edge and the frame its top, so the arrow lands *on* a border instead of *becoming* one.
  *
  * Two consequences that are not stylistic, and both live here rather than at the call sites:
  *
@@ -52,6 +54,38 @@ internal object LeaderArt {
      * 1 px step in `ARROW`'s horizontal extension.
      */
     const val BOX_BOTTOM_IS_STRIP_ROW_0 = true
+
+    /**
+     * **The box's left and right edge x for a token spanning `[tokenX1, tokenX2)`** — the leader's origin corners,
+     * and the second half of the shared-origin rule.
+     *
+     * The G1c′ round found the first half held and this one did not: *"diagonals top don't meet invoker box ends —
+     * off by 2px because of invoker box padding"*. The box is drawn inflated by [TOKEN_PAD] on each side, so a
+     * leader started at the *glyph's* x leaves the outline 2 px inside its own wall — a T-junction, at exactly the
+     * scale the eye reads as a mistake rather than as a style. The pre-flight probe had it right
+     * (`spikes/tree1a5/` pads its endpoints); the Kotlin transcription lost it, which is the same class of defect
+     * [BOX_BOTTOM_IS_STRIP_ROW_0] exists to prevent one axis over.
+     *
+     * So the padding is applied here and nowhere else: [TokenBoxRenderer] draws the box from this, and
+     * `CodeNestView.leaderEndpoints` starts the leader from it.
+     */
+    fun boxEdges(tokenX1: Int, tokenX2: Int): Pair<Int, Int> = (tokenX1 - TOKEN_PAD) to (tokenX2 + TOKEN_PAD)
+
+    /**
+     * **The strip's height, by leader mode** — judged on real code in the G1c′ round, one number per shape.
+     *
+     * It stopped being one number for the same reason it stopped being cosmetic: the strip's height *is* the
+     * vertical distance every leader has to cross, and the three shapes do not spend it the same way. A diagonal
+     * and a brace need only enough drop to read as a turn (**14 px**); `ARROW` spends 6 px of it on its head plus an
+     * arc going in, so 14 leaves it no shaft at all (**22 px**). The round's words: *"corners and brace — 14px
+     * enough, arrow needs 22px."*
+     *
+     * [NestStyle.stripHeight] overrides it for the bench's sweep; `null` there means this.
+     */
+    fun defaultStripHeight(leader: NestLeader): Int = when (leader) {
+        NestLeader.CORNERS, NestLeader.BRACE -> 14
+        NestLeader.ARROW -> 22
+    }
 
     /**
      * The leader's colour: constraint 4's settings accent, muted toward the border, and muted further when the
@@ -128,24 +162,33 @@ internal object LeaderArt {
                 p.lineTo(right, b)
             }
 
-            // Two L-shaped halves: outward at the box's bottom-edge level to the side wall, one right angle at
-            // that outer end, then down into the frame's top corner. No central stem and no spine across the
-            // middle — the built version had both, and the probe's emptiness test uses it as the control.
+            // Two stepped halves, **each leaving the box's bottom corner going down**: a rounded turn out of the
+            // box's own side wall, an outward run at that level to the frame's side wall, then a second rounded
+            // turn down into it. Two turns per half and nothing between them — no central stem and no spine across
+            // the middle, which the built version had and the probe's emptiness test uses as its control.
+            //
+            // The descent is the G1c′ round's correction: *"it stems immediately sideways from the invocation token
+            // box, I expected smooth roundings span down from sides of box"*. A run leaving at row 0 exactly is a
+            // T-junction at the end of the box's wall however well the ends meet; leaving *along* the wall and then
+            // curving out is the wall continuing, which is what one outline means.
             NestLeader.BRACE -> {
-                if (x1 > arc) {
+                val runY = arc
+                if (x1 - arc > arc) {
                     p.moveTo(x1.toFloat(), 0f)
-                    p.lineTo(arc, 0f)
-                    p.quadTo(0f, 0f, 0f, arc)
+                    p.quadTo(x1.toFloat(), runY, x1 - arc, runY)
+                    p.lineTo(arc, runY)
+                    p.quadTo(0f, runY, 0f, runY + arc)
                 } else {
-                    // The token starts at (or left of) the frame's own wall: there is no outward run to make, so
-                    // the half degenerates to the wall itself rather than running backwards.
+                    // The box's corner is at (or left of) the frame's own wall plus a radius: there is no outward
+                    // run to make, so the half degenerates to the wall itself rather than running backwards.
                     p.moveTo(0f, 0f)
                 }
                 p.lineTo(0f, b)
-                if (x2 < right - arc) {
+                if (x2 + arc < right - arc) {
                     p.moveTo(x2.toFloat(), 0f)
-                    p.lineTo(right - arc, 0f)
-                    p.quadTo(right, 0f, right, arc)
+                    p.quadTo(x2.toFloat(), runY, x2 + arc, runY)
+                    p.lineTo(right - arc, runY)
+                    p.quadTo(right, runY, right, runY + arc)
                 } else {
                     p.moveTo(right, 0f)
                 }
@@ -153,18 +196,24 @@ internal object LeaderArt {
             }
 
             // The box's bottom edge continued past its own bottom-right corner — collinear, so it reads as the
-            // edge extended and not as a new line leaving a corner — then down, ending in an arrowhead that
-            // points at the frame's top border without touching it.
+            // edge extended and not as a new line leaving a corner — then down, ending in an arrowhead that lands
+            // on the frame's top border. Both outlines stay closed, which is what keeps it a reference.
             NestLeader.ARROW -> {
                 val turn = arrowTurnX(x2, w, arrowTurn)
-                val tip = b - ARROW_TIP_GAP
+                // The last drawable row, which is **adjacent to the frame's top border** and therefore reads as
+                // touching it. It used to stop `ARROW_TIP_GAP` short — "points at, without touching" — and the G1c′
+                // round rejected the result as a defect rather than as a distinction: *"arrow does not reach header
+                // top per 2px."* An arrowhead floating short of the line it points at reads as a misdrawn arrow, not
+                // as a reference; the reference is carried by the box and the frame both staying closed.
+                val tip = b
                 val shaftEnd = maxOf(tip - ARROW_HEAD_H, arc)
                 p.moveTo(x2.toFloat(), 0f)
                 p.lineTo(maxOf(turn - arc, x2.toFloat()), 0f)
                 p.quadTo(turn, 0f, turn, arc)
                 p.lineTo(turn, shaftEnd)
                 // An open chevron rather than a filled triangle, so the head is the same stroke as the rest of
-                // the outline and does not read as a second object stuck on the end.
+                // the outline and does not read as a second object stuck on the end. Its tip lands on the frame's
+                // border; the chevron's own arms are what keep it reading as a head and not as a corner.
                 p.moveTo(turn - ARROW_HEAD_W / 2f, tip - ARROW_HEAD_H)
                 p.lineTo(turn, tip)
                 p.lineTo(turn + ARROW_HEAD_W / 2f, tip - ARROW_HEAD_H)
@@ -186,6 +235,41 @@ internal object LeaderArt {
         val lo = minOf(x2 + ARC + 2f, right)
         val hi = maxOf(lo, right - ARROW_HEAD_W / 2f - 1f)
         return (x2 + (right - x2) * fraction).coerceIn(lo, hi)
+    }
+
+    /**
+     * **The frame's outline — one path, and the one place `drawTop` becomes square-vs-rounded top corners.**
+     *
+     * Used by the expanded child's border ([CodeNodeView.NodeFrameBorder]) *and* by the collapsed stub, which is the
+     * G1c′ round's item 16: *"collapsed view in corners and braces mode — collapsed subeditor should also have no
+     * top border."* The stub drew a plain `drawRoundRect` and so kept a top edge the leader already owned, which
+     * left a doubled line across the collapsed row in the two joining modes. Two drawings of one shape is how that
+     * happens; there is one now.
+     *
+     * `x`/`y` are the top-left and `w`/`h` the full size, so `right`/`bottom` are the last drawable column and row —
+     * a stroke at `x + w` is clipped exactly as one at `y + h` is (measured in `spikes/tree1a5/`).
+     */
+    fun framePath(x: Int, y: Int, w: Int, h: Int, drawTop: Boolean): GeneralPath {
+        val arc = minOf(ARC.toFloat(), w / 2f, h / 2f).coerceAtLeast(0f)
+        val left = x.toFloat()
+        val right = (x + w - 1).toFloat()
+        val top = y.toFloat()
+        val bottom = (y + h - 1).toFloat()
+        // The walls start at `top` when the leader owns the top edge and at `top + arc` when this path draws it.
+        val wallTop = if (drawTop) top + arc else top
+        val p = GeneralPath()
+        p.moveTo(left, wallTop)
+        p.lineTo(left, bottom - arc)
+        p.quadTo(left, bottom, left + arc, bottom)
+        p.lineTo(right - arc, bottom)
+        p.quadTo(right, bottom, right, bottom - arc)
+        p.lineTo(right, wallTop)
+        if (drawTop) {
+            p.quadTo(right, top, right - arc, top)
+            p.lineTo(left + arc, top)
+            p.quadTo(left, top, left, wallTop)
+        }
+        return p
     }
 
     val SOLID: BasicStroke = BasicStroke(1.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
@@ -241,8 +325,11 @@ internal object LeaderArt {
             // whatever lies between them, which is a confident lie about where the call is.
             if (a.y != b.y || b.x <= a.x) return
 
-            val x = a.x - TOKEN_PAD
-            val w = (b.x - a.x) + 2 * TOKEN_PAD
+            // [boxEdges], not the padding inline: the leader starts from the same call, which is what stops the two
+            // from disagreeing by exactly the padding — the defect the G1c′ round measured at 2 px.
+            val (boxLeft, boxRight) = boxEdges(a.x, b.x)
+            val x = boxLeft
+            val w = boxRight - boxLeft
             // `lineHeight`, not `lineHeight - 1`: the bottom-edge row IS the strip's row 0, which is what makes
             // the walls adjacent to the leader's origin and ARROW's extension collinear
             // ([BOX_BOTTOM_IS_STRIP_ROW_0]). That row belongs to the nested frame rather than to a glyph row, so
@@ -310,9 +397,6 @@ internal object LeaderArt {
     private const val COLLAPSED_MIX = 0.55
     private const val ARROW_HEAD_H = 6f
     private const val ARROW_HEAD_W = 7f
-
-    /** How far short of the frame's top border the arrowhead stops. "Points at, without touching." */
-    private const val ARROW_TIP_GAP = 3f
 
     private val BOX = BasicStroke(1.2f)
 }
