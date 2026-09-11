@@ -839,8 +839,14 @@ def handle(host, conn):
                 frame = pcm[off:off + frame_bytes]
                 if not frame:
                     continue
+                # "stext" is the sentence as actually spoken. It repeats on every frame of the
+                # sentence (~0.5% of the frame's own base64 payload) so that losing a frame cannot lose
+                # the text. The receiver needs it because "sentence 3" is not a shared idea: the author
+                # counts prose, split_sentences() counts ASCII enders and a 320-char cap, and the webview
+                # tokenises the raw ttsText. Matching a phrase against what was spoken needs no agreement.
                 send_json(conn, {
                     "type": "chunk", "sampleRate": int(sr), "si": si, "sw": words,
+                    "stext": sentence,
                     "audio": base64.b64encode(frame).decode("ascii"),
                 })
     except (BrokenPipeError, ConnectionError, OSError):

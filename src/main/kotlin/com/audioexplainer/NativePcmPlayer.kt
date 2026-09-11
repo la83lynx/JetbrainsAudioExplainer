@@ -27,7 +27,13 @@ class NativePcmPlayer(private val onFinished: (() -> Unit)? = null) : TtsService
     @Volatile private var stopped = false
     private val finished = AtomicBoolean(false)
 
-    override fun onChunk(base64: String, sampleRate: Int, sentenceIndex: Int, sentenceWords: Int) {
+    override fun onChunk(
+        base64: String,
+        sampleRate: Int,
+        sentenceIndex: Int,
+        sentenceWords: Int,
+        sentenceText: String,
+    ) {
         if (stopped) return
         val src = Base64.getDecoder().decode(base64)
         val n = src.size / 4

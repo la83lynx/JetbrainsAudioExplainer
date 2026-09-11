@@ -18,7 +18,7 @@ import javax.swing.SwingConstants
  * Swing fallback sidebar (Phase 4) for environments where JCEF is unavailable
  * (`JBCefApp.isSupported()` is false, or the browser fails to initialise). No webview / audio — just
  * the walkthrough title, status, current segment, and the core transport controls, driving the same
- * [Walkthrough] state machine (which in turn drives the editor spotlight via [EditorHighlighter]).
+ * [Walkthrough] state machine (which in turn drives the tree-of-code surface via [TreePlanController]).
  */
 class AudioExplainerSwingSidebar(
     private val project: Project,
@@ -45,9 +45,9 @@ class AudioExplainerSwingSidebar(
 
     init {
         val controls = JPanel(FlowLayout(FlowLayout.CENTER, 6, 6)).apply {
-            add(JButton("◀ Prev").also { it.addActionListener { walkthrough.prev() } })
+            add(JButton("◀ Prev").also { it.addActionListener { walkthrough.prevStep() } })
             add(playPauseBtn.also { it.addActionListener { walkthrough.togglePlayPause() } })
-            add(JButton("Next ▶").also { it.addActionListener { walkthrough.next() } })
+            add(JButton("Next ▶").also { it.addActionListener { walkthrough.nextStep() } })
             add(JButton("Stop").also { it.addActionListener { walkthrough.stop() } })
         }
 
@@ -90,16 +90,16 @@ class AudioExplainerSwingSidebar(
     }
 
     override fun onPlan(state: WalkthroughSnapshot) = render(state)
-    override fun onSegment(segment: Segment) = render(walkthrough.getState())
+    override fun onStep(index: Int) = render(walkthrough.getState())
     override fun onStatus(status: String) = render(walkthrough.getState())
 
     private fun render(state: WalkthroughSnapshot) {
         ApplicationManager.getApplication().invokeLater {
             titleLabel.text = state.title.ifEmpty { "No walkthrough loaded" }
             statusLabel.text = "Status: ${state.status}"
-            val seg = state.segments.getOrNull(state.currentIndex)
-            segmentLabel.text = if (seg != null) {
-                "Segment ${state.currentIndex + 1}/${state.segments.size}: ${seg.title}"
+            val now = walkthrough.currentStepView()
+            segmentLabel.text = if (now != null) {
+                "Step ${state.stepIndex + 1}/${state.stepCount}: ${now.title}"
             } else {
                 ""
             }

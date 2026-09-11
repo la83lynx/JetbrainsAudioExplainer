@@ -5,10 +5,10 @@ import com.audioexplainer.SpotlightRenderer
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.application.WriteIntentReadAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.CustomFoldRegion
 import com.intellij.openapi.editor.CustomFoldRegionRenderer
-import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.EditorKind
@@ -22,7 +22,6 @@ import com.intellij.openapi.editor.event.VisibleAreaEvent
 import com.intellij.openapi.editor.event.VisibleAreaListener
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.ex.FoldingListener
-import com.intellij.openapi.editor.ex.FoldingModelEx
 import com.intellij.openapi.editor.highlighter.EditorHighlighterFactory
 import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.HighlighterTargetArea
@@ -37,7 +36,6 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import java.awt.BasicStroke
-import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
 import java.awt.Dimension
@@ -63,7 +61,7 @@ import kotlin.math.roundToInt
 /**
  * One node of a tree-of-code view: **a real document, one viewer editor over it, chrome around it.**
  *
- * Phase 1a′ of `TreeOfCode.md`. This is the single component the tree container, the schema renderer and the
+ * Phase 1a′ of `TreeOfCode.rules.md`. This is the single component the tree container, the schema renderer and the
  * narration attention logic all compose, so everything that is *per node* lives here and nothing that is
  * *per tree* does — no connectors, no overlay, no layout by depth ([CodeNodeSpec.depth] is carried for the
  * container's benefit and never read here).
@@ -130,7 +128,7 @@ class CodeNodeView(
     /**
      * "This node wants to be visible in the container's viewport."
      *
-     * [SpotlightRenderer.spotlightStep] ends in a `revealCenter`, which scrolls **this editor**. Inside a
+     * [SpotlightRenderer.paintStep] ends in a `revealCenter`, which scrolls **this editor**. Inside a
      * capped node that is exactly right; inside a grow-to-content node there is nothing to scroll, and in
      * neither case does anything bring the *node* into the tree's own scroll pane. The renderer cannot know
      * — it has an editor and no container — so the node asks, and the owner obliges. [reveal] fires it.
@@ -146,8 +144,9 @@ class CodeNodeView(
      * and only the owner knows which step is showing. Measured in the 1a′ bench: flipping dark→light left
      * dark tints and a white callout font on screen until a repaint was forced by hand.
      *
-     * The in-place walkthrough has the same hole and closes it the same way — `EditorHighlighter` subscribes
-     * to the scheme topic and calls its own `refresh()`.
+     * That rule is `TreeOfCode.rules.md` constraint 11 — a colour-scheme change must re-*render*, not merely
+     * re-measure. Settings ▸ Apply closes the same hole through the same door: `TreePlanController.refresh()`
+     * re-paints the current step, because a per-render palette leaves nothing to invalidate.
      *
      * Fires **once per node**, because each node has its own subscription. An owner of N nodes that re-renders
      * the whole tree in response will do it N times for one theme switch (measured: three identical renders in
@@ -177,21 +176,6 @@ class CodeNodeView(
 
     private var headerStrip: JComponent? = null
 
-    /**
-     * A small control the owner puts in this node's **header band** — 1a⁗'s single collapse affordance.
-     *
-     * The node owns the position because the node owns the chrome, and the two are the same question: a titled
-     * border's caption row, a header strip's trailing edge and a `PLAIN`/`NONE` node's top corner are three
-     * different y's for one control. What it *does* is the owner's business ([CodeNestView] collapses a nesting
-     * with it); where it goes is not.
-     *
-     * Measured in `spikes/tree1a4/`: such a control is hit-testable three components deep inside an embedded
-     * component **only** if it is z-lifted above the editor's own component — behind it, it is drawn and
-     * unreachable, which is verdict 4's failure mode ("reads as broken when it is merely invisible").
-     */
-    private var cornerControl: JComponent? = null
-
-
     /** Last height [resync] published, so an event that changes nothing costs no layout pass. */
     private var lastPublishedHeight = -1
 
@@ -220,14 +204,22 @@ class CodeNodeView(
     private val listeners = Disposer.newDisposable("CodeNodeView")
 
     init {
-        // A read action, because `getDocument` reads the file model and this runs on the EDT: the platform's
-        // `softAssertReadAccess` logs a SEVERE without failing, so the omission is invisible until the log is
-        // read. Measured here, from the 1a′ bench.
-        val document = ReadAction.compute<Document?, RuntimeException> {
-            FileDocumentManager.getInstance().getDocument(spec.file)
-        } ?: error("no document for ${spec.file.path} — a node view needs a real file (constraint 3)")
-
-        editor = EditorFactory.getInstance().createViewer(document, project, EditorKind.PREVIEW) as EditorEx
+        // A read action, because this runs on the EDT and *both* halves touch the file model: `getDocument`
+        // reads it directly, and `createViewer` fans out to the platform's own `editorCreated` listeners, one
+        // of which (`LineStatusTrackerManager`) calls `getDocument` itself. Both are `softAssertReadAccess` —
+        // a SEVERE in the log and nothing on screen, so the omission is invisible until the log is read.
+        //
+        // Write-intent rather than plain read, because that is what an action-driven path holds implicitly:
+        // measured in the G1c′ round's log, the bench's initial build (from `actionPerformed`) was silent and
+        // only its *buttons* asserted — a plain Swing listener inherits nothing. Constructing the node under
+        // the same lock an action would have held is what makes the caller's context stop mattering.
+        //
+        // Measured twice: `getDocument` from the 1a′ bench, `createViewer` from the G1c′ round.
+        editor = WriteIntentReadAction.compute<EditorEx> {
+            val document = FileDocumentManager.getInstance().getDocument(spec.file)
+                ?: error("no document for ${spec.file.path} — a node view needs a real file (constraint 3)")
+            EditorFactory.getInstance().createViewer(document, project, EditorKind.PREVIEW) as EditorEx
+        }
         editor.settings.apply {
             // The document IS the file, so the gutter shows real line numbers with no converter — one of the
             // things the flip to Arch B bought outright, and the reason no LineNumberConverter appears here.
@@ -252,7 +244,10 @@ class CodeNodeView(
 
         // Constraint 5: not a re-assert loop — a resync. The daemon's folds are additive, but they move where
         // our kept lines draw, so the node's height stops being what it last published.
-        (editor.foldingModel as? FoldingModelEx)?.addListener(
+        // No `as? FoldingModelEx` here: [editor] is an `EditorEx`, whose `foldingModel` *is* one. The cast was a
+        // leftover from when this held a plain `Editor`, and a null-safe call that can never be null reads as a
+        // subscription that might silently not happen.
+        editor.foldingModel.addListener(
             object : FoldingListener {
                 override fun onFoldProcessingEnd() = resync(TRIGGER_FOLD)
             },
@@ -311,21 +306,17 @@ class CodeNodeView(
             }
         })
 
-        // No layout manager, where 1a′/1a″ used a BorderLayout, for one reason: [cornerControl] has to sit *inside
-        // the chrome's own header band*, and BorderLayout has no region for "floating in my top inset" — a second
-        // component added without a constraint silently takes the editor's CENTER slot and leaves it 0×0. Three
-        // children, positioned by hand in [doLayout].
+        // No layout manager, where 1a′/1a″ used a BorderLayout. It was added for a corner control that had to float
+        // *inside* the chrome's own header band — a region BorderLayout does not have — and that control is deleted
+        // (the chevron beside the invoking box won verdict 4). The manual layout stays because the two survivors are
+        // still stacked inside the chrome's insets, which is what a header band *is*: a `NORTH`/`CENTER` pair would
+        // have to re-derive [headerBandHeight] from the strip's placement instead of being told it.
         add(editor.component)
         rebuildChrome()
         applyElision()
     }
 
-    /**
-     * Header strip (if any), then the editor, then the corner control — all inside the chrome's insets.
-     *
-     * The control is placed last and z-lifted, because the probe measured that a control merely *positioned* over
-     * the editor component is drawn and unclickable.
-     */
+    /** Header strip (if any), then the editor — both inside the chrome's insets. */
     override fun doLayout() {
         val ins = insets
         var top = ins.top
@@ -338,36 +329,6 @@ class CodeNodeView(
         editor.component.setBounds(
             ins.left, top, innerWidth, (height - top - ins.bottom).coerceAtLeast(0),
         )
-        cornerControl?.let { c ->
-            val size = c.preferredSize
-            val band = headerBandHeight()
-            // Trailing edge: every chrome puts its caption text at the leading edge, so the control never
-            // collides with the path it sits beside. Centred in the band when there is one, and just inside the
-            // top corner when there is not, which is the `PLAIN` case.
-            val x = (width - ins.right - size.width - CONTROL_GAP).coerceAtLeast(ins.left)
-            val y = if (band > 0) ((band - size.height) / 2).coerceAtLeast(0) else ins.top + CONTROL_GAP
-            c.setBounds(x, y, size.width, size.height)
-        }
-    }
-
-    /**
-     * Put a control in this node's header band, or remove the one that is there.
-     *
-     * Idempotent, and it re-lifts on every call: `setComponentZOrder` is what makes the control reachable, and a
-     * `rebuildChrome` that re-adds the header strip changes the child order under it.
-     */
-    /** The control currently in the header band, if any — so a hit-test check can aim at the real component. */
-    fun cornerControlComponent(): JComponent? = cornerControl
-
-    fun setCornerControl(control: JComponent?) {
-        cornerControl?.let { if (it !== control) remove(it) }
-        cornerControl = control
-        if (control != null) {
-            if (control.parent !== this) add(control)
-            setComponentZOrder(control, 0)
-        }
-        revalidate()
-        repaint()
     }
 
     /**
@@ -393,7 +354,7 @@ class CodeNodeView(
      * line **at** its bounds edge, so the drawn-line offset is 0 by construction rather than by agreement. The
      * whole apparatus that existed to make a non-zero offset queryable — `NodeChrome.TITLED_BORDER`, its
      * `CaptionBorder`, the 7-vs-9 px font-dependent measurement, the rounded-corner defect its fix introduced —
-     * went with the chrome the reader scrapped. See `TreeOfCode.completed.md`.
+     * went with the chrome the reader scrapped.
      */
     var topEdgeDrawn: Boolean = true
         private set
@@ -402,6 +363,25 @@ class CodeNodeView(
     fun setTopEdgeDrawn(drawn: Boolean) {
         if (topEdgeDrawn == drawn) return
         topEdgeDrawn = drawn
+        rebuildChrome()
+    }
+
+    /**
+     * **Whether this node rounds its top corners while drawing no top edge** — [LeaderArt.roundsFrameTop], and a
+     * second question rather than a second reading of [topEdgeDrawn].
+     *
+     * The two were one boolean until K3, on the reasoning that a frame with no top edge has no top corner. That
+     * held only while the brace kept its own turn inside the leader strip, and keeping it there is what left a
+     * radius of transparent band between the drawn line and this node's header — the gap a relation link crossing
+     * the nesting made visible. See [LeaderArt.roundsFrameTop] for the whole of it.
+     */
+    var topCornersRounded: Boolean = false
+        private set
+
+    /** Told, not inferred, for the same reason [setTopEdgeDrawn] is. */
+    fun setTopCornersRounded(rounded: Boolean) {
+        if (topCornersRounded == rounded) return
+        topCornersRounded = rounded
         rebuildChrome()
     }
 
@@ -422,9 +402,19 @@ class CodeNodeView(
     fun applyElision() {
         val doc = editor.document
         val lastLine = (doc.lineCount - 1).coerceAtLeast(0)
+
+        elisionPasses++
+        val model = editor.foldingModel
+        // The numerator the last two rounds guessed at, taken before the batch rather than predicted after it:
+        // what `clearFoldRegions()` is about to destroy, split into ours and the daemon's. See
+        // [foldRegionsDestroyed] — an installed region and a destroyed one are different populations, and the
+        // folding warning is attributable to at most one of them.
+        val doomed = model.allFoldRegions
+        val doomedOurs = doomed.count { r -> installedFolds.any { it === r } }
+        foldRegionsDestroyed += doomed.size
+        foldRegionsDestroyedOurs += doomedOurs
         installedFolds.clear()
 
-        val model = editor.foldingModel
         model.runBatchFoldingOperation {
             model.clearFoldRegions()
             for (gap in gapsOutsideKeep(lastLine)) {
@@ -441,14 +431,19 @@ class CodeNodeView(
                         }
                         region.isExpanded = false
                         installedFolds += region
+                        foldRegionsInstalled++
                     }
 
                     NodeElision.SEALED -> {
-                        val fm = model as? FoldingModelEx ?: continue
                         try {
+                            // `model` is already a `FoldingModelEx` (see [editor]); the `as? … ?: continue` this
+                            // replaces was a silent skip that could never fire.
                             val region: FoldRegion? =
-                                fm.addCustomLinesFolding(gap.first, gap.last, ElidedLinesRenderer(elided))
-                            if (region != null) installedFolds += region
+                                model.addCustomLinesFolding(gap.first, gap.last, ElidedLinesRenderer(elided))
+                            if (region != null) {
+                                installedFolds += region
+                                foldRegionsInstalled++
+                            }
                         } catch (t: Throwable) {
                             // Custom line foldings are rejected for ranges the platform considers unfoldable
                             // (an empty span, an overlap with a region added moments ago). Dropping one
@@ -586,10 +581,65 @@ class CodeNodeView(
      */
     fun publishedHeight(): Int {
         val content = contentHeight()
+        // **The drag wins over every rule**, including `grow` — it is the one number a reader stated outright, and a
+        // rule that overrode it would make the splitter feel broken rather than opinionated. Still `min`'d with the
+        // content, because a body dragged past the end of the folded document is blank rows, which reads as a broken
+        // node rather than as a generous one (the same reason `content` is in the min below).
+        heightOverride?.let { return minOf(it + calloutAllowance(), content) }
         if (style.grow) return content
         val target = excerptTargetHeight()
         val cap = effectiveCap()
         return if (target == null) minOf(content, cap) else minOf(target, content, cap)
+    }
+
+    /**
+     * **The reader's own height for this node's body**, set by dragging its bottom edge, or null while the rules size it.
+     *
+     * The G1c″ round asked for it by name — *"a capability to change subeditor height by dragging its bottom border
+     * (like a splitter)"* — and it is the first thing in this class that a *person* decides rather than a measurement.
+     * That is why it is a nullable override and not a default: null still means "sized by §1a⁵ 4's three numbers", so
+     * a node the reader never touched keeps landing on its excerpt, and one they did keeps what they set through every
+     * restyle, fold and step.
+     *
+     * It does **not** survive a rebuild, and deliberately: [CodeNestView.setTree] builds new node views, and carrying a
+     * dragged height across a case change would apply one file's chosen height to another file's excerpt.
+     */
+    var heightOverride: Int? = null
+        private set
+
+    /**
+     * Set (or clear, with null) the dragged height. Clamped to [minBodyHeight] — a drag past the top would otherwise
+     * leave a node with no rows at all and no edge left to grab.
+     */
+    fun setHeightOverride(px: Int?) {
+        val next = px?.coerceAtLeast(minBodyHeight())
+        if (heightOverride == next) return
+        heightOverride = next
+        resync(TRIGGER_DRAG)
+    }
+
+    /** The floor a drag clamps to: [MIN_DRAG_ROWS] rows of the current font. */
+    fun minBodyHeight(): Int =
+        if (disposed || editor.isDisposed) 1 else (editor.lineHeight * MIN_DRAG_ROWS).coerceAtLeast(1)
+
+    /**
+     * **Room for the step's docked callout, margins included** — the G1c″ round's reversal of §1a⁵ 4.
+     *
+     * §1a⁵ 4 decided the opposite on purpose, and the KDoc on [embeddedHeight] still records the reasoning: counting
+     * the callout makes a node change height on every step advance, which is constraint 9's coupling amplified. The
+     * round chose the coupling anyway, having seen the alternative on real code — *"when during a step callout lands in
+     * a subeditor (or leaves it) — its height should be adjusted by the height of the callout (with margins)"*. What
+     * settled it is that the reveal-only fix ([SpotlightRenderer.revealCallout]) buys the box its visibility by
+     * spending the *code's*: in a viewport sized to a 9-line excerpt, a three-line callout can only be shown by
+     * scrolling three lines of the excerpt out of it.
+     *
+     * So the node grows by the box instead, and the height-changes-per-step cost is real and accepted: the inlay
+     * listener installed in `init` already publishes it, and [resyncCounts]'s `inlay` counter is where it shows up.
+     */
+    fun calloutAllowance(): Int {
+        if (disposed || editor.isDisposed) return 0
+        val h = spotlight.calloutHeight()
+        return if (h <= 0) 0 else h + 2 * CALLOUT_MARGIN
     }
 
     /**
@@ -600,10 +650,14 @@ class CodeNodeView(
      * `growHosts` knob existed to escape. Adding what is embedded makes the cap mean the thing it was measured as, so
      * a host is capped exactly as hard as a leaf and its children are never the thing clipped.
      *
-     * That is what lets [CodeNestView]'s `growHosts` default to **off** and hosts land on their excerpts like any
-     * other nested node — the G1c′ round's item 3.
+     * That is what leaves [CodeNestView]'s `growHosts` reaching **only the root** (`topLevelHost && style.growHosts`),
+     * so a nested host lands on its excerpt like any other nested node whatever the knob says — the G1c′ round's
+     * item 3.
+     *
+     * **[calloutAllowance] is in it for the same reason** (G1c″): a docked callout is not code either, and a cap that
+     * counted it would give the box its room by taking rows away from the excerpt the node was sized to show.
      */
-    private fun effectiveCap(): Int = style.maxHeight + embeddedHeight
+    private fun effectiveCap(): Int = style.maxHeight + embeddedHeight + calloutAllowance()
 
     /**
      * Pixels of nested child frame embedded in this node, and how much of it falls **inside this node's excerpt**.
@@ -686,6 +740,50 @@ class CodeNodeView(
     }
 
     /**
+     * **A page of scrollable room past this node's last line, so the landing's target is reachable at all.**
+     *
+     * G1c⁶, and it is [NestStyle.bottomSlack]'s argument arriving on a third surface. `scrollVertically` clamps to
+     * `content − viewport`, so a member `y` px down the document can only reach the top of the viewport when there are
+     * `y` px of content *below* it. Collapsing a nesting **inside** this node removes the entire height of the frame it
+     * was holding, and once that leaves less than `y` px below the member the platform clamps — line 1, with the
+     * landing correctly re-armed, correctly issued, and honestly unreachable. G1c⁵'s re-arm ([invalidateLandingAsHost])
+     * was necessary and is not sufficient: it restored the *asking*, and nothing had ever supplied the *room*.
+     *
+     * The reader read the cause off the screen: *"This is probably due to limited visible line count after
+     * SubInvoker.Apply — I expanded lines 54-170 block in MidInvoker, and tried to reproduce this behaviour again — and
+     * it didn't reproduce."* Unfolding real rows below the member is the same fix by hand.
+     *
+     * **The platform's page is the exact amount and not a generous one**, which is why this is a setting and not a
+     * number: the extent becomes `(doc + viewport) − viewport`, the document's own height, so **every** line in the
+     * document can reach the top and none can reach past it. A pixel count would have to be re-derived on every
+     * collapse against a height that keeps moving — constraint 20's own warning, and how [NestStyle.bottomSlack]'s
+     * 240 px came to need a control.
+     *
+     * It is emphatically **not** [com.intellij.openapi.editor.EditorSettings.setAdditionalLinesCount], which is 0 here
+     * for a reason stated where it is set: a phantom *line* is counted by `offsetToXY` and therefore by
+     * [contentHeight], so it would make every node taller. A page at the bottom is added to the editor component's
+     * preferred height and never to `offsetToXY`, so it moves the scroll extent and leaves [publishedHeight] alone —
+     * the whole reason a one-setting fix is available here at all.
+     */
+    fun setLandingSlack(on: Boolean) {
+        if (disposed || editor.isDisposed) return
+        editor.settings.isAdditionalPageAtBottom = on
+    }
+
+    /**
+     * How far this node's viewport can actually scroll — `content − viewport`, the number `scrollVertically` clamps to.
+     *
+     * In [landingReport] because its absence is what let a report say `state=SATISFIED offset=66px` about a node the
+     * reader was watching sit on line 1: the report measures with every nesting expanded, and the clamp only exists in
+     * the collapsed state. `asked=66px extent=40px` says *unreachable by arithmetic*, which no pair of offsets can.
+     */
+    fun scrollExtent(): Int {
+        if (disposed || editor.isDisposed) return -1
+        val viewport = editor.scrollingModel.visibleArea.height
+        return (editor.contentComponent.preferredSize.height - viewport).coerceAtLeast(0)
+    }
+
+    /**
      * The height of the excerpt of interest, or null when this node does not land on one.
      *
      * In lines × `lineHeight` rather than in pixels, because the same excerpt is a different number of pixels at a
@@ -702,7 +800,13 @@ class CodeNodeView(
         // subhosts should be sized to their excerpt size + full sizes of subnodes". Without it a host that lands on
         // its member gets a viewport the size of the member's text and the expansion inside it fills the whole thing,
         // so the member is present and unreadable.
-        return ownRows + embeddedInExcerptHeight
+        //
+        // Plus the step's callout, which is G1c″'s reversal of the same shape one level in — see [calloutAllowance].
+        //
+        // Plus the blank rows the step's link fan bought itself ([SpotlightRenderer.reserveLinkSpace]). Same
+        // shape again, one round later: a row that grew by 13 px to hold five rails is 13 px of the excerpt
+        // this node was sized to show, and not counting it lands the node 13 px short of its own last line.
+        return ownRows + embeddedInExcerptHeight + calloutAllowance() + spotlight.linkSpacerHeight()
     }
 
     /**
@@ -719,7 +823,7 @@ class CodeNodeView(
     fun landOnExcerpt() {
         if (!landsOnExcerpt || disposed || editor.isDisposed) return
         val focus = spec.focusRange() ?: return
-        val y = ReadAction.compute<Int?, RuntimeException> {
+        val y = ReadAction.computeBlocking<Int?, RuntimeException> {
             val doc = editor.document
             val lastLine = (doc.lineCount - 1).coerceAtLeast(0)
             val line0 = (focus.first - 1).coerceIn(0, lastLine)
@@ -733,11 +837,155 @@ class CodeNodeView(
             sm.enableAnimation()
         }
         lastLandingRequest = y
+        landingAttempts++
+        // **Latched on success, and this is constraint 20's whole point.** The old shape was a bounded number of
+        // deferred passes that re-armed while `offset != request` — a bound on *passes*, when what kept moving was the
+        // *target*: the embedded heights refresh, the callout's allowance arrives with a step, a drag rewrites the
+        // extent. So the retry could agree with a stale target and call itself settled, which is what the G1c‴ round
+        // read failing on the three-deep chain. Now the goal outlives the passes: [resync] re-arms it on every event
+        // that moves the extent, and only reaching it stops that.
+        if (scrollOffset() == y) landingSatisfied = true
     }
 
     /** The y [landOnExcerpt] last asked for, so a check can say "asked for 380px, got 0" rather than only "wrong". */
     var lastLandingRequest: Int = -1
         private set
+
+    /**
+     * True once the landing has actually been achieved, or has been given up on — see [landOnExcerpt].
+     *
+     * Public because it is the difference between two things a report must not conflate: a node sitting on its class
+     * header because the landing *failed*, and one sitting somewhere else because a reveal moved it **on purpose**.
+     */
+    var landingSatisfied: Boolean = false
+        private set
+
+    private var landingAttempts = 0
+
+    /**
+     * True when a **reveal** is what retired the landing, rather than the landing succeeding or giving up.
+     *
+     * Kept separately from [landingSatisfied] because a check must not conflate them: a node sitting away from its
+     * excerpt's first line is a *defect* if the landing claims to have got there, and *correct* if a step's reveal moved
+     * it since. Conflating the two is what made the landing check report three failures at step 5 and none at step 1 on
+     * one fixture — the same reveal, judged as a bug.
+     */
+    var revealTookOverLanding: Boolean = false
+        private set
+
+    /**
+     * **Stop re-arming the landing**, because something with a better claim on this viewport has moved it.
+     *
+     * A step's reveal is that something: it scrolls the node to what the reader is being told about, and a landing
+     * re-asserted afterwards would drag them back to the top of the excerpt mid-narration. §1a⁵ 4's landing is where a
+     * node *opens*, not where it stays — a distinction that only became expressible when the landing stopped being a
+     * one-shot.
+     */
+    fun releaseLanding() {
+        landingSatisfied = true
+        revealTookOverLanding = true
+    }
+
+    /**
+     * Re-issue the landing if it is still owed — called by [resync] for every extent-changing trigger, and by
+     * [CodeNestView]'s landing passes so that both go through **one** definition of "still owed".
+     *
+     * The attempt cap is the one guard that is not about correctness: a target inside a document shorter than the
+     * viewport is unreachable at any offset, and without a cap that node would re-scroll on every fold the daemon
+     * pushes for the rest of the session.
+     */
+    internal fun relandIfOwed() {
+        if (landingSatisfied || !landsOnExcerpt || heightOverride != null) return
+        if (landingAttempts >= MAX_LANDING_ATTEMPTS) {
+            landingSatisfied = true
+            return
+        }
+        landOnExcerpt()
+    }
+
+    /**
+     * **The landing is owed again, because the extent it was measured against was destroyed and rebuilt.**
+     *
+     * Collapsing a nesting hides the child and takes its frame to 0 px, which clamps this editor's scroll offset to 0;
+     * expanding gives the extent back but not the offset. The latch of [landOnExcerpt] is what then made this permanent:
+     * a node that had already landed was never re-armed, so a collapse-and-re-expand left the reader looking at line 1
+     * of the file instead of the member — read off the G1c⁗ round's `chain` report as the one combination the re-arming
+     * could not explain, `satisfied=true byReveal=false asked=66px offset=0px`.
+     *
+     * So constraint 20 has a second edition: a scroll must be re-armed by the events that move its extent, and a
+     * collapse **destroys** the extent rather than moving it. Called on expand only — invalidating on the way down would
+     * leave the landing owed while the viewport is 0 px, which burns the attempt cap against an unreachable target and
+     * retires the landing for good, which is the very bug this fixes.
+     */
+    internal fun invalidateLanding() {
+        if (!landsOnExcerpt) return
+        landingSatisfied = false
+        revealTookOverLanding = false
+        // Reset too, not just cleared: the cap counts attempts against *one* extent, and this is a new one. The
+        // re-scrolling stays bounded because only a reader's collapse gesture gets here.
+        landingAttempts = 0
+    }
+
+    /**
+     * **The host's edition of [invalidateLanding]** — a nesting *inside* this node collapsed or expanded, so this
+     * node's own scrollable extent was destroyed and rebuilt while its document did not change at all.
+     *
+     * G1c⁵ is why this exists, and it is the same constraint-20 argument one level up from where G1c⁗ applied it. That
+     * round fixed the **child**: a collapse takes its viewport to 0 and an expand gives the extent back but not the
+     * offset. The host has the mirror problem and it is worse, because the host's viewport never goes away — only its
+     * *content* shrinks, by the whole height of the frame it was holding. When that leaves the content shorter than the
+     * viewport, `content − viewport` is zero and the platform clamps the host's offset to 0: line 1 of the file. The
+     * host had latched `landingSatisfied` long before, so nothing re-issued it, and the reader got
+     * *"collapsing the SubInvoker node resets the scroll of MidInvoker node moving to line 1, rather than start of
+     * method, and putting the line of SubInvoker out of view."* In the same round's `chain` report:
+     * `satisfied=true byReveal=false asked=66px offset=0px` — the exact signature [invalidateLanding]'s KDoc names as
+     * the one combination the re-arming cannot explain, still standing because it was only ever cleared for the child.
+     *
+     * **A reveal still outranks it.** If a step's reveal owns this viewport, re-landing would drag the reader from what
+     * they are being told about back to the top of the excerpt because something folded elsewhere in the node — so this
+     * defers, where [invalidateLanding] does not. That asymmetry is the point of having two entry points rather than a
+     * boolean parameter: the child's extent was *destroyed*, and a reveal into a destroyed extent has nothing left to
+     * own, while the host's extent merely moved.
+     *
+     * A reader's own scroll is not distinguished from a landing here, because nothing records one — the same limit the
+     * expand path has always had, and it is only reachable through a collapse gesture the reader made themselves.
+     */
+    internal fun invalidateLandingAsHost() {
+        if (revealTookOverLanding) return
+        invalidateLanding()
+    }
+
+    /**
+     * **Why the landing is not where it wanted to be** — one derivation, because the check kept inferring it wrongly.
+     *
+     * G1c⁵'s reports read *"3 nested node(s) never reached the offset they asked for and have given up retrying"* on
+     * nodes sitting exactly on their member, with `attempts=0`. Both halves of that sentence were wrong and the numbers
+     * were right: `attempts=0` after an [invalidateLanding] means the landing has not been *issued* yet, not that it
+     * was issued eight times and abandoned — and the check had no way to tell those apart because the attempt count
+     * was private and the cap is private still. So the distinction is made here, where the cap lives, and the check is
+     * told. Which is the same rule [LeaderArt]'s `closesTokenBox` follows for the outline, one subsystem over.
+     */
+    fun landingState(): LandingState = when {
+        !landsOnExcerpt -> LandingState.EXEMPT
+        revealTookOverLanding -> LandingState.RELEASED_BY_REVEAL
+        landingSatisfied -> LandingState.SATISFIED
+        landingAttempts >= MAX_LANDING_ATTEMPTS -> LandingState.UNREACHABLE
+        landingAttempts == 0 -> LandingState.NOT_ISSUED
+        else -> LandingState.IN_FLIGHT
+    }
+
+    /**
+     * `satisfied=true byReveal=false attempts=3 asked=66px offset=66px extent=812px` — the whole landing, for a report
+     * that must say.
+     *
+     * `extent` joined it in G1c⁶ because the round before it produced a passing landing section about a node the reader
+     * was watching fail: every number was right and the one that would have shown the clamp was missing. See
+     * [scrollExtent].
+     */
+    fun landingReport(): String =
+        "satisfied=$landingSatisfied byReveal=$revealTookOverLanding attempts=$landingAttempts " +
+            "asked=${lastLandingRequest}px offset=${scrollOffset()}px extent=${scrollExtent()}px " +
+            "state=${landingState()}"
 
     /** Where the viewport actually is. Paired with [lastLandingRequest]: a clamp to 0 is the failure mode. */
     fun scrollOffset(): Int =
@@ -756,11 +1004,11 @@ class CodeNodeView(
      */
     fun firstVisibleKeptLine(): Int? {
         if (disposed || editor.isDisposed) return null
-        return ReadAction.compute<Int?, RuntimeException> {
+        return ReadAction.computeBlocking<Int?, RuntimeException> {
             val doc = editor.document
             for (line in 0 until doc.lineCount) {
                 val offset = doc.getLineStartOffset(line)
-                if (editor.foldingModel.getCollapsedRegionAtOffset(offset) == null) return@compute line + 1
+                if (editor.foldingModel.getCollapsedRegionAtOffset(offset) == null) return@computeBlocking line + 1
             }
             null
         }
@@ -775,7 +1023,7 @@ class CodeNodeView(
      */
     fun firstVisibleLineInViewport(): Int? {
         if (disposed || editor.isDisposed) return null
-        return ReadAction.compute<Int?, RuntimeException> {
+        return ReadAction.computeBlocking<Int?, RuntimeException> {
             val y = editor.scrollingModel.verticalScrollOffset
             editor.xyToLogicalPosition(Point(0, y)).line + 1
         }
@@ -798,6 +1046,12 @@ class CodeNodeView(
         if (disposed || editor.isDisposed) return
         val stat = resyncStats.getOrPut(trigger) { IntArray(2) }
         stat[0]++
+        // **Constraint 20**: every trigger here is something that moved this node's scrollable extent, which is exactly
+        // the set of events that can turn a clamped landing into a reachable one. Cheap and self-limiting — it no-ops
+        // the moment the landing is satisfied, which for a node whose viewport was ready on the first pass is
+        // immediately. Before the height check rather than after, because a trigger that publishes no new height can
+        // still have changed the extent (a fold inside the excerpt is the obvious one).
+        relandIfOwed()
         // Before the height check, not after: a fold or an inlay moves the lines a connector is anchored to
         // whether or not the node's own outline ends up a different size.
         onGeometryChanged?.invoke()
@@ -874,16 +1128,16 @@ class CodeNodeView(
         // Called from a paint — once per connector, per repaint — so it has to be safe on a node whose editor
         // has already gone, and it reads the line map, which is the document model (constraint 12).
         if (disposed || editor.isDisposed) return null
-        return ReadAction.compute<LineAnchor?, RuntimeException> {
+        return ReadAction.computeBlocking<LineAnchor?, RuntimeException> {
             val doc = editor.document
             val lastLine = (doc.lineCount - 1).coerceAtLeast(0)
             val zero = line - 1
-            if (zero < 0 || zero > lastLine) return@compute null
+            if (zero < 0 || zero > lastLine) return@computeBlocking null
             val offset = doc.getLineStartOffset(zero)
             val xy = editor.offsetToXY(offset)
             val inContent = Point(xy.x, xy.y + editor.lineHeight / 2)
             val point = SwingUtilities.convertPoint(editor.contentComponent, inContent, this)
-                ?: return@compute null
+                ?: return@computeBlocking null
             val collapsed = editor.foldingModel.getCollapsedRegionAtOffset(offset) != null
             LineAnchor(point, !collapsed)
         }
@@ -903,6 +1157,176 @@ class CodeNodeView(
     /** Scroll this whole node into the enclosing scroll pane's viewport — the default [onRevealRequest]. */
     fun scrollNodeIntoView() {
         scrollRectToVisible(Rectangle(0, 0, width.coerceAtLeast(1), height.coerceAtLeast(1)))
+    }
+
+    /**
+     * **What the current step occupies in this node, in this component's coordinates** — the active rows and the
+     * docked callout together, clipped to the part of them the node's own viewport is actually showing.
+     *
+     * The G1c″ round's item 14 residue is why it exists: *"stepping through last steps the callouts in nested nodes go
+     * out of view, because the nested node itself is out of view … node view gets scrolled to show contained callout,
+     * but parent node doesn't."* An ancestor cannot ask a renderer two editors down what it is pointing at, and
+     * scrolling the ancestor to the *call line* — which is what [CodeNestView.revealNode] used to do — only guarantees
+     * the top of a frame that can be 600 px tall. So the node answers with a band and the ancestors scroll to it.
+     *
+     * **Clipped, not raw**, and that is the load-bearing part: only what is inside this node's viewport can be brought
+     * into view by scrolling something *outside* it, so a band the node has itself scrolled away is correctly null.
+     */
+    /**
+     * One row's band in this node's own coordinates — [stepBand]'s shape for a single line, and where a
+     * portal's click is scrolled to.
+     *
+     * Recomputed from the line rather than passed in as a rectangle, because `CodeNestView.revealRow` runs a
+     * deferred second pass (constraint 20) and a row's y inside the node moves in between when a callout above
+     * it resizes. A line number does not move.
+     */
+    fun lineBand(line: Int): Rectangle? {
+        if (disposed || editor.isDisposed) return null
+        val inContent = ReadAction.computeBlocking<Rectangle?, RuntimeException> {
+            spotlight.lineBounds(line)
+        } ?: return null
+        return bandOf(inContent)
+    }
+
+    fun stepBand(): Rectangle? {
+        if (disposed || editor.isDisposed) return null
+        // Constraint 12: `stepBounds` reads the line map through `offsetToXY`. `ReadAction.computeBlocking` like the
+        // other twelve in this package — see the cleanup note on the same call in `CodeNestView`.
+        val inContent = ReadAction.computeBlocking<Rectangle?, RuntimeException> { spotlight.stepBounds() } ?: return null
+        return bandOf(inContent)
+    }
+
+    /** A content-coordinate rectangle as a scrollable band of this node, or null when none of it shows. */
+    private fun bandOf(inContent: Rectangle): Rectangle? {
+        val band = SwingUtilities.convertRectangle(editor.contentComponent, inContent, this)
+        val mine = Rectangle(0, 0, width.coerceAtLeast(1), height.coerceAtLeast(1))
+        val visible = band.intersection(mine)
+        if (visible.isEmpty) return null
+        // Full width, degenerate x: every caller scrolls vertically, and a band's own x is the code's indent.
+        return Rectangle(0, visible.y, mine.width, visible.height)
+    }
+
+    /**
+     * **Pixels between the top of this step's band and the top of this node's own viewport** — negative when the band is
+     * cut off above, null when there is no step or no viewport.
+     *
+     * The number G1c‴ finding 9 is about, and it has to be this rather than a boolean: *"places callout partially hidden
+     * (scrolled out) from top side"* is a **quantity**, and "is it visible" cannot distinguish a box one pixel under the
+     * edge from one scrolled half away. Nor can [stepBand], which clips to what the node shows and so reports a band
+     * that is merely *shorter* — a silent failure, since a shorter band is exactly what a smaller step looks like.
+     *
+     * Read in the node's own editor content coordinates, unclipped, which is the only space where "above the viewport" is
+     * expressible at all.
+     */
+    fun stepTopClearance(): Int? {
+        if (disposed || editor.isDisposed) return null
+        val inContent = ReadAction.computeBlocking<Rectangle?, RuntimeException> { spotlight.stepBounds() } ?: return null
+        val view = editor.scrollingModel.visibleArea
+        if (view.height <= 0) return null
+        return inContent.y - view.y
+    }
+
+    /**
+     * **Re-issue this node's own step reveal**, for the case where the step was rendered while the node had no viewport.
+     *
+     * G1c‴ finding 9: *"stepping into collapsed node expands it, but places callout partially hidden (scrolled out) from
+     * top side."* A collapsed nesting hides its child, so a step landing there scrolls an editor whose visible area is
+     * 0 px tall — `scrollTo` clamps and `revealCallout`'s own guard returns — and then the expansion hands it a real
+     * viewport with the scroll already spent. Nothing outside the node can repair that ([stepBand] clips to what the
+     * node shows, and correctly so), which makes this the one place it can be repaired.
+     *
+     * Returns whether it actually re-revealed, so [CodeNestView.revealNode]'s report can distinguish "re-revealed" from
+     * "no step here" instead of implying the first.
+     */
+    fun reRevealStep(): Boolean {
+        if (disposed || editor.isDisposed) return false
+        val revealed = spotlight.reRevealStep()
+        // Only when a step really was re-revealed. Releasing unconditionally would retire the landing of every node a
+        // reveal merely *walked past* — and this runs on the whole nesting chain, so that is most of them.
+        if (revealed) releaseLanding()
+        return revealed
+    }
+
+    /**
+     * **Scroll this node's own viewport to [line]** — the row a click named, *inside* this node.
+     *
+     * [CodeNestView.revealNode]'s chain walk scrolls a node's **ancestors**; nothing in it scrolls the node itself,
+     * because a step's reveal has already done that per editor (`SpotlightRenderer.revealCenter`) by the time the
+     * walk runs. A row a *link* points at has had no such pass, and [lineBand] answers null for a row that is not
+     * showing — so the walk fell back to "show the whole node", which top-aligns it and leaves the named row below
+     * the fold.
+     *
+     * That is the reported defect, exactly: following a portal into a **collapsed** node expanded it at its
+     * excerpt's first line and stopped there, and a second click — by which time this scroll had happened as a
+     * side effect of [SpotlightRenderer.landOn] on the first — worked. One gesture, one destination.
+     *
+     * The landing is released for [showContentBand]'s own reason, and here it is not conditional on having moved:
+     * expanding a nesting re-arms the landing ([invalidateLanding]), which would otherwise pull this node back to
+     * the top of its excerpt a pass later and undo the reveal even when the row was already in view. A row the
+     * reader clicked outranks where the node opens — §1a⁵ 4's distinction, applied to a click instead of a step.
+     */
+    fun showOwnRow(line: Int): Boolean {
+        if (disposed || editor.isDisposed) return false
+        val inContent = ReadAction.computeBlocking<Rectangle?, RuntimeException> {
+            spotlight.lineBounds(line)
+        } ?: return false
+        showContentBand(inContent)
+        releaseLanding()
+        return true
+    }
+
+    /**
+     * Scroll this node's editor the **minimum** needed to show [inContent] (a rectangle in editor content
+     * coordinates), and answer where that band then sits in *this component's* coordinates — so the caller can hand
+     * the result to the next node up the nesting chain.
+     *
+     * Minimum rather than centred, because this runs on every ancestor of every step: a centring scroll at each level
+     * moves code the reader is reading for no reason, and the thing being revealed is already adjacent to what is on
+     * screen. The clamp `min(bottom - viewport, top)` is [SpotlightRenderer.revealCallout]'s, for its reason — a band
+     * taller than the viewport must lose its bottom rather than its top.
+     *
+     * The returned y is computed from the scroll offset **read back after the scroll**, not from a Swing conversion:
+     * `scrollVertically` clamps to the scrollable extent, and the component bounds behind a conversion are one layout
+     * pass behind. Constraint 17's lesson stated one axis over — the chain is walked synchronously, so every number in
+     * it has to be readable synchronously.
+     */
+    fun showContentBand(inContent: Rectangle): Rectangle {
+        val whole = Rectangle(0, 0, width.coerceAtLeast(1), height.coerceAtLeast(1))
+        if (disposed || editor.isDisposed) return whole
+        val sm = editor.scrollingModel
+        val view = sm.visibleArea
+        val current = sm.verticalScrollOffset
+        var wanted = current
+        if (view.height > 0) {
+            if (inContent.y < current) {
+                wanted = inContent.y
+            } else if (inContent.y + inContent.height > current + view.height) {
+                wanted = minOf(inContent.y + inContent.height - view.height, inContent.y)
+            }
+        }
+        if (wanted != current) {
+            // A reveal that actually moved this viewport outranks the landing, so the landing stops asking: §1a⁵ 4 says
+            // where a node *opens*, and pulling the reader back to the top of the excerpt mid-step is not that. Only on
+            // a real scroll — this runs on every ancestor of every step, most of which do not need to move.
+            releaseLanding()
+            // Animation off, so the offset read back below is the one in force and not a frame of an animation.
+            sm.disableAnimation()
+            try {
+                sm.scrollVertically(wanted.coerceAtLeast(0))
+            } finally {
+                sm.enableAnimation()
+            }
+        }
+        val offset = sm.verticalScrollOffset
+        // The **viewport's** origin, converted, plus the band's offset inside the scrolled view — not
+        // `editor.component.y`, which would assume the viewport sits flush at the top of the editor's component (it
+        // does not when the platform puts a notification or sticky-lines panel above it), and not a conversion of the
+        // *content* component, whose own position is what the scroll just moved. A viewport does not move when its view
+        // scrolls, so this conversion is the one that cannot be a layout pass stale.
+        val viewportTop = editor.contentComponent.parent
+            ?.let { SwingUtilities.convertPoint(it, Point(0, 0), this).y }
+            ?: editor.component.y
+        return Rectangle(0, viewportTop + (inContent.y - offset), whole.width, inContent.height)
     }
 
     // ── Chrome and restyling ──
@@ -928,7 +1352,7 @@ class CodeNodeView(
 
         when (style.chrome) {
             NodeChrome.HEADER_STRIP -> {
-                border = NodeFrameBorder(line, weight, topEdgeDrawn)
+                border = NodeFrameBorder(line, weight, topEdgeDrawn, topCornersRounded)
                 val strip = JBLabel(" " + displayPath()).apply {
                     font = titleFont()
                     foreground = titleColor()
@@ -950,12 +1374,9 @@ class CodeNodeView(
             // the borderless variant that overshot it: "no border is strictly worse than plain". §1a⁵ 2 made it
             // the value the *rule* picks for a nested child in the same file as its caller.
             NodeChrome.PLAIN -> {
-                border = NodeFrameBorder(line, weight, topEdgeDrawn)
+                border = NodeFrameBorder(line, weight, topEdgeDrawn, topCornersRounded)
             }
         }
-        // The corner control is a child like the others, so re-adding the header strip changed the child order it
-        // was lifted above.
-        cornerControl?.let { if (it.parent === this) setComponentZOrder(it, 0) }
         revalidate()
         repaint()
     }
@@ -1036,10 +1457,12 @@ class CodeNodeView(
      * `CaptionBorder`: the drawn-line offset is now 0 by construction rather than by agreement, so there is no
      * number for a leader to query and nothing for two implementations to disagree about.
      *
-     * **The top corners are square when [drawTop] is false**, and that is what dissolved 1a⁗'s rounded-corner
-     * defect rather than working around it: with no top run there is no top corner to round — the "corner" is just
-     * where a side wall begins, and the leader arrives into it. The bottom corners keep [LeaderArt.ARC], the one
-     * radius the brace's turn and the token box also use.
+     * **The top corners are square when both [drawTop] and [roundTop] are false** — `CORNERS`, whose diagonals
+     * land on them, so a radius there would open a gap exactly where a diagonal arrives. That is what dissolved
+     * 1a⁗'s rounded-corner defect rather than working around it. K3 split the second corner case back out
+     * ([roundTop]): `BRACE`'s run now stops one radius short on the row above and the turn into the wall is drawn
+     * here, which is what puts the drawn line on the header instead of a radius above it. The bottom corners keep
+     * [LeaderArt.ARC] as they always did — the one radius the brace's turn and the token box also use.
      *
      * The path itself is [LeaderArt.framePath], shared with the collapsed stub — see there for why.
      */
@@ -1047,6 +1470,7 @@ class CodeNodeView(
         private val line: Color,
         private val weight: Int,
         private val drawTop: Boolean,
+        private val roundTop: Boolean,
     ) : AbstractBorder() {
 
         override fun getBorderInsets(c: Component?, insets: Insets): Insets {
@@ -1066,7 +1490,7 @@ class CodeNodeView(
                 // two `drawArc` calls and four `drawLine`s did — and it lives in [LeaderArt.framePath] rather than
                 // here, because the collapsed stub draws the same shape and drew it with its own top edge until the
                 // G1c′ round's item 16.
-                g2.draw(LeaderArt.framePath(x, y, w, h, drawTop))
+                g2.draw(LeaderArt.framePath(x, y, w, h, drawTop, roundTop))
             } finally {
                 g2.dispose()
             }
@@ -1088,6 +1512,100 @@ class CodeNodeView(
         const val TRIGGER_WIDTH = "width"
         const val TRIGGER_LANDING = "landing"
         const val TRIGGER_EMBEDDED = "embedded"
+        const val TRIGGER_DRAG = "drag"
+
+        /**
+         * Elision passes run, and fold regions installed by them, **across every node since the IDE started**.
+         *
+         * These exist to be a *denominator*. The bench's log gate counts a Rider folding warning per run — 103
+         * across G1c⁷'s four reports — and three rounds of counting it produced no attribution, because a count
+         * with no denominator is not a rate. The obvious guess (a per-restyle rebuild) is refuted by this file:
+         * [applyElision] is called from the constructor and from [restyle] **only when the elision *mode* changed**,
+         * and no restyle in the bench changes it. What does scale with the warning is node *construction*, and a
+         * report performs two whole-view rebuilds of its own in its disposal check.
+         *
+         * So these are printed beside the log's count rather than a fix being written against a guess. They survive
+         * a rebuild on purpose — per-node counts ([requestedFolds]) cannot see the nodes a rebuild destroyed, which
+         * is exactly the population the warning comes from.
+         */
+        var elisionPasses = 0
+            private set
+
+        /** Fold regions [applyElision] successfully installed since startup. See [elisionPasses]. */
+        var foldRegionsInstalled = 0
+            private set
+
+        /**
+         * Fold regions **destroyed** by [applyElision]'s `clearFoldRegions()` since startup, and how many of them
+         * were ours.
+         *
+         * The verification round's finding 2 is why this exists and why it is a *third* counter rather than an
+         * inference from the first two. That round confirmed the denominator exactly — 8 rebuilds × 3 nodes × 3 gaps
+         * = 72 regions installed over 24 elision passes, so [applyElision] fires once per node construction and
+         * nowhere else — and **refuted the numerator**: the session logged 92 folding warnings against those 72
+         * inserts, so the warning cannot be one per insert of ours. The surviving candidate is that
+         * `clearFoldRegions()` also destroys the **daemon's** 13–25 regions per node, whose re-add hits the same
+         * duplicate complaint. That candidate predicts a number this class was not counting: not what we add, but
+         * what we remove.
+         *
+         * So `foldRegionsDestroyed - foldRegionsDestroyedOurs` is the daemon's share, and it is the quantity to
+         * compare the log's count against. **Two attributions have already failed here; this one arrives as a
+         * counter rather than as a sentence**, which is the rule that round wrote.
+         *
+         * Read before the batch opens, because inside it the model is being emptied — a count taken after the clear
+         * is zero by construction, which is how a counter comes to agree with any hypothesis at all.
+         *
+         * **A zero here is a result, not a broken instrument**, and saying so in advance is the discipline the last
+         * two attributions skipped: [applyElision] runs from the constructor, against a viewer editor created
+         * moments earlier, so the daemon may have had nothing installed yet to destroy.
+         *
+         * **That is what it measured — `0/0/0` — and it closed the question.** With the destroy candidate refuted,
+         * the session's 12 warnings resolved against the ranges this method installs: 6 distinct `(start, end)`
+         * pairs, each logged once per view build, **none of them ours** (ours are disjoint by construction, all 9
+         * were accepted, and every one of our first gaps starts at offset 0 where none of the rejected ones does).
+         * Classified, all six **cross our last gap** — the one running to the end of the document — while
+         * *containing* our middle one, and a fold tree takes nesting or disjointness and refuses crossing. So the
+         * warnings are **the daemon's own class-body and member-body folds being refused because our elision
+         * straddles their ends**: ~2 per node per folding pass, a property of the file's block structure rather than
+         * of our insert count, which is why no denominator of ours ever matched it. Benign — nothing of ours is
+         * lost, the daemon's other 13–25 regions per node land normally (constraint 5), and the only cost is that
+         * those two folds cannot be hand-folded inside a node view, which a read-only excerpt does not want.
+         *
+         * The counters stay as the **guard** on that answer, not as a search for it: a non-zero here means something
+         * now installs folds before the constructor's pass, and the attribution would need re-testing. Aligning our
+         * gap boundaries to the enclosing block's would silence the warnings outright — a note for Phase 2's
+         * `keep` → gap derivation, not a defect to fix here.
+         */
+        var foldRegionsDestroyed = 0
+            private set
+
+        /** The ours-half of [foldRegionsDestroyed] — subtract it to get the daemon's. */
+        var foldRegionsDestroyedOurs = 0
+            private set
+
+        /**
+         * Ceiling on [landOnExcerpt] re-attempts before the landing gives up and latches.
+         *
+         * Not a convergence bound — constraint 20's point is that the *goal* outlives the passes — but a stop for the
+         * case where the target is unreachable at any offset (a focus range inside a document shorter than the
+         * viewport). Without it that node would re-scroll on every fold the daemon pushes, for the session.
+         */
+        private const val MAX_LANDING_ATTEMPTS = 8
+
+        /**
+         * Rows a dragged body may not go below. Two, not one: at one row the node's bottom edge and its header band
+         * are the same few pixels and there is nothing left to grab to drag it back open.
+         */
+        private const val MIN_DRAG_ROWS = 2
+
+        /**
+         * Air above and below the docked callout when a node reserves room for it ([calloutAllowance]).
+         *
+         * The round asked for the box's height *"with margins"* and did not say how much; 4 px is the smallest gap that
+         * keeps the box off the frame's own border, and it is doubled because the box can dock above *or* below the
+         * active lines (`calloutBelow`), so the allowance cannot know which end it is paying for.
+         */
+        private const val CALLOUT_MARGIN = 4
 
         /**
          * Below [SpotlightRenderer]'s own layer (`SELECTION - 1`), so the active glow and the dim roles drawn
@@ -1100,9 +1618,6 @@ class CodeNodeView(
 
         private const val HEADER_ACCENT_MIX = 0.18
         private const val STRIP_PAD = 3
-
-        /** Space between a corner control and the chrome's trailing edge. */
-        private const val CONTROL_GAP = 3
 
         private fun placeholderFor(elidedLines: Int): String = "  ⋯  $elidedLines lines  ⋯  "
     }
@@ -1126,10 +1641,13 @@ class CodeNodeSpec(
     /**
      * The **excerpt of interest** — the range §1a⁵ 4 sizes a nested node to and scrolls it to.
      *
-     * Optional because Phase 1's fixture cannot state it: the schema decision that will (Phase 2 decision 3 —
-     * `context` vs `focus` roles on a frame's ranges) is not taken yet, so [focusRange] falls back to a guess from
-     * range order. Carrying the field now means the guess has exactly one home and Phase 2 deletes it rather than
-     * hunting for it.
+     * **Supplied by the plan since Phase 2**: a frame marks one `keep` range `"role": "focus"`, and
+     * `PlanLoader` decides it once — stated where the plan states it, inferred and *reported* where it does
+     * not. `TreePlanView` always passes it, so a production node is told rather than guessing.
+     *
+     * Still nullable, and [focusRange]'s guess still exists, because the spike benches build specs from text
+     * anchors with no plan behind them. That is the only remaining caller of the guess; it goes when the
+     * benches do.
      */
     val focus: IntRange? = null,
 ) {
@@ -1143,6 +1661,9 @@ class CodeNodeSpec(
      */
     fun focusRange(): IntRange? {
         focus?.let { return it }
+        // Fallback only for a spec with no plan behind it (the benches). A plan-built node has [focus] set,
+        // and `PlanLoader` has already reported the case where it had to make this same guess itself — so an
+        // inferred landing is visible in the report rather than happening quietly down here.
         val sorted = keep.sortedBy { it.first }
         return sorted.getOrNull(1) ?: sorted.firstOrNull()
     }
@@ -1175,6 +1696,40 @@ enum class NodeChrome {
 enum class NodePath { FULL, PROJECT_RELATIVE, BASENAME }
 
 /**
+ * **Where a node's landing stands** — the six states [CodeNodeView.landingState] distinguishes, and the reason it is
+ * an enum and not a pair of booleans.
+ *
+ * G1c⁵ read three nodes as *"never reached the offset they asked for and have given up retrying"* when they were
+ * sitting exactly on their member, and one node as landed when it was on line 1. Both verdicts came from a check
+ * inferring the state from [CodeNodeView.landingSatisfied] alone, which cannot separate *not yet* from *not ever*.
+ */
+enum class LandingState {
+    /** No excerpt target — the root, which §1a⁵ 4 exempts. */
+    EXEMPT,
+
+    /** Landed where it asked to be. */
+    SATISFIED,
+
+    /** A step's reveal moved this viewport on purpose and the landing has stood down — [CodeNodeView.releaseLanding]. */
+    RELEASED_BY_REVEAL,
+
+    /**
+     * Owed, and **not issued since the last invalidation** — no pass has run yet.
+     *
+     * The deferred passes and the resync triggers are both still to come, so this is *in flight* rather than failed.
+     * Read as a failure it turns every collapse into a red report; read as a success it hides a landing that will
+     * never be issued because nothing is left to trigger it. It is a distinct state for exactly that reason.
+     */
+    NOT_ISSUED,
+
+    /** Owed, issued, not there yet, and still under the attempt cap. */
+    IN_FLIGHT,
+
+    /** Issued up to the cap and never reached: the target is unreachable at any offset, not a pass that was missed. */
+    UNREACHABLE,
+}
+
+/**
  * How an elided run is drawn — and whether the reader can open it.
  *
  * Constraint 6, measured: a `CustomFoldRegion` refuses to expand (`shouldNeverExpand` is true and
@@ -1203,8 +1758,13 @@ enum class NodeDeemphasis(val tints: Boolean, val dimsBorder: Boolean) {
  * [maxHeight]'s default is the plan's constraint 8: folded nodes measured 286–550 px against unfolded
  * 858–3740 px, and Phase 0b's 220 px cap was so aggressive that every node exceeded it and grow-vs-scroll
  * never got compared. 600 px is the starting point for that comparison, not a settled answer.
+ *
+ * Four of its six fields are user settings as of Phase 4 ([com.audioexplainer.tree.TreeStyle]); [chrome] is
+ * assigned by role and would be overwritten, and [maxHeight]'s *ordering* against the excerpt and the
+ * content is constraint 8 rather than a preference. **Data, so a re-style can compare** — see
+ * [TreePlanView.restyle].
  */
-class CodeNodeStyle(
+data class CodeNodeStyle(
     val maxHeight: Int = DEFAULT_MAX_HEIGHT,
     /**
      * **Assigned by role, not chosen** — see [NodeChrome] and [CodeNestView.chromeFor]. It stays on the style

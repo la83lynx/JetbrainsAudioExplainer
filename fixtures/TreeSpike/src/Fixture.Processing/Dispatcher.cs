@@ -47,7 +47,7 @@ public sealed class Dispatcher
         ArgumentNullException.ThrowIfNull(order);
         _failures.Clear();
 
-        var verdict = _validation.Handle(order);
+        var verdict = _validation.Handle(order); //comment
         var priced = _pricing.Handle(order, verdict);
         var trail = _audit.Handle(order, priced);
 

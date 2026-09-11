@@ -4,7 +4,7 @@ Synthesize the entire walkthrough into a single WAV file. No sidebar or highligh
 
 ## Steps
 
-1. **Build plan JSON** — same segment format as walkthrough mode, but only `ttsText` matters. Write narration that flows as a continuous podcast.
+1. **Build plan JSON** — a podcast script has **its own `segments` array** (`{id, title, ttsText}`), not the walkthrough's `frames`/`steps` shape; only `ttsText` really matters. Write narration that flows as a continuous podcast.
 
 ```json
 {

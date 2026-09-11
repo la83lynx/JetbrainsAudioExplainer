@@ -1,0 +1,20 @@
+# The beat-matching contract, in one place because two languages implement it.
+#
+#   Beat.normalize   — Protocol.kt   — decides whether PlanLoader warns an author at load
+#   beatKey          — sidebar.js    — decides whether the beat ever fires
+#
+# A phrase those two normalise differently is accepted by the loader and then silently never fires, which
+# is the one failure mode in this feature with no symptom at all. PlanProbe.java and ClockProbe.js both
+# read THIS file, so the two implementations are asserted against one table rather than against each other.
+#
+# Format: input <TAB> expected. Blank lines and # lines are skipped. \n and \t are the only escapes.
+# The whitespace-only input is asserted separately in each probe, because a trailing tab does not survive
+# an editor that trims lines.
+
+the retry loop	the retry loop
+  leading and trailing  	leading and trailing
+The\tDispatcher\nLooks Up	the dispatcher looks up
+UNKNOWN Type	unknown type
+collapse     many     spaces	collapse many spaces
+MiXeD CaSe AlReAdY sPaCeD	mixed case already spaced
+e.g. for an unknown type	e.g. for an unknown type

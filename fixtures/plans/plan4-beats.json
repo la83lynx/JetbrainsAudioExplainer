@@ -1,0 +1,92 @@
+{
+  "type": "set_plan",
+  "title": "Beats — one anchor shape, timed to the narration",
+  "language": "en",
+  "frames": [
+    {
+      "id": 0,
+      "file": "src/Fixture.Core/SubInvoker.cs",
+      "title": "SubInvoker.Apply",
+      "explanation": "The B1b fixture. Steps 1-4 are judged **with the audio playing** — a beat carrying a `say` fires off the webview's playback clock, so stepping with Next/Previous shows the code and no pulses. Steps 5-7 have no timing at all and fire the moment their audio starts, which is what every pre-beats step did. Step 7 is the **legacy** shape, kept deliberately: a bare `token` with no beats and no line.",
+      "keep": [
+        { "start": 66, "end": 85, "role": "focus" },
+        { "start": 86, "end": 91, "role": "context" }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "frame": 0,
+      "ranges": [{ "start": 68, "end": 85 }],
+      "explanation": "Three beats, three lines",
+      "ttsText": "Apply starts by validating the options it was handed. Then it walks every enabled adjustment in registration order, folding each one into the running total. Finally it guards against a negative result before rounding.",
+      "beats": [
+        { "line": 71, "token": "Validate", "say": "Apply starts by validating" },
+        { "line": 74, "token": "ResolveEnabled", "say": "Then it walks every enabled adjustment" },
+        { "line": 81, "token": "GuardAgainstNegative", "say": "Finally it guards against a negative" }
+      ]
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 73, "end": 79 }],
+      "explanation": "Three beats, one line",
+      "ttsText": "The running total is seeded from the amount. Each adjustment in turn replaces it. The value that survives the loop is what gets guarded.",
+      "beats": [
+        { "line": 73, "token": "running", "say": "The running total is seeded" },
+        { "line": 73, "token": "running", "say": "Each adjustment in turn replaces it" },
+        { "line": 73, "token": "running", "say": "The value that survives the loop" }
+      ]
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 81, "end": 81 }],
+      "explanation": "The e.g. case",
+      "ttsText": "The guard runs last of all. If the total went negative, e.g. because a discount overshot, it is clamped before anything else sees it.",
+      "beats": [
+        { "line": 81, "token": "guarded", "say": "The guard runs last of all" },
+        { "line": 81, "token": "GuardAgainstNegative", "say": "because a discount overshot" }
+      ]
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 82, "end": 84 }],
+      "explanation": "Two beats, one sentence",
+      "ttsText": "Rounding is to even at the configured precision scale, which keeps repeated adjustments from drifting upward. The comparison then decides whether a new value is needed at all.",
+      "beats": [
+        { "line": 82, "token": "MidpointRounding", "say": "Rounding is to even" },
+        { "line": 82, "token": "PrecisionScale", "say": "the configured precision scale" },
+        { "line": 83, "token": "guarded", "say": "The comparison then decides" }
+      ]
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 87, "end": 91 }],
+      "explanation": "One pulse, no timing",
+      "ttsText": "ApplySingle is the one-adjustment path, and it skips the loop entirely.",
+      "beats": [
+        { "line": 87, "token": "ApplySingle" }
+      ]
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 81, "end": 85 }],
+      "explanation": "A five-line callout",
+      "note": "Rounding happens once, at the very end, and only when the guarded amount is not already rounded to the configured scale — so a value that arrives clean is returned untouched rather than being copied through a with-expression that would allocate for nothing.",
+      "example": "Apply(Money(100.005), options with PrecisionScale = 2) → Money(100.00), never Money(100.01)",
+      "ttsText": "The last three lines round the guarded total, but only when rounding would actually change it.",
+      "beats": [
+        { "line": 82, "token": "MidpointRounding" }
+      ]
+    },
+    {
+      "frame": 0,
+      "ranges": [
+        { "start": 73, "end": 73 },
+        { "start": 81, "end": 81 }
+      ],
+      "explanation": "Legacy: a bare token, second range",
+      "ttsText": "The seeded total on the first line becomes the guarded one on the second.",
+      "token": "guarded"
+    }
+  ]
+}

@@ -17,10 +17,15 @@ data class WalkthroughEntry(
 )
 
 /**
- * Per-workspace persistence of walkthroughs — a port of code-explainer's
- * `vscode-extension/src/storage.ts`. Files live in `<workspaceRoot>/.walkthroughs/<slug>.json`
- * with the shape `{title, segments}`; segment `file` paths are stored relative to the workspace
- * root and resolved back to absolute on load.
+ * Per-workspace persistence of walkthroughs. Files live in `<workspaceRoot>/.walkthroughs/<slug>.json` and
+ * hold a whole [Plan] — `{title, language, frames, steps}` (frames and steps since Phase 2; the `view` key
+ * went with the in-place surface). A file saved while `view` still existed loads unchanged: the decoder below
+ * sets `ignoreUnknownKeys`, so the dropped field is ignored rather than failing the load.
+ *
+ * **`frames[].file` is what gets rewritten**, relative on save and absolute again on load, so a saved
+ * walkthrough survives being opened from a different absolute root (§4.4 rule 6). It replaces the segment
+ * paths that used to be rewritten here for the same reason and by the same rule: the frame is where a file
+ * path lives now, and a relation endpoint's own `file` still travels with it.
  */
 class WalkthroughStorage(private val workspaceRoot: Path) {
     private val dir: Path = workspaceRoot.resolve(".walkthroughs")
@@ -37,12 +42,11 @@ class WalkthroughStorage(private val workspaceRoot: Path) {
         explicitNulls = false
     }
 
-    /** Save the active walkthrough. `name` overrides the file stem; otherwise the title is slugified. */
-    fun save(title: String, segments: List<Segment>, language: String, name: String?): String {
+    /** Save [plan]. `name` overrides the file stem; otherwise the plan's title is slugified. */
+    fun save(plan: Plan, name: String?): String {
         Files.createDirectories(dir)
-        val file = dir.resolve("${slugify(name ?: title)}.json")
-        val data = Plan(title, toRelativePaths(segments), language)
-        Files.writeString(file, json.encodeToString(data))
+        val file = dir.resolve("${slugify(name ?: plan.title)}.json")
+        Files.writeString(file, json.encodeToString(plan.copy(frames = toRelativePaths(plan.frames))))
         return file.toAbsolutePath().toString()
     }
 
@@ -55,7 +59,7 @@ class WalkthroughStorage(private val workspaceRoot: Path) {
         } catch (_: Exception) {
             return null
         }
-        return data.copy(segments = toAbsolutePaths(data.segments))
+        return data.copy(frames = toAbsolutePaths(data.frames))
     }
 
     /** Delete a saved walkthrough by name. Returns true if a file was removed (false if absent / on error). */
@@ -103,12 +107,12 @@ class WalkthroughStorage(private val workspaceRoot: Path) {
         return results
     }
 
-    private fun toRelativePaths(segments: List<Segment>): List<Segment> = segments.map { seg ->
-        seg.copy(file = relativize(seg.file), relations = mapEndpointFiles(seg.relations, ::relativize))
+    private fun toRelativePaths(frames: List<Frame>): List<Frame> = frames.map { f ->
+        f.copy(file = relativize(f.file), relations = mapEndpointFiles(f.relations, ::relativize))
     }
 
-    private fun toAbsolutePaths(segments: List<Segment>): List<Segment> = segments.map { seg ->
-        seg.copy(file = absolutize(seg.file), relations = mapEndpointFiles(seg.relations, ::absolutize))
+    private fun toAbsolutePaths(frames: List<Frame>): List<Frame> = frames.map { f ->
+        f.copy(file = absolutize(f.file), relations = mapEndpointFiles(f.relations, ::absolutize))
     }
 
     private fun relativize(file: String): String = try {
@@ -126,8 +130,8 @@ class WalkthroughStorage(private val workspaceRoot: Path) {
     /**
      * Apply the same path rewrite to relation endpoints that carry their own [Endpoint.file] — a saved
      * walkthrough must survive being opened from a different absolute root, and a cross-file relation is
-     * exactly as root-dependent as [Segment.file] is. Endpoints without a file (the common case: the
-     * segment's own file) are untouched.
+     * exactly as root-dependent as [Frame.file] is. Endpoints without a file (the common case: the frame's
+     * own file) are untouched.
      */
     private fun mapEndpointFiles(relations: List<Relation>, f: (String) -> String): List<Relation> {
         if (relations.isEmpty()) return relations

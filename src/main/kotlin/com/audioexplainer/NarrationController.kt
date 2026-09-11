@@ -13,14 +13,15 @@ import kotlinx.serialization.json.put
 import java.util.concurrent.Executors
 
 /**
- * Phase 7 — the narration loop. Turns walkthrough playback into synced audio: for each sub-highlight
- * of the current segment it moves the editor spotlight, pushes a `highlight_advance` to the sidebar,
- * streams the highlight's `ttsText` through [TtsService] as `audio_chunk`s, and — when the webview
- * reports `playback_complete` — advances to the next highlight (then the next segment).
+ * Phase 7 — the narration loop. Turns walkthrough playback into synced audio: for each **plan step** it
+ * pushes a `step_advance` to the sidebar, streams that step's `ttsText` through [TtsService] as
+ * `audio_chunk`s, and — when the webview reports `playback_complete` — moves the walkthrough one step on.
  *
- * This is the JetBrains analogue of the code-explainer VS Code extension's playback driver. It owns
- * only its own small position state (segment/highlight index, suspended flag); the walkthrough remains
- * the source of truth for the plan and status.
+ * This is the JetBrains analogue of the code-explainer VS Code extension's playback driver. Since Phase 3
+ * it owns **no position of its own**: [stepIndex] mirrors [Walkthrough]'s, which is the one cursor, and
+ * every advance here goes through [Walkthrough.nextStep] / [Walkthrough.gotoStep] rather than being pushed
+ * back into the walkthrough from inside the narration. The walkthrough remains the source of truth for the
+ * plan and the status.
  *
  * **Threading.** Every state transition runs on a single-thread executor. Listener callbacks
  * ([onWalkthroughChanged]) and webview messages ([onPlaybackComplete], [userAdvance], …) merely submit
@@ -49,8 +50,16 @@ class NarrationController(
     // ── Position state (executor thread only) ──
     private var active = false
     private var suspended = false
-    private var segIndex = -1
-    private var hlIndex = 0
+
+    /**
+     * **Which plan step narration is on** — one number since Phase 3, where it was `segIndex` + `hlIndex`.
+     *
+     * It mirrors [Walkthrough.currentStepIndex] rather than owning it: the walkthrough is what moves, and
+     * this is the executor thread's copy of where it last saw the walk. The two-level version had to derive
+     * "the previous step" from a segment boundary, and did it wrongly in one of its two derivations — the
+     * whole reason the flattening was a work item rather than tidying.
+     */
+    private var stepIndex = -1
     /**
      * Set when the user navigated to a different highlight *while paused*: the position + spotlight have
      * moved but no audio was produced, so the next Play must narrate this step **fresh** (via
@@ -101,25 +110,24 @@ class NarrationController(
         active = false
         suspended = false
         restartPending = false
-        segIndex = -1
-        hlIndex = 0
+        stepIndex = -1
         sync()
     }
 
     /** The webview finished playing the current highlight's audio. */
     fun onPlaybackComplete() = submit { advanceAfterPlayback() }
 
-    /** Sidebar "next/prev highlight" within the current segment (falls back to segment nav if idle). */
+    /** Sidebar Prev/Next: move one plan step, narrating it if narration is engaged. */
     fun userAdvance(delta: Int) = submit { userAdvanceInternal(delta) }
 
     /**
-     * Sidebar outline click on a step (segment header → highlight 0) or substep (a specific highlight):
-     * jump to that segment+highlight **preserving the current play/pause status** — like the Prev/Next
-     * buttons, a click navigates but never force-plays (Phase 7.5 #4, revised). While playing it keeps
-     * playing from the chosen step; while paused it moves silently (spotlight + transcript) and arms the
-     * next Play to narrate that step fresh. With narration disabled it just moves position + spotlight.
+     * Sidebar outline click on a step row: jump to that **plan step**, preserving the current play/pause
+     * status — like the Prev/Next buttons, a click navigates but never force-plays (Phase 7.5 #4, revised).
+     * While playing it keeps playing from the chosen step; while paused it moves silently (decorations +
+     * transcript) and arms the next Play to narrate that step fresh. With narration disabled it just moves
+     * the position and the decorations.
      */
-    fun gotoHighlight(segmentId: Int, highlightIndex: Int) = submit { gotoHighlightInternal(segmentId, highlightIndex) }
+    fun gotoStep(index: Int) = submit { gotoStepInternal(index) }
 
     /** Speed/voice changed — re-stream the current highlight so it takes effect immediately. */
     fun onRateChanged() = submit { if (active && !suspended) restartCurrent() }
@@ -132,11 +140,10 @@ class NarrationController(
      * walkthrough's language, so the preview is representative), or a generic line if none is loaded.
      */
     fun sampleText(): String {
-        val segs = walkthrough.getState().segments
-        val seg = segs.getOrNull(segIndex) ?: segs.firstOrNull()
-        val hl = seg?.highlights?.getOrNull(hlIndex.coerceAtLeast(0))
-            ?: seg?.highlights?.firstOrNull { !it.ttsText.isNullOrBlank() }
-        return hl?.ttsText?.trim()?.take(200).takeUnless { it.isNullOrEmpty() }
+        val resolved = walkthrough.getResolvedPlan()
+        val text = resolved?.steps?.getOrNull(stepIndex)?.step?.ttsText
+            ?: resolved?.steps?.firstOrNull { it.step.ttsText.isNotBlank() }?.step?.ttsText
+        return text?.trim()?.take(200).takeUnless { it.isNullOrEmpty() }
             ?: "This is a preview of the selected robotic voice."
     }
 
@@ -184,18 +191,19 @@ class NarrationController(
                     return // play silently; leave narration disengaged
                 }
                 when {
-                    !active -> startAt(snap.currentIndex, snap.currentHighlightIndex)
-                    segIndex != snap.currentIndex -> startAt(snap.currentIndex, 0)
-                    // User stepped highlights while paused → start THIS step from the beginning.
+                    !active -> startAt(snap.stepIndex)
+                    // The walk moved under us (a click, an agent `goto`, the tree) — narrate where it is.
+                    stepIndex != snap.stepIndex -> startAt(snap.stepIndex)
+                    // User stepped while paused → start THIS step from the beginning.
                     restartPending -> { restartPending = false; suspended = false; narrateCurrent() }
                     suspended -> resume()
-                    // else: already narrating this segment — nothing to do
+                    // else: already narrating this step — nothing to do
                 }
             }
         }
     }
 
-    private fun startAt(segmentIndex: Int, highlightIndex: Int) {
+    private fun startAt(index: Int) {
         cancelStream()
         // Clear any audio the webview still holds (e.g. buffered/suspended chunks from a segment the user
         // paused on before navigating). Without this, a prior suspend() leaves the AudioContext flagged
@@ -204,38 +212,44 @@ class NarrationController(
         active = true
         suspended = false
         restartPending = false
-        segIndex = segmentIndex
-        hlIndex = highlightIndex.coerceAtLeast(0)
+        stepIndex = index.coerceAtLeast(0)
+        // Publish the position before narrating, so the decorations land on the step whose audio is about to
+        // be requested. A no-op when the walkthrough is already there, which is the common case.
+        if (walkthrough.currentStepIndex() != stepIndex) walkthrough.gotoStep(stepIndex)
         narrateCurrent()
     }
 
     /**
-     * Reveal the current highlight: move the editor spotlight and push `highlight_advance` to the sidebar,
-     * and — unless [speak] is false — stream its narration. Pass `speak = false` to move to a step while
-     * paused (spotlight + transcript update, no audio).
+     * Narrate the step the walkthrough is on: push `step_advance` to the sidebar and — unless [speak] is
+     * false — stream its narration. Pass `speak = false` to reveal a step while paused (transcript updates,
+     * no audio).
+     *
+     * **It no longer moves the position.** Moving is the walkthrough's ([Walkthrough.gotoStep] /
+     * [Walkthrough.nextStep]) and every caller here does it first, so the decorations are already on this
+     * step by the time the audio is requested. The old shape had narration push a sub-step index into the
+     * walkthrough from inside this method, which is what made the position two-level and two-owned.
      */
     private fun narrateCurrent(speak: Boolean = true) {
-        val seg = walkthrough.getState().segments.getOrNull(segIndex) ?: return finish()
-        val boundedHl = hlIndex.coerceIn(0, (seg.highlights.size - 1).coerceAtLeast(0))
-        hlIndex = boundedHl
+        val resolved = walkthrough.getResolvedPlan() ?: return finish()
+        val total = resolved.steps.size
+        if (stepIndex !in 0 until total) return finish()
+        val step = resolved.steps[stepIndex].step
 
-        // Move the editor spotlight to this highlight (fires WalkthroughListener.onHighlight).
-        // NOTE the ordering: decorations land HERE, before any TTS request below — so every editor
-        // decoration (including the token flash) precedes the voice by the whole synthesis latency.
-        if (log.isDebugEnabled) log.debug("narrate: spotlight -> segment ${seg.id} step ${boundedHl + 1}/${seg.highlights.size}")
-        walkthrough.advanceHighlight(boundedHl)
+        // NOTE the ordering: the decorations landed with the move that preceded this call, before any TTS
+        // request below — so every editor decoration (including the token flash) precedes the voice by the
+        // whole synthesis latency.
+        if (log.isDebugEnabled) log.debug("narrate: step ${stepIndex + 1}/$total")
 
-        val hl = seg.highlights.getOrNull(boundedHl)
-        post(msg("highlight_advance") {
-            put("highlightIndex", boundedHl)
-            put("totalHighlights", seg.highlights.size)
-            val expl = hl?.explanation
+        post(msg("step_advance") {
+            put("index", stepIndex)
+            put("total", total)
+            val expl = step.explanation
             if (expl != null) put("explanation", expl) else put("explanation", JsonNull)
         })
 
-        if (!speak) return // paused navigation — spotlight + sidebar only, no audio
+        if (!speak) return // paused navigation — decorations + sidebar only, no audio
 
-        val text = hl?.ttsText?.trim().orEmpty()
+        val text = step.ttsText.trim()
         if (text.isEmpty()) {
             // Nothing to speak for this highlight — advance without waiting on audio.
             submit { advanceAfterPlayback() }
@@ -254,7 +268,13 @@ class NarrationController(
         if (log.isDebugEnabled) log.debug("narrate: requesting TTS (voice=$voice, speed=$speed, ${text.length} chars)")
         var firstChunk = true
         stream = tts.speak(text, voice, speed, tune, object : TtsService.TtsListener {
-            override fun onChunk(base64: String, sampleRate: Int, sentenceIndex: Int, sentenceWords: Int) {
+            override fun onChunk(
+                base64: String,
+                sampleRate: Int,
+                sentenceIndex: Int,
+                sentenceWords: Int,
+                sentenceText: String,
+            ) {
                 if (disposed) return
                 if (firstChunk) {
                     firstChunk = false
@@ -265,6 +285,7 @@ class NarrationController(
                 post(msg("audio_chunk") {
                     put("data", base64); put("sampleRate", sampleRate)
                     put("si", sentenceIndex); put("sw", sentenceWords)
+                    put("stext", sentenceText)
                 })
             }
 
@@ -280,66 +301,75 @@ class NarrationController(
         })
     }
 
-    /** Called by the webview after audio for a highlight finishes; step to the next highlight/segment. */
+    /**
+     * Called by the webview after a step's audio finishes; move one step and narrate it.
+     *
+     * **One branch where there were two.** The old shape advanced *within* a segment by bumping `hlIndex`
+     * and *across* one by disengaging and letting a listener round-trip restart narration — two paths whose
+     * only difference was an accident of the projection. Every advance is one step now, and the end of the
+     * plan is [Walkthrough.nextStep] returning false (it settles a playing walkthrough to paused itself).
+     */
     private fun advanceAfterPlayback() {
         if (!active || suspended) return
-        val seg = walkthrough.getState().segments.getOrNull(segIndex) ?: return finish()
-        val next = hlIndex + 1
-        if (next < seg.highlights.size) {
-            hlIndex = next
-            narrateCurrent()
-        } else {
-            // Segment done → move to the next segment; the walkthrough's status/segment fan-out queues
-            // a sync() that will start it. Disengage first so that sync() takes the "start fresh" path.
-            active = false
-            if (!walkthrough.next()) finish() // reached the end (walkthrough set itself to paused)
-        }
+        if (!walkthrough.nextStep()) return finish()
+        stepIndex = walkthrough.currentStepIndex() ?: return finish()
+        narrateCurrent()
     }
 
+    /**
+     * Prev/Next — one plan step, whether or not narration is engaged.
+     *
+     * **The whole method is the flattening's dividend.** It used to hold a three-way branch on whether the
+     * target crossed a segment boundary, and the backwards arm of it was a second, wrong derivation of "the
+     * previous step" (it landed on the *first* step of the previous segment, not its last). There is one
+     * derivation now — [Walkthrough.prevStep] — and no boundary to be on either side of.
+     */
     private fun userAdvanceInternal(delta: Int) {
-        if (!active) {
-            // Narration not engaged — behave like segment nav (pre-Phase-7 fallback).
-            if (delta >= 0) walkthrough.next() else walkthrough.prev()
+        val playing = walkthrough.getState().status == Walkthrough.STATUS_PLAYING
+        if (active) {
+            cancelStream()
+            post(msg("audio_stop"))
+        }
+        val moved = if (delta >= 0) walkthrough.nextStep() else walkthrough.prevStep()
+        if (!moved) {
+            // Either end of the plan. Forwards, `nextStep` has already settled a playing walkthrough to
+            // paused; there is nothing left to narrate either way.
+            if (active && delta >= 0) finish()
             return
         }
-        val snap = walkthrough.getState()
-        val seg = snap.segments.getOrNull(segIndex) ?: return
-        val playing = snap.status == Walkthrough.STATUS_PLAYING
-        cancelStream()
-        post(msg("audio_stop"))
-        val target = hlIndex + delta
-        when {
-            target < 0 -> { active = false; walkthrough.prev() }
-            target >= seg.highlights.size -> { active = false; if (!walkthrough.next()) finish() }
-            playing -> { hlIndex = target; suspended = false; restartPending = false; narrateCurrent() }
-            // Paused: move to the step silently (no autoplay); Play will narrate it fresh — Phase 7.5 #3.
-            else -> { hlIndex = target; suspended = true; restartPending = true; narrateCurrent(speak = false) }
+        stepIndex = walkthrough.currentStepIndex() ?: return
+        if (!active) return // narration disengaged — the move above is the whole behaviour
+        if (playing) {
+            suspended = false
+            restartPending = false
+            narrateCurrent()
+        } else {
+            // Paused: reveal the step silently (no autoplay); Play will narrate it fresh — Phase 7.5 #3.
+            suspended = true
+            restartPending = true
+            narrateCurrent(speak = false)
         }
     }
 
-    private fun gotoHighlightInternal(segmentId: Int, highlightIndex: Int) {
+    private fun gotoStepInternal(index: Int) {
         val snap = walkthrough.getState()
-        val idx = snap.segments.indexOfFirst { it.id == segmentId }
-        if (idx < 0) return
-        val seg = snap.segments[idx]
-        val hl = highlightIndex.coerceIn(0, (seg.highlights.size - 1).coerceAtLeast(0))
+        if (index < 0 || index >= snap.stepCount) return
         val playing = snap.status == Walkthrough.STATUS_PLAYING
 
-        // Move to the chosen segment WITHOUT changing play/pause status — an outline click navigates like
-        // the Prev/Next buttons and never force-plays (Phase 7.5 #4, revised). Skipped when already there.
-        if (snap.currentIndex != idx) walkthrough.navigateToPreservingStatus(segmentId)
+        // Move to the chosen step WITHOUT changing play/pause status — an outline click navigates like the
+        // Prev/Next buttons and never force-plays (Phase 7.5 #4, revised). Skipped when already there.
+        if (snap.stepIndex != index) walkthrough.gotoStep(index)
 
         if (playing && narrationEnabled()) {
             // Was playing → keep playing, from the chosen step. startAt clears stale webview audio first.
-            startAt(idx, hl)
+            startAt(index)
             return
         }
 
-        // Paused/stopped (or audio off): reveal the step — spotlight + sidebar transcript/outline — but do
+        // Paused/stopped (or audio off): reveal the step — decorations + sidebar transcript/outline — but do
         // NOT start audio. When narration is engaged, arm restartPending so the next Play (see sync()'s
         // PLAYING branch) narrates this step fresh instead of drain-resuming stale buffered audio.
-        segIndex = idx
-        hlIndex = hl
+        stepIndex = index
         if (narrationEnabled()) {
             active = true
             suspended = true

@@ -66,7 +66,7 @@ tasks.runIde {
     systemProperty("idea.log.debug.categories", "#com.audioexplainer")
 
     /*
-     * Phase 1 (TreeOfCode.md) — put the bench's fixture solution in front of it:
+     * Phase 1 (TreeOfCode.rules.md) — put the bench's fixture solution in front of it:
      *
      *     ./gradlew runIde -PspikeFixture
      *

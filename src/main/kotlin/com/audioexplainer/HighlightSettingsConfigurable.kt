@@ -1,5 +1,12 @@
 package com.audioexplainer
 
+import com.audioexplainer.tree.ChevronStyle
+import com.audioexplainer.tree.NestLeader
+import com.audioexplainer.tree.NodeDeemphasis
+import com.audioexplainer.tree.NodeElision
+import com.audioexplainer.tree.NodePath
+import com.audioexplainer.tree.StepFold
+import com.audioexplainer.tree.TreeStyle
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
@@ -27,11 +34,14 @@ import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
 import java.awt.Color
 import java.awt.Font
+import com.intellij.util.ui.JBUI
+import java.awt.FlowLayout
 import java.awt.GraphicsEnvironment
 import java.awt.event.ActionListener
 import java.text.NumberFormat
 import java.text.ParseException
 import javax.swing.DefaultComboBoxModel
+import javax.swing.JPanel
 import javax.swing.JSpinner
 import javax.swing.text.DefaultFormatterFactory
 import javax.swing.text.NumberFormatter
@@ -56,10 +66,31 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     private val accentPanel = ColorPanel().apply { selectedColor = parseColor(state.accentColor) }
     private val glowPanel = ColorPanel().apply { selectedColor = parseColor(state.activeGlowColor) }
 
-    /** Disabled while arrows follow the accent, so the picker never shows a colour that isn't in use. */
-    private val arrowColorPanel = ColorPanel().apply {
-        selectedColor = parseColor(state.arrowColor)
-        isEnabled = !state.arrowUseAccent
+    /**
+     * One picker per link slot, in slot order — `LinkArt.SLOTS` of them, which is the same 5 that caps a
+     * step's links and sizes the palette.
+     *
+     * `selectedColor = null` is a slot the reader has not set, and [ColorPanel] renders that as an empty
+     * swatch, which is exactly the state it means: *derive this one*. That is why these are built empty
+     * rather than seeded with the derived hue — a picker showing slot 3's rotated colour would make the
+     * default look like a choice, and clearing it back would then be impossible through the dialog.
+     */
+    private val arrowSlotPanels: List<ColorPanel> = List(LinkArt.slots()) { ColorPanel() }
+
+    /**
+     * The five pickers as **one cell**, because the Kotlin UI DSL hangs `onReset`/`onApply`/`onIsModified`
+     * off a `Cell` and not off a `Row`: five cells would need five copies of the same three callbacks, each
+     * able to drift from the others. One panel, one binding, one place the palette is read and written.
+     */
+    private val arrowSlotRow: JPanel = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(4), 0)).apply {
+        isOpaque = false
+        arrowSlotPanels.forEach { add(it) }
+        // **The only way back to "derive".** `ColorPanel` has no clear affordance of its own — pressing it
+        // opens a chooser, and every colour a chooser offers is a colour — so a slot set once could
+        // otherwise never be un-set except through Reset to defaults, which would take every other
+        // appearance knob with it. `setSelectedColor(null)` is reachable from code, so the way back is a
+        // control rather than a gesture nobody would find.
+        add(ActionLink("Clear") { arrowSlotPanels.forEach { p -> p.selectedColor = null } })
     }
 
     init {
@@ -88,11 +119,6 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     private lateinit var overviewCheck: JBCheckBox
     private lateinit var tintCheck: JBCheckBox
     private lateinit var gapCheck: JBCheckBox
-    private lateinit var calloutCheck: JBCheckBox
-    private lateinit var exampleCheck: JBCheckBox
-    private lateinit var flashCheck: JBCheckBox
-    private lateinit var flashMsSpinner: JBIntSpinner
-    private lateinit var relationsCheck: JBCheckBox
     private lateinit var frameCombo: ComboBox<String>
     private lateinit var proseFontCombo: ComboBox<String>
     private lateinit var leaderCheck: JBCheckBox
@@ -108,11 +134,24 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     private lateinit var calloutBarSpinner: JBIntSpinner
     private lateinit var calloutScaleSpinner: JBIntSpinner
     private lateinit var calloutBelowCheck: JBCheckBox
-    private lateinit var arrowAccentCheck: JBCheckBox
     private lateinit var arrowThicknessSpinner: JBIntSpinner
     private lateinit var arrowHeadSpinner: JBIntSpinner
     private lateinit var arrowSquareCheck: JBCheckBox
     private lateinit var arrowLabelsCheck: JBCheckBox
+
+    // ── The code tree (Phase 4) ────────────────────────────────────────────────
+    // §1c's verdict table has a column saying, per alternative, whether it became a setting; these eight are
+    // that column. What is missing from it is deliberate and is listed in the group's own comment, because a
+    // reader looking for the chrome switch should find out here that it is a rule rather than hunt for it.
+    private lateinit var treeLeaderCombo: ComboBox<String>
+    private lateinit var treeChevronCombo: ComboBox<String>
+    private lateinit var treeStepFoldCombo: ComboBox<String>
+    private lateinit var treePathCombo: ComboBox<String>
+    private lateinit var treeDeemphasisCombo: ComboBox<String>
+    private lateinit var treeElisionCombo: ComboBox<String>
+    private lateinit var treeMaxHeightSpinner: JBIntSpinner
+    private lateinit var treeGrowCheck: JBCheckBox
+    private lateinit var treeGrowHostsCheck: JBCheckBox
 
     /** The narration voice combo (Phase L7 cleanup) — its items are rebuilt to match the currently-selected
      *  explanation language, so it always shows only voices valid for that language. */
@@ -127,6 +166,123 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     private var piperStatusLabel: JBLabel? = null
 
     override fun createPanel(): DialogPanel = panel {
+        // **First, because the leader is the headline setting.** A walkthrough is a tree of code now, and
+        // this group is the shape of that tree; everything below it decorates lines *inside* one node.
+        group("Code tree") {
+            row("Nesting leader:") {
+                treeLeaderCombo = comboBox(TREE_LEADERS)
+                    .bindItem(
+                        { state.treeLeader },
+                        { state.treeLeader = it ?: AudioExplainerSettings.DEF_TREE_LEADER },
+                    )
+                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { treeLeaderLabel(it) } }
+                    .component
+            }.rowComment(
+                "How a nested frame joins the call that opens it. The three are one outline in three shapes — " +
+                    "in Diagonals and Brace the leader <i>is</i> the edge the box and the frame each give up, " +
+                    "which is why there is no “none”. Brace clears a caption band that a diagonal cuts across; " +
+                    "Arrow keeps both outlines closed and points from one to the other.",
+            )
+            row("Collapse control:") {
+                treeChevronCombo = comboBox(TREE_CHEVRONS)
+                    .bindItem(
+                        { state.treeChevron },
+                        { state.treeChevron = it ?: AudioExplainerSettings.DEF_TREE_CHEVRON },
+                    )
+                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { treeChevronLabel(it) } }
+                    .component
+            }.rowComment(
+                "The affordance beside the invoking token that folds a nested frame away and back. The " +
+                    "<b>bottom edge</b> is the default and is the only one that costs the token no width — it " +
+                    "shows while a frame is folded away, and folding one back is the strip above its header — " +
+                    "an open frame's box has no bottom edge to thicken, so the strip carries a small accent " +
+                    "triangle under the invoking token to say so. <b>None</b> leaves no control at " +
+                    "all — the whole box still toggles on a click, so it hides the hint rather than the gesture.",
+            )
+            row("Fold nodes a step does not use:") {
+                treeStepFoldCombo = comboBox(TREE_STEP_FOLDS)
+                    .bindItem(
+                        { state.treeStepFold },
+                        { state.treeStepFold = it ?: AudioExplainerSettings.DEF_TREE_STEP_FOLD },
+                    )
+                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { treeStepFoldLabel(it) } }
+                    .component
+            }.rowComment(
+                "A nested frame the current step is not talking about is spending height on code the " +
+                    "narration is not about. <b>Always</b> folds those away as each step starts; " +
+                    "<b>Only when the scene is over the line budget</b> is what shipped before, and it left a " +
+                    "small walkthrough fully expanded throughout. A frame is never folded while the step is " +
+                    "inside it or inside anything within it, and stepping back into a folded one opens it.",
+            )
+            row("File path in captions:") {
+                treePathCombo = comboBox(TREE_PATHS)
+                    .bindItem(
+                        { state.treePath },
+                        { state.treePath = it ?: AudioExplainerSettings.DEF_TREE_PATH },
+                    )
+                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { treePathLabel(it) } }
+                    .component
+            }.rowComment(
+                "Only nodes that carry a caption show one: a frame nested in its caller's own file has no " +
+                    "header band to put a path in.",
+            )
+            row("Push non-active nodes back with:") {
+                treeDeemphasisCombo = comboBox(TREE_DEEMPHASIS)
+                    .bindItem(
+                        { state.treeDeemphasis },
+                        { state.treeDeemphasis = it ?: AudioExplainerSettings.DEF_TREE_DEEMPHASIS },
+                    )
+                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { treeDeemphasisLabel(it) } }
+                    .component
+            }.rowComment(
+                "Every option is a background. Nothing here dims the <i>text</i>: a foreground dim flattens " +
+                    "each dimmed row to one grey and takes the syntax colouring with it, which is the one " +
+                    "thing a real editor per node exists to keep.",
+            )
+            row("Hidden lines:") {
+                treeElisionCombo = comboBox(TREE_ELISIONS)
+                    .bindItem(
+                        { state.treeElision },
+                        { state.treeElision = it ?: AudioExplainerSettings.DEF_TREE_ELISION },
+                    )
+                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { treeElisionLabel(it) } }
+                    .component
+            }.rowComment(
+                "A node shows the lines the walkthrough asked for and folds the rest away. <b>Openable</b> " +
+                    "lets you click a run open (and hovering it shows the hidden code); <b>Sealed</b> draws a " +
+                    "tidier “⋯ N lines ⋯” rule that cannot be opened — the platform's own limitation, not a " +
+                    "choice about tidiness.",
+            )
+            row("Node height limit (px):") {
+                treeMaxHeightSpinner = clampedSpinner(TreeStyle.MIN_MAX_HEIGHT..TreeStyle.MAX_MAX_HEIGHT, step = 20)
+                    .bindIntValue(state::treeMaxHeight).component
+            }.rowComment(
+                "A ceiling, not a size: a node is the smaller of its own excerpt, its content and this — so a " +
+                    "six-line member gets six lines, and only a long one is capped and scrolls to the code " +
+                    "being talked about.",
+            )
+            row {
+                treeGrowCheck = checkBox("Let every node grow to its full content")
+                    .bindSelected(state::treeGrowNodes).component
+            }.rowComment(
+                "Ignores the limit above. A node that is exactly as tall as its content has nothing to scroll, " +
+                    "so a step can no longer bring its own lines into view inside that node — the page scrolls " +
+                    "instead.",
+            )
+            row {
+                treeGrowHostsCheck = checkBox("Grow the outermost node when it hosts a nested frame")
+                    .bindSelected(state::treeGrowHosts).component
+            }.rowComment(
+                "On by default: capping the outermost node puts a second scrollbar inside the first. Nested " +
+                    "hosts are always sized to their excerpt plus whatever is embedded in them.",
+            )
+        }.rowComment(
+            "Three things about the tree are <b>not</b> here, and each was decided rather than left out: the " +
+                "caption band is chosen by a node's role (outermost, or a different file from its parent), the " +
+                "invoking token is always boxed because every leader starts at its corners, and nested frames " +
+                "are never indented — the nested gutter is the boundary.",
+        )
+
         group("Segment spotlight") {
             row("Outside-segment brightness (%):") {
                 outsideSpinner = clampedSpinner(0..100).bindIntValue(state::outsideDimPercent).component
@@ -175,24 +331,6 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
             row("Gutter bar width (px):") {
                 gapWidthSpinner = clampedSpinner(1..8).bindIntValue(state::gapGutterWidth).component
             }
-        }
-
-        group("Step decorations") {
-            row {
-                calloutCheck = checkBox("Docked callout by the active lines").bindSelected(state::callout).component
-            }.rowComment("Shows the step's short label in the editor. Nothing is drawn for walkthroughs without per-step labels. Appearance and placement: “Callout appearance” below.")
-            row {
-                exampleCheck = checkBox("Include the step's worked example").bindSelected(state::calloutExample).component
-            }.rowComment("Adds a one-line “input → output” illustration under the callout text, where the walkthrough gives one. Needs the callout above.")
-            row {
-                flashCheck = checkBox("Flash the step's key identifier").bindSelected(state::tokenFlash).component
-            }.rowComment("Briefly pulses the one identifier a step names, where the walkthrough points at one. Nothing happens on steps that don't.")
-            row("Flash duration (ms):") {
-                flashMsSpinner = clampedSpinner(100..3000).bindIntValue(state::tokenFlashMs).component
-            }
-            row {
-                relationsCheck = checkBox("Show relationships between lines").bindSelected(state::relations).component
-            }.rowComment("Draws an arrow between two related lines of the file, or a clickable gutter pointer when the other end is in another file. Only where the walkthrough names a relationship.")
         }
 
         group("Callout appearance") {
@@ -253,27 +391,29 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         }
 
         group("Relationship arrows") {
-            row {
-                arrowAccentCheck = checkBox("Use the accent colour for arrows")
-                    .bindSelected(state::arrowUseAccent).component
-                // Enable/disable the picker live rather than only on reset, so unticking this has a visible
-                // effect before OK is pressed.
-                arrowAccentCheck.addActionListener { arrowColorPanel.isEnabled = !arrowAccentCheck.isSelected }
-            }
-            row("Arrow colour:") {
-                cell(arrowColorPanel)
-                    .onReset {
-                        arrowColorPanel.selectedColor = parseColor(state.arrowColor)
-                        arrowColorPanel.isEnabled = !state.arrowUseAccent
+            row("Link colours:") {
+                cell(arrowSlotRow)
+                    .onReset { arrowSlotPanels.forEachIndexed { i, p -> p.selectedColor = slotColor(i) } }
+                    .onApply {
+                        state.arrowSlotColors = MutableList(LinkArt.slots()) { i ->
+                            arrowSlotPanels[i].selectedColor?.let { toHex(it) } ?: ""
+                        }
                     }
-                    .onApply { arrowColorPanel.selectedColor?.let { state.arrowColor = toHex(it) } }
                     .onIsModified {
-                        toHex(arrowColorPanel.selectedColor ?: return@onIsModified false) != state.arrowColor
+                        arrowSlotPanels.indices.any { i ->
+                            (arrowSlotPanels[i].selectedColor?.let { toHex(it) } ?: "") != storedSlot(i)
+                        }
                     }
-            }.rowComment("Used when the box above is unticked. The arrow's own note follows it; the callout's pointer line stays on the accent, since that belongs to the box.")
+            }
+                .rowComment(
+                    "One colour per link on a step, in the order they are drawn. An empty swatch keeps that " +
+                        "link's derived colour — the first is the accent and the rest are spread around the " +
+                        "wheel from it, which is the palette the defaults ship with. “Clear” puts them all " +
+                        "back to derived.",
+                )
             row("Thickness (tenths of a px):") {
                 arrowThicknessSpinner = clampedSpinner(8..40).bindIntValue(state::arrowThicknessTenths).component
-            }.rowComment("14 is the 1.4 px hairline arrows shipped with; 30 draws a bold diagram line.")
+            }.rowComment("10 is the 1 px line links ship with; 40 draws a bold diagram line. Past about 25, several links leaving the same row can start to intersect — hovering still tells them apart, and the range is left open on purpose.")
             row("Arrowhead size (px):") {
                 arrowHeadSpinner = clampedSpinner(4..16).bindIntValue(state::arrowHeadSize).component
             }
@@ -284,7 +424,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
             row {
                 arrowLabelsCheck = checkBox("Show the relationship note beside the arrow")
                     .bindSelected(state::arrowLabels).component
-            }.rowComment("Off leaves that text to the callout box and the gutter pointer's tooltip, which carry it anyway.")
+            }.rowComment("Off leaves that text to the callout box and the portal's tooltip, which carry it anyway.")
         }
 
         group("Narration (audio)") {
@@ -432,31 +572,55 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 calloutScaleSpinner.value = AudioExplainerSettings.DEF_CALLOUT_TEXT_SCALE
                 arrowThicknessSpinner.value = AudioExplainerSettings.DEF_ARROW_THICKNESS
                 arrowHeadSpinner.value = AudioExplainerSettings.DEF_ARROW_HEAD
-                flashMsSpinner.value = AudioExplainerSettings.DEF_TOKEN_FLASH_MS
                 overviewCheck.isSelected = true
                 tintCheck.isSelected = true
                 gapCheck.isSelected = true
-                calloutCheck.isSelected = true
-                exampleCheck.isSelected = true
-                flashCheck.isSelected = true
-                relationsCheck.isSelected = true
                 calloutBelowCheck.isSelected = false
                 arrowSquareCheck.isSelected = false
                 arrowLabelsCheck.isSelected = true
-                arrowAccentCheck.isSelected = true
                 leaderCheck.isSelected = true
                 frameCombo.selectedItem = AudioExplainerSettings.CALLOUT_FRAME_BAR
                 proseFontCombo.selectedItem = ""
                 accentPanel.selectedColor = parseColor(AudioExplainerSettings.DEF_ACCENT_COLOR)
                 glowPanel.selectedColor = parseColor(AudioExplainerSettings.DEF_ACTIVE_GLOW_COLOR)
-                arrowColorPanel.selectedColor = parseColor(AudioExplainerSettings.DEF_ACCENT_COLOR)
-                arrowColorPanel.isEnabled = false
+                // Empty, not "the derived colour" — see [arrowSlotPanels]. Reset restores the *rule* that
+                // produces the palette, which is the only thing that can survive a change of accent.
+                arrowSlotPanels.forEach { it.selectedColor = null }
+                // **The tree's defaults are the judged verdicts** (§1c), so this button restores the shape
+                // nine sandbox rounds settled rather than a set of neutral starting values. That is the
+                // whole reason they are constants on the settings class instead of literals in `TreeStyle`:
+                // Reset and the style resolver have to read the same number.
+                treeLeaderCombo.selectedItem = AudioExplainerSettings.DEF_TREE_LEADER
+                treeChevronCombo.selectedItem = AudioExplainerSettings.DEF_TREE_CHEVRON
+                treeStepFoldCombo.selectedItem = AudioExplainerSettings.DEF_TREE_STEP_FOLD
+                treePathCombo.selectedItem = AudioExplainerSettings.DEF_TREE_PATH
+                treeDeemphasisCombo.selectedItem = AudioExplainerSettings.DEF_TREE_DEEMPHASIS
+                treeElisionCombo.selectedItem = AudioExplainerSettings.DEF_TREE_ELISION
+                treeMaxHeightSpinner.value = AudioExplainerSettings.DEF_TREE_MAX_HEIGHT
+                treeGrowCheck.isSelected = false
+                treeGrowHostsCheck.isSelected = true
             }
                 // Runs after every binding/colour write above (cells apply in creation order), so the
                 // live re-render sees the just-applied values.
                 .onApply { refreshLiveWalkthrough() }
         }.rowComment("Applies to the fields above; save with OK/Apply.")
     }
+
+    /** [slot]'s stored override as a colour, or null when it is blank — see [arrowSlotPanels]. */
+    private fun slotColor(slot: Int): Color? =
+        state.arrowSlotColors.getOrNull(slot)?.trim()?.removePrefix("#")?.takeIf { it.isNotEmpty() }?.let {
+            try {
+                Color(it.toInt(16))
+            } catch (_: NumberFormatException) {
+                null
+            }
+        }
+
+    /**
+     * [slot]'s stored override in the same normalised form [toHex] produces, so `isModified` compares two
+     * hex strings rather than a hex string against whatever case the settings file happened to carry.
+     */
+    private fun storedSlot(slot: Int): String = slotColor(slot)?.let { toHex(it) } ?: ""
 
     /**
      * Re-face [proseFontPreview] from the current combo family and text size, by the same rule
@@ -477,11 +641,27 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         proseFontPreview.font = if (scale == 100) named else named.deriveFont(named.size2D * scale / 100f)
     }
 
-    /** Re-style the currently-showing walkthrough (if any) with the new settings. */
+    /**
+     * Re-style the currently-showing walkthrough (if any) with the new settings.
+     *
+     * This used to find `EditorHighlighter`s. When the in-place surface was deleted the filter would have
+     * matched nothing and Apply would have become a silent no-op — the settings would take effect only on the
+     * next render, which for an open tree could be never.
+     *
+     * Every *colour* is derived per render (constraint 11), so re-rendering the current step is the re-style
+     * for those. The **tree's shape** is not: the leader mode decides which border edges are drawn at all, and
+     * painting a step never revisits them. `TreePlanController.refresh` is where the two are told apart, and
+     * this call is the same either way.
+     *
+     * **The sidebar needs telling too, and did not used to be told** (K6). Its accent is a CSS variable the
+     * plugin writes from `accentColor`, but only when the page is built or the IDE's LAF changes — so an
+     * Apply moved the tree and left the panel on the old colour. Same listener list, same reason it works:
+     * a `Walkthrough` outlives any one tool window, so whoever is registered is whoever is open.
+     */
     private fun refreshLiveWalkthrough() {
-        service<ExplainerServerService>().server.walkthrough.getListeners()
-            .filterIsInstance<EditorHighlighter>()
-            .forEach { it.refresh() }
+        val listeners = service<ExplainerServerService>().server.walkthrough.getListeners()
+        listeners.filterIsInstance<TreePlanController>().forEach { it.refresh() }
+        listeners.filterIsInstance<AudioExplainerSidebar>().forEach { it.refreshTheme() }
     }
 
     /**
@@ -645,6 +825,79 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
             AudioExplainerSettings.CALLOUT_FRAME_COMMENT -> "Comment block — “// ” lines, comment colour"
             else -> "Bar — accent bar down the left"
         }
+
+        // ── The code tree's combos (Phase 4) ───────────────────────────────────
+        //
+        // **The items come off the enums, not out of a list here.** A hand-written list is a second
+        // enumeration of the same fact, and the one that silently goes stale is always the one further from
+        // the code — a fourth leader mode would be drawable, persistable and invisible in this dialog. The
+        // labels below are a `when` for the same reason: adding a constant makes the compiler's exhaustive
+        // check the reminder, and an unlabelled value still shows up under its own name.
+        private val TREE_LEADERS = NestLeader.entries.map { it.name }
+        private val TREE_CHEVRONS = ChevronStyle.entries.map { it.name }
+        private val TREE_STEP_FOLDS = StepFold.entries.map { it.name }
+        private val TREE_PATHS = NodePath.entries.map { it.name }
+        private val TREE_DEEMPHASIS = NodeDeemphasis.entries.map { it.name }
+        private val TREE_ELISIONS = NodeElision.entries.map { it.name }
+
+        /** Prose for a value, or the constant's own name — which is what an unlabelled new mode should read as. */
+        private fun label(name: String?, prose: Map<String, String>): String =
+            prose[name?.uppercase()] ?: name.orEmpty()
+
+        private fun treeLeaderLabel(name: String?): String = label(
+            name,
+            mapOf(
+                "CORNERS" to "Diagonals — box corners out to the frame's corners",
+                "BRACE" to "Brace — out along the box's own level, then down",
+                "ARROW" to "Arrow — the box's edge continued, turning down into an arrowhead",
+            ),
+        )
+
+        private fun treeChevronLabel(name: String?): String = label(
+            name,
+            mapOf(
+                "HORIZONTAL" to "Chevron beside the box — » to expand, « to collapse",
+                "VERTICAL" to "Chevron beside the box — ˅ to expand, ˄ to collapse",
+                "BOTTOM_BORDER" to "A thickened bottom edge on the box while collapsed, no chevron",
+                "NONE" to "Nothing — the box still toggles on a click",
+            ),
+        )
+
+        private fun treeStepFoldLabel(name: String?): String = label(
+            name,
+            mapOf(
+                "NEVER" to "Never — the tree only moves when you move it",
+                "OVER_BUDGET" to "Only when the scene is over the line budget",
+                "ALWAYS" to "Always — fold anything the step is not about",
+            ),
+        )
+
+        private fun treePathLabel(name: String?): String = label(
+            name,
+            mapOf(
+                "FULL" to "Full path",
+                "PROJECT_RELATIVE" to "Relative to the project root",
+                "BASENAME" to "File name only",
+            ),
+        )
+
+        private fun treeDeemphasisLabel(name: String?): String = label(
+            name,
+            mapOf(
+                "NONE" to "Nothing — every node looks the same",
+                "TINT" to "A wash over the node",
+                "BORDER" to "A dimmed frame",
+                "TINT_AND_BORDER" to "A wash and a dimmed frame",
+            ),
+        )
+
+        private fun treeElisionLabel(name: String?): String = label(
+            name,
+            mapOf(
+                "OPENABLE" to "Openable — click a folded run to read it",
+                "SEALED" to "Sealed — a tidier “⋯ N lines ⋯” rule that cannot be opened",
+            ),
+        )
 
         /**
          * Families for the description-font combo: the empty id (the editor's own font) first, then whatever

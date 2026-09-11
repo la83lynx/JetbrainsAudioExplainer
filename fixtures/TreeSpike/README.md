@@ -1,6 +1,6 @@
 # TreeSpike — C# fixture solution
 
-Built for **P0b.0** of `TreeOfCode.md`, and reused unchanged by **Phase 1b**.
+Built for **P0b.0** of `TreeOfCode.rules.md`, and reused unchanged by **Phase 1b**.
 
 Arch B's nodes are editors over **real documents in a loaded solution**, so every Arch-B question needs real
 C# to ask it of. This repo had none — no `.sln` or `.csproj` anywhere — which is exactly why Phase 0's S5

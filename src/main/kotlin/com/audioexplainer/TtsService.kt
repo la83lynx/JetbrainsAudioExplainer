@@ -2,7 +2,7 @@ package com.audioexplainer
 
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.OSProcessHandler
-import com.intellij.execution.process.ProcessAdapter
+import com.intellij.execution.process.ProcessListener
 import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.process.ProcessOutputTypes
 import com.intellij.openapi.Disposable
@@ -551,8 +551,16 @@ class TtsService : Disposable {
 
     interface TtsListener {
         fun onMeta(sampleRate: Int) {}
-        /** A PCM frame, plus its sentence index and that sentence's word count (for the webview read-along). */
-        fun onChunk(base64: String, sampleRate: Int, sentenceIndex: Int, sentenceWords: Int)
+        /**
+         * A PCM frame, plus its sentence index, that sentence's word count, and the sentence **as spoken**
+         * (all three for the webview: the first two drive the read-along, the third lets a B1b beat match a
+         * phrase against real output instead of counting sentences nobody counts the same way).
+         *
+         * [sentenceText] is empty against a `tts_server.py` older than the field — the installed copy is
+         * refreshed only on a VERSION difference and is editable on disk, so its absence is a normal state,
+         * not an error.
+         */
+        fun onChunk(base64: String, sampleRate: Int, sentenceIndex: Int, sentenceWords: Int, sentenceText: String)
         fun onEnd() {}
         fun onError(message: String) {}
     }
@@ -673,6 +681,7 @@ class TtsService : Disposable {
                         obj["sampleRate"]?.jsonPrimitive?.intOrNull ?: 24_000,
                         obj["si"]?.jsonPrimitive?.intOrNull ?: 0,
                         obj["sw"]?.jsonPrimitive?.intOrNull ?: 1,
+                        obj["stext"]?.jsonPrimitive?.contentOrNull ?: "",
                     )
                 }
                 "end" -> { if (!stream.isCancelled) listener.onEnd(); return }
@@ -739,7 +748,7 @@ class TtsService : Disposable {
         val ready = CountDownLatch(1)
         val handler = OSProcessHandler(cmd)
         val stdoutBuf = StringBuilder()
-        handler.addProcessListener(object : ProcessAdapter() {
+        handler.addProcessListener(object : ProcessListener {
             override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
                 if (outputType != ProcessOutputTypes.STDOUT) return
                 if (portRef.get() != null) return // handshake already consumed
@@ -837,7 +846,7 @@ class TtsService : Disposable {
                 .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
             val handler = OSProcessHandler(cmd)
             val buf = StringBuilder()
-            handler.addProcessListener(object : ProcessAdapter() {
+            handler.addProcessListener(object : ProcessListener {
                 override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
                     synchronized(buf) { buf.append(event.text) }
                 }
@@ -862,7 +871,7 @@ class TtsService : Disposable {
                 .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
             val handler = OSProcessHandler(cmd)
             val buf = StringBuilder()
-            handler.addProcessListener(object : ProcessAdapter() {
+            handler.addProcessListener(object : ProcessListener {
                 override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
                     synchronized(buf) {
                         buf.append(event.text)

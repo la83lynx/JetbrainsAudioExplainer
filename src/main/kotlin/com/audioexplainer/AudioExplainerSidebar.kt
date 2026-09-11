@@ -19,6 +19,7 @@ import com.intellij.ui.jcef.JBCefJSQuery
 import com.intellij.util.ui.UIUtil
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
@@ -49,7 +50,7 @@ import javax.swing.JComponent
  *
  * Audio is driven by a [NarrationController] (Phase 7): walkthrough status/segment changes are relayed
  * to it, and it pushes `highlight_advance` + `audio_chunk`/`audio_end` back through [postToWebview] while
- * streaming Kokoro TTS. The editor highlighting is driven independently by [EditorHighlighter], the
+ * streaming Kokoro TTS. The code rendering is driven independently by [TreePlanController], the
  * walkthrough's other listener.
  */
 class AudioExplainerSidebar(
@@ -157,7 +158,15 @@ class AudioExplainerSidebar(
         if (walkthrough.hasPrevious()) pushPlanReplaced() else postToWebview(buildJsonObject { put("type", "plan_replaced_clear") })
     }
 
-    override fun onSegment(segment: Segment) {
+    /**
+     * **The position moved — the one navigation callback, and the sidebar consumes it.**
+     *
+     * Round 3's one defect was this method's ancestor not existing: the sidebar learned its sub-step position
+     * from the narration controller's `highlight_advance` alone, so the outline tracked sub-steps only while
+     * a TTS server was engaged. There is one event now and one position in it, so an outline row cannot
+     * survive a move it did not hear about and no listener can consume half the walk.
+     */
+    override fun onStep(index: Int) {
         pushUpdate()
         narration.onWalkthroughChanged()
     }
@@ -169,13 +178,19 @@ class AudioExplainerSidebar(
 
     private fun pushUpdate() {
         val state = walkthrough.getState()
-        val currentId = state.segments.getOrNull(state.currentIndex)?.id ?: -1
         val lang = Languages.byCode(state.language)
+        val now = walkthrough.currentStepView()
         postToWebview(buildJsonObject {
             put("type", "update")
             put("title", state.title)
-            put("segments", json.encodeToJsonElement(state.segments))
-            put("currentSegment", currentId)
+            // The row model and the position, separately: the outline is rebuilt only when the *content*
+            // changes (the webview's own signature check), and `currentStep` moves on every navigation.
+            put("outline", json.encodeToJsonElement(state.outline))
+            put("currentStep", state.stepIndex)
+            put("stepCount", state.stepCount)
+            // What Now Playing shows for that step — the frame's identity and prose, the step's narration,
+            // and the one place a file and a line survive (the location link).
+            put("now", if (now != null) json.encodeToJsonElement(now) else JsonNull)
             put("status", state.status)
             put("language", lang.code)
             put("languageName", lang.displayName)
@@ -346,6 +361,19 @@ class AudioExplainerSidebar(
     }
 
     /**
+     * Re-push the theme because a **setting** changed rather than the IDE's LAF — Settings ▸ Apply.
+     *
+     * [themeVars] has always read `accentColor`, so the panel was designed to follow it; what was missing is
+     * anyone telling it. K6 found that from the other side: *"changing accent color only changed tree of
+     * code default color, not the color of audio explainer window accents"* — the play button, the playback
+     * fill, the volume slider and the read-along wash all kept the old gold until the tool window was
+     * rebuilt or the IDE theme changed, because `pushTheme`'s only caller was `lookAndFeelChanged`. A
+     * setting labelled *Accent colour* that reaches half the plugin's surfaces is a defect in the half that
+     * does not move, not a narrower setting than it looks.
+     */
+    fun refreshTheme() = pushTheme()
+
+    /**
      * Push the persisted voice + speed so the webview controls reflect them on (re)load (Phase 7.5), plus
      * the walkthroughs save directory so the Save button / "Saved Walkthroughs" label can show it on hover
      * (Phase 7.5 #14 task 5).
@@ -386,23 +414,22 @@ class AudioExplainerSidebar(
         val obj = json.parseToJsonElement(request).jsonObject
         when (obj["type"]?.jsonPrimitive?.content) {
             "play_pause" -> walkthrough.togglePlayPause()
-            "next" -> walkthrough.next()
-            "prev" -> walkthrough.prev()
-            // Highlight-level nav (Phase 7): driven by the narration controller when engaged, else it
-            // falls back to segment nav. The webview only emits these when totalHighlights>1.
-            "next_highlight" -> narration.userAdvance(+1)
-            "prev_highlight" -> narration.userAdvance(-1)
-            // Outline navigation (Phase 7.5 #4, revised): jump to a segment (header → highlight 0) or a
-            // specific highlight substep, PRESERVING play/pause status — a click navigates, it doesn't
-            // force-play (mirrors Prev/Next). Both route through the narration controller.
-            "goto_highlight" -> obj.intField("segmentId")?.let { seg ->
-                narration.gotoHighlight(seg, obj.intField("highlightIndex") ?: 0)
-            }
-            "goto_segment" -> obj.intField("segmentId")?.let { narration.gotoHighlight(it, 0) }
+            // **By plan step, not by segment** (G2 round 2). These used to call `next`/`prev`, which move by
+            // *segment* — a run of consecutive steps in one frame — so each press skipped whatever sub-steps
+            // the current frame held. Routed through the narration controller rather than straight at
+            // `walkthrough.nextStep()` so a *playing* walkthrough re-narrates the step it lands on; the
+            // controller falls back to the same `nextStep`/`prevStep` when narration is not engaged.
+            "next" -> narration.userAdvance(+1)
+            "prev" -> narration.userAdvance(-1)
+            // Outline navigation (Phase 7.5 #4, revised): jump to a plan step, PRESERVING play/pause
+            // status — a click navigates, it doesn't force-play (mirrors Prev/Next). One message where
+            // there were two: with a flat position a group header and a step row both name a step index,
+            // so a header click is simply its first step.
+            "goto_step" -> obj.intField("index")?.let { narration.gotoStep(it) }
             // Clicking the "file:lines" location under Now Playing re-opens that file and scrolls to it —
             // useful after the user navigated elsewhere in the editor. Does not touch playback.
             "reveal_location" -> obj.stringField("file")?.let { revealLocation(it, obj.intField("start") ?: 1) }
-            "restart" -> walkthrough.getState().segments.firstOrNull()?.let { walkthrough.goto(it.id) }
+            "restart" -> walkthrough.restart()
             "close_walkthrough" -> walkthrough.stop()
             // Phase 7.5 #5 — undo/keep the walkthrough that a generation just replaced.
             "restore_previous" -> walkthrough.restorePrevious()
@@ -419,9 +446,20 @@ class AudioExplainerSidebar(
             // The webview's Web Audio playhead has reached this step's first buffer — i.e. the user is NOW
             // hearing it. Only the webview knows this moment: the plugin's own "first chunk" callback is
             // synthesis/enqueue time, measured 1.8–6.0 s early (MoreUI.md §2.8). Routed straight to the
-            // editor, which is where the time-sensitive decoration lives.
-            "playback_started" -> forEachOwnHighlighter {
-                it.flashCurrentToken(obj.intField("segmentId") ?: -1, obj.intField("highlightIndex") ?: 0)
+            // surface, which is where the time-sensitive decoration lives. The flash is checked against the
+            // step showing before it fires, so a stale one from a replaced plan is dropped.
+            "playback_started" -> {
+                val stepIndex = obj.intField("index") ?: -1
+                forEachOwnTreeController { it.flashStartBeat(stepIndex) }
+            }
+            // A beat came due: the playhead has reached the start of the sentence holding this beat's
+            // phrase. Same channel and same staleness rule as `playback_started` above — the webview is
+            // still the only side that knows what is being heard, and a beat crossing the wire after the
+            // step moved on must not decorate the step that replaced it.
+            "beat" -> {
+                val stepIndex = obj.intField("index") ?: -1
+                val beat = obj.intField("beat") ?: -1
+                forEachOwnTreeController { it.flashBeat(stepIndex, beat) }
             }
             "speed_change" -> obj.doubleField("speed")?.let {
                 AudioExplainerSettings.getInstance().state.ttsSpeedPercent = (it * 100).toInt().coerceIn(25, 400)
@@ -459,25 +497,37 @@ class AudioExplainerSidebar(
     }
 
     /**
-     * Open [filePath] (relative to this project's base path, or absolute) and scroll to [line1] (1-based),
-     * focusing the editor — the Now-Playing location link (Phase 7.5). File resolution (a VFS refresh) is
-     * a slow op forbidden on the EDT, so it runs on a pooled thread; only the editor open is marshalled back.
+     * Apply [action] to the [TreePlanController] driving the walkthrough. It registers itself as a walkthrough
+     * listener at project open (see `ServerStartupActivity`), which is the only handle on it — the same
+     * discovery [HighlightSettingsConfigurable] uses for its live re-style.
      */
-    /**
-     * Apply [action] to the [EditorHighlighter]s driving *this* project. They register themselves as
-     * walkthrough listeners at project open (see `ServerStartupActivity`), which is the only handle on
-     * them — the same discovery [HighlightSettingsConfigurable] uses for its live re-render.
-     */
-    private fun forEachOwnHighlighter(action: (EditorHighlighter) -> Unit) {
+    private fun forEachOwnTreeController(action: (TreePlanController) -> Unit) {
         runCatching {
             walkthrough.getListeners()
-                .filterIsInstance<EditorHighlighter>()
-                .filter { it.project == project }
+                .filterIsInstance<TreePlanController>()
                 .forEach(action)
         }
     }
 
+    /**
+     * Open [filePath] (relative to this project's base path, or absolute) and scroll to [line1] (1-based),
+     * focusing the editor — the Now-Playing location link (Phase 7.5). File resolution (a VFS refresh) is
+     * a slow op forbidden on the EDT, so it runs on a pooled thread; only the editor open is marshalled back.
+     */
     private fun revealLocation(filePath: String, line1: Int) {
+        // While a tree is showing, this file is already on screen inside a node — so reveal it there rather
+        // than opening a tab in front of the tree (the round-1 defect, reached from a different click).
+        // Asked on the EDT because it touches editors, and before any VFS work because the tree needs none.
+        ApplicationManager.getApplication().invokeLater {
+            if (disposed || project.isDisposed) return@invokeLater
+            var handled = false
+            forEachOwnTreeController { if (!handled && it.revealInTree(filePath, line1)) handled = true }
+            if (!handled) openLocationInEditor(filePath, line1)
+        }
+    }
+
+    /** The file-tab fallback for [revealLocation]: no tree, or no node owns the file. */
+    private fun openLocationInEditor(filePath: String, line1: Int) {
         ApplicationManager.getApplication().executeOnPooledThread {
             if (disposed || project.isDisposed) return@executeOnPooledThread
             val vFile = try {

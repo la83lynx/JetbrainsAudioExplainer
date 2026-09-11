@@ -1,22 +1,21 @@
 package com.audioexplainer.tree
 
 import com.audioexplainer.Endpoint
-import com.audioexplainer.SpotlightRenderer
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Inlay
+import com.intellij.openapi.editor.event.EditorMouseEvent
+import com.intellij.openapi.editor.event.EditorMouseListener
+import com.intellij.openapi.editor.event.EditorMouseMotionListener
 import com.intellij.openapi.editor.impl.EditorEmbeddedComponentManager
-import com.intellij.openapi.editor.markup.EffectType
 import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.HighlighterTargetArea
 import com.intellij.openapi.editor.markup.RangeHighlighter
 import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
-import com.intellij.ui.JBColor
-import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import java.awt.BorderLayout
 import java.awt.Color
@@ -31,6 +30,7 @@ import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.event.MouseMotionAdapter
 import java.awt.geom.GeneralPath
 import javax.swing.BorderFactory
 import javax.swing.JComponent
@@ -44,7 +44,7 @@ import javax.swing.SwingUtilities
 /**
  * **Arch C — a child node drawn *inside* its parent, at the call site.**
  *
- * Phase 1a‴ of `TreeOfCode.md`, and — since the 1a⁗ round — **the only layout.** It was built as the sibling of a
+ * Phase 1a‴ of `TreeOfCode.rules.md`, and — since the 1a⁗ round — **the only layout.** It was built as the sibling of a
  * flat `CodeTreeView` that put a child *below* its parent with a routed connector to it; both took the same
  * `setTree(specs, edges)` and built the same [CodeNodeView]s over the same real documents, and the only difference
  * was where a child went. The bench put the two one click apart, the verdict was "nested is absolute winner", and
@@ -74,7 +74,7 @@ import javax.swing.SwingUtilities
  * fallback *was* built — the flat tree with the parent split into before-call / after-call nodes, needing no impl
  * API — and the 1a⁗ round scrapped it to reduce scope. **So there is no built fallback now**: if this API moves,
  * the answer is to rebuild that layout from git history, which is a week rather than an afternoon. See the top of
- * `TreeOfCode.md`.
+ * `TreeOfCode.rules.md`.
  *
  * **EDT only**, like everything it composes. **Disposal is the caller's job** — [dispose] tears down inlays
  * before editors, deepest node first, because this is an editor inside an inlay inside an editor.
@@ -292,10 +292,14 @@ class CodeNestView(
      *
      * **Bounded retry rather than one deferred pass, and constraint 17 is why**: `scrollVertically` clamps to
      * `content − viewport`, and inside a nesting chain the viewport is one deferred pass per level behind — so the
-     * first attempt at depth 2 can clamp to 0, which looks exactly like the landing not being implemented. The
-     * constraint's own lesson is "either walk the chain synchronously or state the settle time"; a scroll cannot be
-     * walked synchronously because it depends on a Swing layout, so this states the settle time as a bounded number
-     * of passes and stops.
+     * first attempt at depth 2 can clamp to 0, which looks exactly like the landing not being implemented.
+     *
+     * **And bounded passes turned out not to be enough — constraint 20, read off the G1c‴ round's reports.** The retry
+     * re-armed while `offset != request`, which is a bound on *passes* when the thing that keeps moving is the
+     * *target*: the embedded heights refresh, a step's callout allowance resizes the node, a drag rewrites the extent.
+     * So this could agree with a stale request and stop, which is what it did on the three-deep chain. These passes
+     * remain — they are what gets the common case landed in the first few EDT turns — but the goal now outlives them:
+     * [CodeNodeView.landOnExcerpt] latches only on success and [CodeNodeView] re-arms it from every resync trigger.
      */
     private fun scheduleLanding(attempt: Int) {
         ApplicationManager.getApplication().invokeLater {
@@ -306,9 +310,17 @@ class CodeNestView(
             var unsettled = false
             for (n in mutableNestings) {
                 if (n.state != EmbedState.EMBEDDED) continue
-                n.child.landOnExcerpt()
-                val wanted = n.child.lastLandingRequest
-                if (wanted > 0 && n.child.scrollOffset() != wanted) unsettled = true
+                // `relandIfOwed`, not `landOnExcerpt`: a pass that scrolled unconditionally would drag a node a step's
+                // reveal had deliberately moved back to the top of its excerpt — and since a collapse now schedules
+                // these passes, that would happen mid-narration rather than only at build time.
+                n.child.relandIfOwed()
+                if (!n.child.landingSatisfied) unsettled = true
+                // **And the host, since G1c⁵** — a collapse moves the extent of the node the frame is *in*, so the
+                // node owed a landing is not always the one whose collapse state changed. Guarded on `landsOnExcerpt`
+                // rather than on the latch alone: a root is exempt and never satisfies, so counting it here would keep
+                // `unsettled` true and burn every pass on every collapse for the rest of the session.
+                n.parent.relandIfOwed()
+                if (n.parent.landsOnExcerpt && !n.parent.landingSatisfied) unsettled = true
             }
             if (unsettled && attempt + 1 < LANDING_PASSES) scheduleLanding(attempt + 1)
         }
@@ -420,33 +432,267 @@ class CodeNestView(
 
     // ── Attention, reveal, collapse ──
 
+    /**
+     * Make [index] the node being talked about — **expanding whatever is folded between it and the root first**.
+     *
+     * The expansion is the G1c″ round's *"stepping into a collapsed node should expand it (same for sub-sub-node
+     * etc.)"*. It belongs here rather than in the caller because "which nestings are between this node and the root"
+     * is the one question only this class can answer, and because every path that moves attention comes through here.
+     */
     fun setActiveNode(index: Int) {
         activeIndex = index
+        mutableNodes.getOrNull(index)?.let { expandTo(it) }
         for ((i, node) in mutableNodes.withIndex()) node.setActive(i == index)
         repaint()
     }
 
     /**
-     * Bring a node into view. **Two scroll axes, not one** — a nested node lives inside its host's editor, so
-     * revealing it means scrolling that editor to the nesting's line *and* scrolling the outer pane to the host.
+     * Expand every collapsed nesting between [node] and the root, **innermost first**.
+     *
+     * Innermost-first for constraint 17's reason: expanding an inner nesting changes its frame's height, and
+     * [Nesting.setCollapsed] re-measures the whole chain above it — so going outermost-first would re-measure the outer
+     * inlay against the inner frame's still-collapsed height and be short by exactly its content.
+     *
+     * Returns how many it expanded, which the caller needs: a node that was hidden a moment ago has no meaningful
+     * geometry yet, so a reveal that expanded something has to come back for a second pass.
      */
-    fun revealNode(node: CodeNodeView) {
-        val nesting = mutableNestings.firstOrNull { it.child === node && it.state == EmbedState.EMBEDDED }
-        if (nesting == null) {
-            if (node.parent === content) node.scrollNodeIntoView()
-            return
+    fun expandTo(node: CodeNodeView): Int {
+        var expanded = 0
+        for (nesting in nestingsAbove(node)) {
+            if (nesting.collapsed) {
+                nesting.setCollapsed(false)
+                expanded++
+            }
         }
-        nesting.callLine?.let { nesting.parent.reveal(it) }
-        revealNode(nesting.parent)
+        return expanded
     }
+
+    /**
+     * The nestings between [node] and the root, **innermost first** — exactly the ones that have to be open for a step
+     * in [node] to be visible, and nothing else.
+     *
+     * Public because a check needs the same answer [expandTo] walks, from one derivation. The G1c⁗ round is why: the
+     * bench asserted "nothing is still collapsed" after activating the deepest node, which on the `wide` fixture counts
+     * three *sibling* nestings where only one is on the path — so it failed the product for correctly leaving the other
+     * two folded, and its own message ("the reader is being narrated code they cannot see") described code the reader
+     * was not being narrated.
+     */
+    fun nestingsAbove(node: CodeNodeView): List<Nesting> {
+        val chain = ArrayList<Nesting>()
+        var current: CodeNodeView = node
+        val guard = HashSet<CodeNodeView>()
+        while (guard.add(current)) {
+            val nesting = nestingOf(current) ?: break
+            chain += nesting
+            current = nesting.parent
+        }
+        return chain
+    }
+
+    /** The nesting [node] is the child of, or null when it is a root (or was not embedded). */
+    private fun nestingOf(node: CodeNodeView): Nesting? =
+        mutableNestings.firstOrNull { it.child === node && it.state == EmbedState.EMBEDDED }
+
+    /**
+     * Bring a node's **current step** into view at every level it is nested in — the whole chain, not the innermost
+     * editor and the outer pane.
+     *
+     * **What changed in G1c″, and why the old shape could not work.** It used to scroll each host to the nesting's
+     * *call line* and recurse. That reveals the top of the child's frame, and a frame is up to 600 px tall plus
+     * whatever *it* hosts — so a step near the bottom of a nested node, or a callout docked above it, sat below the
+     * host's viewport with the host convinced it had done its job. The round's words: *"node view gets scrolled to show
+     * contained callout, but parent node doesn't."*
+     *
+     * So a **band** is propagated instead of a line: [CodeNodeView.stepBand] says what the step occupies inside the
+     * node, each host scrolls the minimum needed to show it ([CodeNodeView.showContentBand]) and answers where that
+     * band now sits in *its* own coordinates, and the walk repeats one level out. The outermost node hands the band to
+     * the Swing scroll pane. Every level therefore scrolls to the thing the reader is meant to read rather than to a
+     * landmark near it.
+     *
+     * A collapsed ancestor is expanded on the way ([expandTo]) — the round asked for that outright, and the walk needs
+     * it anyway: a band inside a hidden component converts to a stale rectangle.
+     *
+     * **And the node re-reveals its own step first, which is G1c‴'s finding 9** — *"stepping into collapsed node expands
+     * it, but places callout partially hidden (scrolled out) from top side."* Nothing above a node can fix what the node
+     * itself has scrolled away ([CodeNodeView.stepBand] clips to what it shows), and a step rendered while the node was
+     * collapsed scrolled against a viewport of height 0: both halves of `SpotlightRenderer`'s reveal degrade silently
+     * there. So the innermost scroll is re-issued before the walk that depends on it. Constraint 20.
+     */
+    fun revealNode(node: CodeNodeView) = revealNode(node, followUp = false, row = -1)
+
+    /**
+     * **Reveal one named row of [node]** rather than whatever its current step is looking at.
+     *
+     * Where a portal's click goes. [revealNode] exists to put a *step* on screen, so it re-centres the step
+     * inside the node and then scrolls the chain to the step's band — both correct for stepping and both
+     * wrong for following a link, which lands somewhere the step has nothing to say about. This walks the same
+     * chain with the row's own band and without the re-centring, so a row already on screen costs no scroll at
+     * all (`scrollRectToVisible` moves the minimum, and nothing if the rect already fits).
+     */
+    fun revealRow(node: CodeNodeView, line: Int) = revealNode(node, followUp = false, row = line)
+
+    private fun revealNode(node: CodeNodeView, followUp: Boolean, row: Int) {
+        if (disposed) return
+        // Before any geometry is read: an ancestor that is folded away has laid nothing out at its real size.
+        val expanded = expandTo(node)
+        // **Then the node's own viewport, when a row was named** — and before the band is read, because the band
+        // is what the row scroll decides. See [CodeNodeView.showOwnRow]: the walk below moves a node's ancestors
+        // and never the node, so a row below its own fold read back as null and degraded the whole reveal to
+        // "show this node". It runs on the follow-up pass too, which is what makes the collapsed case land in one
+        // click: the first pass scrolls against an extent the expansion has not laid out yet.
+        val ownRow = row >= 0 && node.showOwnRow(row)
+        // Innermost first, and before the band is read: the band is *derived* from where this scroll leaves the step.
+        // Skipped for a row reveal, which has its own destination and must not have the step's imposed on it.
+        val reRevealed = row < 0 && node.reRevealStep()
+        var current = node
+        // Read **once**: the walk scrolls the node's ancestors, and re-reading it afterwards for the report would
+        // measure a band that has moved and label the walk with a number the walk never used.
+        val ownBand = if (row >= 0) node.lineBand(row) else node.stepBand()
+        var band = ownBand ?: Rectangle(0, 0, node.width.coerceAtLeast(1), node.height.coerceAtLeast(1))
+        var levels = 0
+        val guard = HashSet<CodeNodeView>()
+        while (guard.add(current)) {
+            val nesting = nestingOf(current) ?: break
+            band = nesting.showBandInHost(band) ?: break
+            current = nesting.parent
+            levels++
+        }
+        if (current.parent === content) current.scrollRectToVisible(band)
+        lastRevealReport = "levels=$levels expanded=$expanded reRevealed=$reRevealed ownRow=$ownRow " +
+            "band=${band.y}..${band.y + band.height}px" +
+            (if (ownBand == null) " (whole node — no step band)" else "") +
+            (if (followUp) " (follow-up pass)" else "")
+        // **One deferred follow-up, always** — G1c‴ widened this from "only when something was expanded". Every scroll
+        // above was issued against geometry that other rules are still moving in this same turn (constraint 20): an
+        // expanded frame is re-measured synchronously but laid out by Swing on the next validate, the callout's
+        // allowance resizes the node, and each level of nesting is a deferred pass behind (constraint 17). One extra
+        // pass is what makes the last of those the one that decides. Terminates by construction: the follow-up does not
+        // schedule another, and by then nothing is collapsed and no height is pending.
+        if (!followUp) {
+            ApplicationManager.getApplication().invokeLater {
+                if (!disposed) revealNode(node, followUp = true, row = row)
+            }
+        }
+    }
+
+    /**
+     * **Reveal every node a step touches at once, or fall back to the primary's** — Phase 3's scroll policy
+     * for a step whose ranges live in more than one frame.
+     *
+     * The rule is the plan's: *"reveal all of them if they fit, otherwise reveal the primary frame's"*. The
+     * failure it exists to prevent is the one the bullet names — an unconditional reveal of the midpoint
+     * between two frames far apart lands the viewport on the elided gap between them, showing neither.
+     *
+     * Fitting is measured on the nodes' own rectangles in the scroll content's coordinates, which is the
+     * honest question ("would both nodes be on screen together"). Each node has already scrolled *itself* to
+     * its ranges — that is `SpotlightRenderer.revealCenter`, which runs per editor in
+     * [com.audioexplainer.tree.TreePlanView.applyStep] — so what is left for this to decide is only where the
+     * outer pane goes.
+     *
+     * Returns true when it showed them all, false when it fell back; [lastRevealReport] says which.
+     */
+    fun revealNodes(primary: CodeNodeView, touched: List<CodeNodeView>): Boolean {
+        if (disposed) return false
+        val others = touched.filter { it !== primary }
+        if (others.isEmpty()) {
+            revealNode(primary)
+            return false
+        }
+        // A folded ancestor has laid nothing out at its real size, so expand before any geometry is read —
+        // the same precondition [revealNode] opens with, and for the same reason.
+        for (node in touched) expandTo(node)
+        val view = viewportRect()
+        val union = unionInContent(touched)
+        if (view.height <= 0 || union == null || union.height > view.height) {
+            // They do not fit (or the geometry is not there yet). The primary is the one frame the step is
+            // *about*, so it is what the reader gets — never the midpoint, which is nobody's code.
+            revealNode(primary)
+            lastRevealReport = "multi-frame: " + touched.size + " node(s) did not fit " +
+                "(" + (union?.height ?: -1) + "px of " + view.height + "px) — revealed the primary; " +
+                lastRevealReport
+            return false
+        }
+        for (node in touched) node.reRevealStep()
+        content.scrollRectToVisible(union)
+        lastRevealReport = "multi-frame: " + touched.size + " node(s) fitted " +
+            "(" + union.height + "px of " + view.height + "px) band=" +
+            union.y + ".." + (union.y + union.height) + "px"
+        // The same deferred second pass [revealNode] takes, for the same reason (constraint 20): every
+        // measurement above was read against geometry other rules are still moving this turn.
+        ApplicationManager.getApplication().invokeLater {
+            if (!disposed) {
+                unionInContent(touched)?.let { content.scrollRectToVisible(it) }
+            }
+        }
+        return true
+    }
+
+    /**
+     * The smallest rectangle in [content]'s coordinates holding all of [nodes], or null when any of them has
+     * no geometry yet.
+     *
+     * `convertRectangle` walks whatever hierarchy the node is actually in, which for a nested child is an
+     * inlay's component inside its parent's editor — so this works at every depth without the caller
+     * knowing the depth.
+     */
+    private fun unionInContent(nodes: List<CodeNodeView>): Rectangle? {
+        var union: Rectangle? = null
+        for (node in nodes) {
+            if (node.width <= 0 || node.height <= 0 || !node.isShowing) return null
+            val r = SwingUtilities.convertRectangle(node, Rectangle(0, 0, node.width, node.height), content)
+            union = union?.union(r) ?: r
+        }
+        return union
+    }
+
+    /**
+     * **Fold away every nesting that holds none of [keep]** — what enforcing the per-step line budget
+     * actually does on screen (Phase 2 decision 8, Phase 3's bullet).
+     *
+     * The budget is *lines on screen at once*, and until now it could only be reported: a plan over ~80 kept
+     * lines got an `[info]` and rendered anyway. A scene is the frames on screen together, so the one lever
+     * that changes the number without changing what the author asked for is **which of those frames are
+     * expanded** — and a step that is narrating one node has no need of its siblings' bodies.
+     *
+     * So a step over budget collapses the nestings whose subtree it is not talking about, and stepping into
+     * one expands it again ([setActiveNode] already does that, innermost-first). Nothing is dropped and no
+     * `keep` range is second-guessed; the reader can re-open any of them by hand, and does not lose them by
+     * doing so — the next over-budget step re-collapses only what it is not using.
+     *
+     * Returns how many nestings it collapsed, for the log line that has to say.
+     */
+    fun collapseAllExcept(keep: Set<CodeNodeView>): Int {
+        var collapsed = 0
+        for (nesting in mutableNestings) {
+            if (nesting.state != EmbedState.EMBEDDED) continue
+            // Keep a nesting open when the step touches its child or anything nested inside it: collapsing an
+            // ancestor of the active node would hide the very thing being narrated.
+            val wanted = subtreeOf(nesting.child).any { it in keep }
+            if (wanted || nesting.collapsed) continue
+            nesting.setCollapsed(true)
+            collapsed++
+        }
+        return collapsed
+    }
+
+    /** [node] and everything nested inside it, at any depth. */
+    fun subtreeOf(node: CodeNodeView): List<CodeNodeView> {
+        val out = mutableListOf(node)
+        var i = 0
+        while (i < out.size) {
+            val current = out[i++]
+            for (nesting in mutableNestings) {
+                if (nesting.parent === current && nesting.child !in out) out += nesting.child
+            }
+        }
+        return out
+    }
+
+    /** `levels=2 expanded=1 band=310..438px` — what the last [revealNode] actually did, for a report that must say. */
+    var lastRevealReport: String = "<no reveal yet>"
+        private set
 
     /** True when [node]'s whole slot is inside the outer viewport. Only meaningful for a root. */
-    fun viewportShows(node: CodeNodeView): Boolean {
-        if (node.parent !== content) return false
-        val view = scroll.viewport?.viewRect ?: return false
-        return view.contains(Rectangle(node.x, node.y, node.width, node.height))
-    }
-
     fun viewportRect(): Rectangle = scroll.viewport?.viewRect ?: Rectangle()
 
     /**
@@ -545,6 +791,14 @@ class CodeNestView(
 
         private var inlay: Inlay<*>? = null
 
+        /** The host-editor listeners behind the collapsed chevron, kept so [detach] can take them off again. */
+        private var chevronClicks: EditorMouseListener? = null
+
+        private var chevronMotion: EditorMouseMotionListener? = null
+
+        /** Whether the pointer is currently over the chevron, so the cursor is requested on the transition only. */
+        private var chevronHovered = false
+
         private val frame = NestedFrame(this)
 
         var collapsed: Boolean = false
@@ -570,7 +824,7 @@ class CodeNestView(
             }
             hostHeightBeforeEmbed = parent.contentHeight()
 
-            val offset = ReadAction.compute<Int, RuntimeException> { doc.getLineEndOffset(line0) }
+            val offset = ReadAction.computeBlocking<Int, RuntimeException> { doc.getLineEndOffset(line0) }
             val props = EditorEmbeddedComponentManager.Properties(
                 // The frame is sized by its content, not by the reader dragging its edge.
                 EditorEmbeddedComponentManager.ResizePolicy.none(),
@@ -599,6 +853,110 @@ class CodeNestView(
                 frame.addComponentListener(object : ComponentAdapter() {
                     override fun componentResized(e: ComponentEvent) = scheduleInlayUpdate()
                 })
+                installChevronHandlers()
+            }
+        }
+
+        /**
+         * **The collapsed chevron's click and cursor**, on the *host editor* rather than on a component.
+         *
+         * There is no component to hang them on, and that is the point of the G1c″ collapsed shape: the box is a
+         * [RangeHighlighter]'s custom renderer painted into the host's own text, so the only thing that can hear a
+         * click on it is an [EditorMouseListener]. Which makes this the exact case `spikes/tree1a4/` measured for the
+         * collapse toggle — *"drawn and unreachable"* — arriving in the one place where z-order cannot fix it.
+         *
+         * Both handlers hit-test against [chevronRectInContent], which derives from [LeaderArt.boxRect] like the
+         * painter does. One derivation, because "the chevron is drawn here and clicks there" is 1a‴'s
+         * two-notions-of-where-the-call-is defect wearing a different hat.
+         */
+        private fun installChevronHandlers() {
+            val clicks = object : EditorMouseListener {
+                override fun mousePressed(event: EditorMouseEvent) {
+                    val hit = chevronRectInContent() ?: return
+                    val p = pointInContent(event) ?: return
+                    if (!hit.contains(p)) return
+                    // Consumed so the click toggles the nesting instead of also moving the host's caret into the
+                    // token — a caret jump the reader did not ask for and cannot see the reason for.
+                    event.mouseEvent.consume()
+                    // A toggle since G1c‴, not an expand: the chevron is drawn in both states, and an affordance that
+                    // is visible in a state where it does nothing is worse than no affordance at all.
+                    setCollapsed(!collapsed)
+                }
+            }
+            val motion = object : EditorMouseMotionListener {
+                override fun mouseMoved(event: EditorMouseEvent) {
+                    val hit = chevronRectInContent()
+                    val p = pointInContent(event)
+                    val over = hit != null && p != null && hit.contains(p)
+                    // **On the transition only.** This fires for every mouse move over the host editor, and
+                    // `setCustomCursor` is a global request rather than a local assignment — re-asserting `null` on
+                    // every move would fight every *other* cursor provider in the editor (the ctrl-hover hand over a
+                    // reference is the obvious one) for as long as the pointer is inside a host.
+                    if (over == chevronHovered) return
+                    chevronHovered = over
+                    // `setCustomCursor` rather than `contentComponent.cursor`: the editor re-asserts its own cursor on
+                    // every move, so a plain assignment is overwritten within the same gesture.
+                    parent.editor.setCustomCursor(this@Nesting, if (over) HAND else null)
+                }
+            }
+            parent.editor.addEditorMouseListener(clicks)
+            parent.editor.addEditorMouseMotionListener(motion)
+            chevronClicks = clicks
+            chevronMotion = motion
+        }
+
+        private fun pointInContent(event: EditorMouseEvent): Point? {
+            val src = event.mouseEvent.component ?: return null
+            return SwingUtilities.convertPoint(src, event.mouseEvent.point, parent.editor.contentComponent)
+        }
+
+        /**
+         * The chevron's rectangle in the host editor's content coordinates, or null when there is none to hit — no
+         * token located, the expansion open, or the affordance switched off.
+         *
+         * Recomputed per call and never cached, for [LeaderArt.TokenBoxRenderer]'s reason: `offsetToXY` is what knows
+         * where a folded, scrolled, re-fonted document draws, and all three move the box without an event this class
+         * could listen to.
+         */
+        internal fun chevronRectInContent(): Rectangle? {
+            // No `collapsed` test of its own since G1c‴ — the chevrons are drawn in both states, so they are clickable in
+            // both. The state still goes *into* the derivation, because G1c⁗'s `BOTTOM_BORDER` has a target in one state
+            // only and this is the same call the painter makes.
+            if (state != EmbedState.EMBEDDED || parent.editor.isDisposed) return null
+            val range = tokenOffsets ?: return null
+            // Constraint 12, and `ReadAction.computeBlocking` like the other twelve sites in this package. RD-2026.1
+            // deprecates the `compute(ThrowableComputable)` overload; the replacement is **`computeBlocking`**, which
+            // the deprecated method's own body already calls, so the swap is behaviour-preserving by construction and
+            // was made once for every site rather than per call. (The plan had guessed `runReadActionBlocking`, which
+            // does not exist — the name came from the bytecode, not from memory.)
+            return ReadAction.computeBlocking<Rectangle?, RuntimeException> {
+                // **The pad belongs here too**, and leaving it out was the G1c⁵ fix's own near-miss: this is the
+                // rectangle a *click* is tested against, and [LeaderArt.TokenBoxRenderer] paints from a box that is
+                // `boxPadBelow` taller. A chevron drawn here and hit-tested there is 1a‴'s two-notions-of-where-the-
+                // call-is defect wearing its fourth hat, and for [ChevronStyle.BOTTOM_BORDER] — whose band sits at the
+                // box's *bottom* — the whole target would have been off by the pad.
+                LeaderArt.boxRect(parent.editor, range.first, range.last + 1, style.boxPadBelow)
+                    ?.let { LeaderArt.chevronRect(it, style.chevron, collapsed) }
+            }
+        }
+
+        /** `[x=418,y=260,width=16,height=17]` — where a click has to land to toggle this nesting. */
+        fun chevronRectReport(): String = chevronRectInContent()?.toString() ?: "<none>"
+
+        /**
+         * **The token box itself**, in the host editor's content coordinates — the same [LeaderArt.boxRect] call the
+         * renderer paints from and the chevron is hit-tested from, exposed so a check can compare two boxes without
+         * re-deriving either.
+         *
+         * G1c⁵ needs it for the question the round asked in one line — *"the collapsed boxes touch each other in
+         * collapsed mode in `wide` (where they are sequential)"* — which is a claim about the distance between two of
+         * these rectangles and cannot be answered from one.
+         */
+        fun boxRectInContent(): Rectangle? {
+            val range = tokenOffsets ?: return null
+            if (parent.editor.isDisposed) return null
+            return ReadAction.computeBlocking<Rectangle?, RuntimeException> {
+                LeaderArt.boxRect(parent.editor, range.first, range.last + 1, style.boxPadBelow)
             }
         }
 
@@ -613,34 +971,28 @@ class CodeNestView(
         internal fun applyLeaderRole() {
             if (state != EmbedState.EMBEDDED) return
             child.setTopEdgeDrawn(LeaderArt.drawsFrameTop(style.leader))
+            // The second half of the top edge, and it moves with the mode exactly as the first does: `BRACE` gives
+            // the frame the corner it stopped drawing for itself when the run moved onto the header's row (K3).
+            child.setTopCornersRounded(LeaderArt.roundsFrameTop(style.leader))
             child.setLandsOnExcerpt(true)
+            // Beside the landing rather than anywhere else, because it is the landing's precondition and not a
+            // decoration: this is the one call that decides a node must be able to put a member at the top of its own
+            // viewport, so it is the one place that can also make sure the room to do so exists.
+            child.setLandingSlack(style.nodeSlack)
             applyTokenMark()
-            installToggle()
-        }
-
-        /**
-         * **One** collapse affordance, in the nested node's own header band — verdict 4.
-         *
-         * 1a‴ had two: a triangle painted on the leader strip and a `▸` on the collapsed stub. The strip's is gone
-         * (the strip still *accepts* the click, which is a target rather than an affordance) and the stub's is a
-         * dashed border now, so this control is the only thing on screen claiming to fold the expansion.
-         *
-         * It lives in the child rather than in the frame because the child owns its chrome, and where a header band
-         * is depends entirely on which chrome that is — [CodeNodeView.setCornerControl] resolves that, including
-         * the [NodeChrome.PLAIN] case where there is no band and the control goes just inside the top corner. Which
-         * chrome a nested child has is now a rule ([CodeNestView.chromeFor]), so a same-file child is *always* the
-         * bandless case rather than only when a knob said so.
-         */
-        private fun installToggle() {
-            if (!style.toggleInHeader) {
-                child.setCornerControl(null)
-                return
-            }
-            child.setCornerControl(ToggleControl(this))
         }
 
         internal fun detach() {
             removeTokenMark()
+            // Before the inlay, because these hang off the *host's* editor and therefore outlive the child: a
+            // motion listener left on a live editor keeps calling `setCustomCursor` for a nesting that is gone.
+            if (!parent.editor.isDisposed) {
+                chevronClicks?.let { parent.editor.removeEditorMouseListener(it) }
+                chevronMotion?.let { parent.editor.removeEditorMouseMotionListener(it) }
+                parent.editor.setCustomCursor(this, null)
+            }
+            chevronClicks = null
+            chevronMotion = null
             inlay?.let {
                 try {
                     if (it.isValid) Disposer.dispose(it)
@@ -658,8 +1010,8 @@ class CodeNestView(
          * rule 2 locator, and the fallback is supposed to be the *same picture*, which it cannot be if the two
          * surfaces disagree about which characters the call is.
          */
-        private fun locateToken(line0: Int): IntRange? = ReadAction.compute<IntRange?, RuntimeException> {
-            LeaderArt.locateCallToken(parent.editor.document, line0, edge.callToken)
+        private fun locateToken(line0: Int): IntRange? = ReadAction.computeBlocking<IntRange?, RuntimeException> {
+            LeaderArt.locateCallToken(parent.editor.document, line0, edge.callToken, edge.callOccurrence)
         }
 
         /**
@@ -689,7 +1041,21 @@ class CodeNestView(
                     range.first, range.last + 1, TOKEN_LAYER, TextAttributes(), HighlighterTargetArea.EXACT_RANGE,
                 ).also {
                     it.customRenderer = LeaderArt.TokenBoxRenderer(
-                        LeaderArt.leaderBase(), LeaderArt.closesTokenBox(style.leader),
+                        LeaderArt.leaderBase(),
+                        // Closed in `ARROW` always — and **in every mode while collapsed**, which is G1c″: *"leaving
+                        // only the invoker box (WITH bottom border in all modes)"*. Constraint 16 says the bottom edge
+                        // belongs to whatever continues the outline, and with the expansion hidden nothing does, so the
+                        // box closes it itself. Which also makes the collapsed box the one shape that is identical in
+                        // all three leader modes.
+                        LeaderArt.closesTokenBox(style.leader) || collapsed,
+                        // **In both states since G1c‴**, where it was collapsed-only: *"it feels like reverse
+                        // 'collapsing' chevron is missing in the same place in expanded mode."* Same rectangle either
+                        // way — only the direction changes — so the reader's hand learns one target for both actions.
+                        style.chevron,
+                        /* collapsed = */ collapsed,
+                        // The same number as the frame's top inset (expanded) or its whole height (collapsed), so the
+                        // box's bottom edge lands on the strip's row 0 in one state and on clear margin in the other.
+                        style.boxPadBelow,
                     )
                 }
             } catch (t: Throwable) {
@@ -715,7 +1081,45 @@ class CodeNestView(
             if (collapsed == next || state != EmbedState.EMBEDDED) return
             collapsed = next
             frame.setCollapsed(next)
+            // **The box carries the whole collapsed state now** — its bottom edge comes back and the chevron turns
+            // round — because G1c″ removed the row that used to carry it. Re-applied rather than repainted: the
+            // renderer is constructed with both the mode and the chevron's direction, so a repaint would redraw the
+            // old shape perfectly.
+            applyTokenMark()
+            // The hand cursor is deliberately *not* cleared here any more. Before G1c‴ the chevron existed only while
+            // collapsed, so expanding left the pointer hovering nothing; now the affordance survives the toggle in
+            // place, and clearing the cursor would make it look dead until the next mouse move.
             updateInlay()
+            // **Both directions owe a landing, and they owe it to two different nodes.** After `updateInlay`, because a
+            // landing clamps to `content − viewport` and neither node's extent is final until the frame has its height.
+            //
+            // *Expanding* owes it to the **child** — see [CodeNodeView.invalidateLanding]. Collapsing does not: the
+            // child's viewport is 0 px while folded, so re-arming on the way down would spend the attempt cap on a
+            // target unreachable at any offset and retire the landing for good, which is the bug that method exists to
+            // fix.
+            //
+            // *Both* owe it to the **host**, and that is G1c⁵'s defect — see [CodeNodeView.invalidateLandingAsHost].
+            // The host's viewport never goes away; its content shrinks by the frame's whole height, which can leave it
+            // shorter than the viewport, and then the platform clamps the host to offset 0 and nothing re-issues the
+            // landing it had already latched. Collapse is the direction the reader reported, and expand is included
+            // because the extent moves back by the same amount — one edge of a change is not a rule.
+            if (!next) child.invalidateLanding()
+            parent.invalidateLandingAsHost()
+            scheduleLanding(0)
+        }
+
+        /**
+         * One rung of [CodeNestView.revealNode]'s walk: take a band in the child's coordinates into the host's editor,
+         * scroll the host the minimum needed to show it, and answer where it landed in the **host node's** coordinates.
+         *
+         * Null when the conversion cannot be trusted — a detached or failed nesting, a disposed host, or a frame that
+         * is not inside the host's content component ([frameIsInHostContent]'s question, asked of the child).
+         */
+        internal fun showBandInHost(bandInChild: Rectangle): Rectangle? {
+            if (state != EmbedState.EMBEDDED || parent.editor.isDisposed) return null
+            val content = parent.editor.contentComponent
+            if (!SwingUtilities.isDescendingFrom(child, content)) return null
+            return parent.showContentBand(SwingUtilities.convertRectangle(child, bandInChild, content))
         }
 
         /**
@@ -733,6 +1137,16 @@ class CodeNestView(
         internal fun updateInlay() = updateInlayChain(this)
 
         /**
+         * The frame's own top inset — where the strip, and therefore the child, actually begins inside [frame].
+         *
+         * Exposed because [NestStyle.boxPadBelow] made it non-zero and a check was deriving the child's first row from
+         * the frame's `y` alone, so it probed inside the strip and reported three live editors dead. Same shape as the
+         * chevron hit-test the pad's own round nearly shipped wrong: the defect is never *two derivations of one fact*,
+         * it is *a change applied to one of them*.
+         */
+        internal fun frameTopInset(): Int = frame.insets.top
+
+        /**
          * This inlay alone.
          *
          * The one call that cannot be left to Swing: `revalidate()` on the frame walks up to the nearest validate
@@ -743,6 +1157,16 @@ class CodeNestView(
             val i = inlay ?: return
             if (!i.isValid) return
             frame.revalidate()
+            // **A `frame.validate()` stood here for exactly one round, as a hypothesis, and G1c⁶ refuted it.**
+            //
+            // The reasoning was sound and wrong: `revalidate` queues a layout while `Inlay.update` re-measures now
+            // through `NestedFrame.getPreferredSize`, so the inlay could capture a height from an unlaid-out child —
+            // small, intermittent, worst on the last sibling a chain walk reaches. Forcing the layout first should
+            // then have closed it. It did not: `AuditHandler.Handle: pref=379px inlay=377px`, the same nesting of
+            // three, the same last one, with the `validate()` in place. **So the cause is not layout ordering**, and
+            // the line is gone rather than left in looking like it earned its place. What is now known and was not
+            // before: the delta survives a forced layout, so whatever moves the frame's preferred height moves it
+            // *after* the inlay is told, and the next attribution starts there rather than here.
             try {
                 i.update()
             } catch (t: Throwable) {
@@ -756,17 +1180,6 @@ class CodeNestView(
             frame.restyle()
             applyLeaderRole()
             updateInlay()
-        }
-
-        /** True when the child is showing the single collapse control — what a check on verdict 4 asks. */
-        fun hasToggle(): Boolean = child.cornerControlComponent() != null
-
-        /** The control's rectangle in [target]'s coordinates, so a hit-test check can aim at it. */
-        fun toggleBoundsIn(target: JComponent): Rectangle? {
-            val c = child.cornerControlComponent() ?: return null
-            val holder = c.parent ?: return null
-            if (!SwingUtilities.isDescendingFrom(c, target) && holder !== target) return null
-            return SwingUtilities.convertRectangle(holder, c.bounds, target)
         }
 
         /**
@@ -798,10 +1211,18 @@ class CodeNestView(
          */
         fun edgeReport(): String =
             "leader=${style.leader} boxClosed=${LeaderArt.closesTokenBox(style.leader)} " +
-                "frameTop wanted=${LeaderArt.drawsFrameTop(style.leader)} drawn=${child.topEdgeDrawn}"
+                "frameTop wanted=${LeaderArt.drawsFrameTop(style.leader)} drawn=${child.topEdgeDrawn} " +
+                "frameCorners wanted=${LeaderArt.roundsFrameTop(style.leader)} drawn=${child.topCornersRounded}"
 
-        /** True when the node's border agrees with the leader mode — the stale-segment check, as a boolean. */
-        fun edgesAgree(): Boolean = child.topEdgeDrawn == LeaderArt.drawsFrameTop(style.leader)
+        /**
+         * True when the node's border agrees with the leader mode — the stale-segment check, as a boolean.
+         *
+         * **Both top questions, since K3.** They disagree in exactly the case the check exists for: switching out
+         * of `BRACE` leaves a rounded corner on a frame whose leader now lands on it square, which is the same
+         * stale segment G1c′ named, one radius smaller.
+         */
+        fun edgesAgree(): Boolean = child.topEdgeDrawn == LeaderArt.drawsFrameTop(style.leader) &&
+            child.topCornersRounded == LeaderArt.roundsFrameTop(style.leader)
 
         // ── What the report reads ──
 
@@ -809,7 +1230,7 @@ class CodeNestView(
         internal fun tokenXRange(): Pair<Int, Int>? {
             val range = tokenOffsets ?: return null
             if (parent.editor.isDisposed) return null
-            return ReadAction.compute<Pair<Int, Int>?, RuntimeException> {
+            return ReadAction.computeBlocking<Pair<Int, Int>?, RuntimeException> {
                 val a = parent.editor.offsetToXY(range.first)
                 val b = parent.editor.offsetToXY(range.last + 1)
                 if (b.x <= a.x) null else a.x to b.x
@@ -826,17 +1247,16 @@ class CodeNestView(
          *
          * Re-derivation is exactly what went wrong in 1a‴, one level down: the same row computed twice by two
          * owners is how a leader ends up anchored to a line's centre while a box is anchored to its bottom.
+         *
+         * **Which is what this function itself was until the verification round's finding 1 was chased down.** It
+         * computed `offsetToXY(lineStart).y + lineHeight + boxPadBelow` — the same arithmetic as
+         * [LeaderArt.boxRect], written a second time, *beside* a [boxRectInContent] that already had it. Same
+         * answer, and two owners of it: the class of defect this file keeps naming, sitting inside the accessor
+         * whose KDoc warns about it. It now delegates, which also fixes a real difference — [LeaderArt.boxRect]
+         * returns null when the token is split by a fold or a soft wrap and **no box is drawn at all**, where this
+         * used to hand a check a row to sample for a box that is not there.
          */
-        fun boxBottomRow(): Int? {
-            val line = callLine ?: return null
-            if (parent.editor.isDisposed) return null
-            return ReadAction.compute<Int?, RuntimeException> {
-                val doc = parent.editor.document
-                val line0 = line - 1
-                if (line0 < 0 || line0 >= doc.lineCount) return@compute null
-                parent.editor.offsetToXY(doc.getLineStartOffset(line0)).y + parent.editor.lineHeight
-            }
-        }
+        fun boxBottomRow(): Int? = boxRectInContent()?.let { it.y + it.height }
 
         /**
          * The leader's endpoints in [target]'s coordinates: the token box's bottom-left and bottom-right.
@@ -935,7 +1355,7 @@ class CodeNestView(
 
         private val strip = LeaderStrip(nesting)
 
-        private val stub = StubRow(nesting)
+        private val grip = ResizeGrip(nesting)
 
         private var collapsed = false
 
@@ -943,59 +1363,92 @@ class CodeNestView(
             // A null layout, kept although the overlap it was for is gone. It was needed because the leader's tips
             // had to reach a `TITLED_BORDER`'s drawn line 7 px *inside* the child's bounds, which no `BorderLayout`
             // region can express; that chrome is scrapped and the strip now ends exactly where the child begins
-            // ([seamRows] == 0). What still needs hand-positioning is the collapsed stub swapping in for the child
-            // in the same slot, and the z-order below — which a `BorderLayout` would also not give.
+            // ([seamRows] == 0). What still needs hand-positioning is the grip band inside the bottom inset, the
+            // collapse to a zero-height frame, and the z-order below — none of which a `BorderLayout` gives.
             layout = null
             isOpaque = false
             applyBorder()
             add(nesting.child)
-            add(stub)
+            add(grip)
             add(strip)
             // Index 0 paints last. This one line is why the extended tips are visible at all: with the strip
             // behind, the child's opaque background erases them completely (measured, with the control, in
             // `spikes/tree1a4/`).
             setComponentZOrder(strip, 0)
-            stub.isVisible = false
         }
 
         private fun applyBorder() {
-            border = BorderFactory.createEmptyBorder(0, 0, style.gapBelow, style.inset)
+            // Collapsed gives up its margins, because while collapsed the frame *is* one margin: its whole height is
+            // [NestStyle.collapsedFrameHeight] and an inset on top of that would be padding on padding. Expanded, the
+            // top inset is where [NestStyle.boxPadBelow] lives — `doLayout` already places the strip at `ins.top` and
+            // `getPreferredSize` already counts it, so the pad reaches the geometry through a term both already had.
+            // That is what keeps [LeaderArt.BOX_BOTTOM_IS_STRIP_ROW_0] true rather than approximately true: the strip's
+            // row 0 descends by exactly what the box's bottom edge descends by.
+            border = if (collapsed) {
+                BorderFactory.createEmptyBorder()
+            } else {
+                BorderFactory.createEmptyBorder(style.boxPadBelow, 0, style.gapBelow, style.inset)
+            }
         }
 
+        /**
+         * The band at the frame's bottom that [ResizeGrip] occupies — the frame's own bottom inset, floored at
+         * [GRIP_H] so the grip survives a `gapBelow` of 0.
+         *
+         * It is the inset rather than an extra row for a measured reason: the strip learned in `spikes/tree1a4/` that a
+         * component overlapping the child takes the nested editor's clicks and wheel notches, and that lesson is on the
+         * books as "re-introduce the `contains()` override the moment anything overlaps again". A grip inside the gap
+         * below the frame's border overlaps nothing, so nothing has to be disclaimed. At the default `gapBelow` of 6 the
+         * geometry is byte-for-byte what it was before the grip existed.
+         */
+        private fun gripBand(): Int = maxOf(insets.bottom, GRIP_H)
+
         /** The gap between the strip's last row and the child's first. Zero means the outline is continuous. */
-        fun seamRows(): Int {
-            val body = if (collapsed) stub else nesting.child
-            return body.y - (strip.y + strip.height)
-        }
+        fun seamRows(): Int = nesting.child.y - (strip.y + strip.height)
 
         fun stripBounds(): Rectangle = Rectangle(strip.bounds)
 
         override fun getPreferredSize(): Dimension {
+            val w = width.takeIf { it > 0 } ?: MIN_NODE_WIDTH
+            // **The box's bottom margin while collapsed, and nothing else** — [NestStyle.collapsedFrameHeight]. It was
+            // zero, on the G1c″ round's *"we should just hide it totally in collapsed view, leaving only the invoker
+            // box"*, and that verdict is unchanged: no row of the *child* survives here and none is reserved for one.
+            // What G1c⁵ found is that "leaving only the invoker box" leaves the box nowhere to put its own bottom edge
+            // — the row below the call row belongs to the next statement, and in `case: wide` that statement is the next
+            // call site, so the boxes touched. Whether the platform honours a small non-zero inlay as exactly as it
+            // honoured a zero one is a measurement, not an assumption: [Nesting.inlayHeight] is in the report for this.
+            if (collapsed) return Dimension(w, style.collapsedFrameHeight())
             val ins = insets
-            val body = if (collapsed) stub else nesting.child
-            return Dimension(
-                (width.takeIf { it > 0 } ?: MIN_NODE_WIDTH),
-                style.stripHeight() + body.preferredSize.height + ins.top + ins.bottom,
-            )
+            return Dimension(w, style.stripHeight() + nesting.child.preferredSize.height + ins.top + gripBand())
         }
 
         override fun doLayout() {
+            if (collapsed) {
+                // Nothing is drawn and nothing is hit-testable: the chevron on the host's token box is the only
+                // affordance while folded, and it is not this component's.
+                nesting.child.setBounds(0, 0, 0, 0)
+                strip.setBounds(0, 0, 0, 0)
+                grip.setBounds(0, 0, 0, 0)
+                return
+            }
             val ins = insets
             val w = (width - ins.left - ins.right).coerceAtLeast(0)
-            val body = if (collapsed) stub else nesting.child
+            val band = gripBand()
             val bodyY = ins.top + style.stripHeight()
-            body.setBounds(ins.left, bodyY, w, (height - bodyY - ins.bottom).coerceAtLeast(0))
+            nesting.child.setBounds(ins.left, bodyY, w, (height - bodyY - band).coerceAtLeast(0))
             // Exactly its own band, with no overlap into the child — which is what makes the leader's last row and
             // the frame's first adjacent rather than overlapping, and what keeps the strip out of the nested
             // editor's mouse without needing a `contains()` override to do it.
             strip.setBounds(ins.left, ins.top, w, style.stripHeight())
+            grip.setBounds(ins.left, (height - band).coerceAtLeast(0), w, band)
         }
 
         fun setCollapsed(next: Boolean) {
             collapsed = next
             nesting.child.isVisible = !next
-            stub.isVisible = next
-            strip.repaint()
+            strip.isVisible = !next
+            grip.isVisible = !next
+            applyBorder()
             revalidate()
             repaint()
         }
@@ -1004,65 +1457,79 @@ class CodeNestView(
 
         fun restyle() {
             applyBorder()
-            stub.restyle()
             revalidate()
             strip.repaint()
         }
     }
 
     /**
-     * The collapsed nesting: one row, **with a border** so it still reads as a frame (verdict 4).
+     * **The nested node's bottom edge, as a splitter** — the G1c″ round's *"a capability to change subeditor height by
+     * dragging its bottom border (like a splitter)"*.
      *
-     * 1a‴ shipped a bare `JBLabel` here and the reader's note was exact — a collapsed expansion looked like a line
-     * of grey text in the middle of the caller's code rather than like something folded. Dashed, because dashed is
-     * what "there is more of this" already means everywhere else in the surface.
+     * It sits in the frame's bottom inset, immediately below the drawn border, and never overlaps the child — see
+     * [NestedFrame.gripBand] for why that is a rule here and not a coincidence.
      *
-     * **It obeys the leader mode's border suppression like the expanded child does**, which it did not until the G1c′
-     * round: *"collapsed view in corners and braces mode — collapsed subeditor should also have no top border."* A
-     * collapse does not change who owns the top edge — the leader still arrives into this row — so a stub that drew
-     * its own put a second line where the leader already ended. Hence [LeaderArt.framePath] rather than a
-     * `drawRoundRect` of its own.
-     *
-     * No triangle: the affordance is the node's header control, and there is exactly one of it now.
+     * **Deltas are taken in screen coordinates**, which is the one non-obvious part: the grip moves *with* the edge it
+     * is dragging, so a delta measured against this component's own origin is measured against a moving datum and the
+     * drag either runs away or stalls depending on which direction it is going.
      */
-    private inner class StubRow(private val nesting: Nesting) : JPanel() {
+    private inner class ResizeGrip(private val nesting: Nesting) : JComponent() {
 
-        private val label = JBLabel(text())
+        private var startScreenY = 0
+
+        private var startHeight = 0
+
+        private var hovered = false
 
         init {
-            layout = null
             isOpaque = false
-            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            toolTipText = "Expand ${nesting.child.spec.title}"
-            label.foreground = JBColor.GRAY
-            add(label)
+            cursor = Cursor.getPredefinedCursor(Cursor.S_RESIZE_CURSOR)
+            toolTipText = "Drag to resize ${nesting.child.spec.title}"
             addMouseListener(object : MouseAdapter() {
-                override fun mousePressed(e: MouseEvent) = nesting.setCollapsed(false)
+                override fun mousePressed(e: MouseEvent) {
+                    startScreenY = e.locationOnScreen.y
+                    startHeight = nesting.child.publishedHeight()
+                }
+
+                override fun mouseEntered(e: MouseEvent) {
+                    hovered = true
+                    repaint()
+                }
+
+                override fun mouseExited(e: MouseEvent) {
+                    hovered = false
+                    repaint()
+                }
+            })
+            addMouseMotionListener(object : MouseMotionAdapter() {
+                override fun mouseDragged(e: MouseEvent) {
+                    nesting.child.setHeightOverride(startHeight + (e.locationOnScreen.y - startScreenY))
+                    // Synchronously, not through the coalesced geometry callback: the inlay is what holds the frame's
+                    // height, and one `invokeLater` per drag event is one frame of lag on every pixel of the gesture.
+                    nesting.updateInlay()
+                }
             })
         }
 
-        private fun text(): String = "${nesting.child.spec.file.name}  ·  ${nesting.child.spec.title}"
+        override fun getPreferredSize(): Dimension = Dimension(MIN_LEADER_WIDTH, GRIP_H)
 
-        fun restyle() {
-            label.text = text()
-            repaint()
-        }
-
-        override fun getPreferredSize(): Dimension =
-            Dimension(MIN_NODE_WIDTH, label.preferredSize.height + 2 * STUB_PAD)
-
-        override fun doLayout() {
-            label.setBounds(STUB_PAD + 4, STUB_PAD, (width - 2 * STUB_PAD - 8).coerceAtLeast(0),
-                (height - 2 * STUB_PAD).coerceAtLeast(0))
-        }
-
+        /**
+         * A short centred bar, faint when idle and solid under the pointer.
+         *
+         * Always-visible rather than hover-only because a gesture with no mark is a gesture nobody finds; faint because
+         * the alternative — a full-width divider — would draw a second horizontal line directly under the frame's own
+         * border, which is the doubled-line defect constraint 16 exists to prevent, arriving as decoration.
+         */
         override fun paintComponent(g: Graphics) {
+            if (width <= 0 || height <= 0) return
             val g2 = g.create() as Graphics2D
             try {
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                g2.color = leaderBase()
-                g2.stroke = DASHED
-                g2.draw(LeaderArt.framePath(0, 0, width, height, LeaderArt.drawsFrameTop(style.leader)))
+                g2.color = if (hovered) leaderBase() else leaderColor(true)
+                g2.stroke = SOLID
+                val cx = width / 2
+                val cy = height / 2
+                g2.drawLine(cx - GRIP_MARK_W / 2, cy, cx + GRIP_MARK_W / 2, cy)
             } finally {
                 g2.dispose()
             }
@@ -1111,9 +1578,23 @@ class CodeNestView(
             val g2 = g.create() as Graphics2D
             try {
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                g2.color = leaderColor(nesting.collapsed)
-                g2.stroke = if (nesting.collapsed) DASHED else SOLID
-                g2.draw(leaderPath(style.leader, x1, x2, w, bottom, style.arrowTurn))
+                // No collapsed variant any more: G1c″ hides the whole frame when folded, so the strip is simply not
+                // visible then and a dashed-leader branch here would be a shape nothing can reach. What carries the
+                // folded state is the token box ([Nesting.applyTokenMark]).
+                g2.color = leaderColor(false)
+                g2.stroke = SOLID
+                g2.draw(leaderPath(style.leader, x1, x2, w, bottom))
+                // **The expanded state's affordance, in the one mode that has none on the box.** Drawn after the
+                // leader so it can never come out half under a stroke — see [LeaderArt.collapseHintRect].
+                //
+                // Only this mode, though it would be one line fewer to draw it in all three: the two chevrons
+                // already carry an affordance in *both* states, in one rectangle that only changes direction,
+                // and G1c‴ made that deliberate — "the reader's hand learns one target for both actions". A
+                // second mark in the strip would give those modes two, which is the rule this hint exists to
+                // restore rather than to break.
+                if (style.chevron == ChevronStyle.BOTTOM_BORDER) {
+                    LeaderArt.collapseHintRect(x1, x2, bottom)?.let { LeaderArt.drawCollapseHint(g2, it) }
+                }
             } finally {
                 g2.dispose()
             }
@@ -1152,6 +1633,11 @@ class CodeNestView(
         override fun getPreferredSize(): Dimension {
             var y = style.gap
             for (node in mutableRoots) y += node.preferredSize.height + style.gap
+            // **Constraint 21's slack**, and it belongs here rather than in `doLayout`: it is scrollable *room*, not a
+            // gap between nodes, so it has to be in the height the viewport scrolls over and in nothing that positions
+            // a component. See [NestStyle.bottomSlack] for why a drag needs it and why no cleverness at the grip can
+            // substitute.
+            y += style.bottomSlack
             // A width, not a minimum: with `Scrollable.tracksViewportWidth` this is the threshold below which the
             // pane scrolls horizontally instead of squeezing the nodes — and a squeezed host re-wraps its
             // callout and re-measures every nested child with it (constraint 9).
@@ -1173,60 +1659,21 @@ class CodeNestView(
         override fun getScrollableTracksViewportHeight(): Boolean = false
     }
 
-    /**
-     * The single collapse control: a small triangle that points down when the expansion is open and right when it
-     * is folded, exactly as a tree's disclosure does.
-     *
-     * A real component rather than something painted into the strip, because "one affordance" is a hit-testing question
-     * and the probe answered it as one: three components deep inside an embedded component, a control is reachable
-     * — but only when it is z-lifted above the editor's own component, which [CodeNodeView.setCornerControl] does.
-     * Behind it, the control is drawn and dead, which is the failure mode that reads as "the frame is broken".
-     */
-    private inner class ToggleControl(private val nesting: Nesting) : JComponent() {
-
-        init {
-            isOpaque = false
-            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            toolTipText = "Collapse or expand ${nesting.child.spec.title}"
-            addMouseListener(object : MouseAdapter() {
-                override fun mousePressed(e: MouseEvent) = nesting.setCollapsed(!nesting.collapsed)
-            })
-        }
-
-        override fun getPreferredSize(): Dimension = Dimension(TOGGLE_W, TOGGLE_H)
-
-        override fun paintComponent(g: Graphics) {
-            val g2 = g.create() as Graphics2D
-            try {
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                g2.color = LeaderArt.leaderColor(nesting.collapsed)
-                val w = width.toFloat()
-                val h = height.toFloat()
-                val t = GeneralPath()
-                if (nesting.collapsed) {
-                    t.moveTo(w * 0.32f, h * 0.18f)
-                    t.lineTo(w * 0.72f, h * 0.5f)
-                    t.lineTo(w * 0.32f, h * 0.82f)
-                } else {
-                    t.moveTo(w * 0.18f, h * 0.34f)
-                    t.lineTo(w * 0.82f, h * 0.34f)
-                    t.lineTo(w * 0.5f, h * 0.72f)
-                }
-                t.closePath()
-                g2.fill(t)
-            } finally {
-                g2.dispose()
-            }
-        }
-    }
-
     private companion object {
         const val MIN_NODE_WIDTH = 200
         const val PREFERRED_NODE_WIDTH = 640
         const val MIN_LEADER_WIDTH = 40
-        const val TOGGLE_W = 13
-        const val TOGGLE_H = 11
-        const val STUB_PAD = 3
+
+        /**
+         * The drag band's height — and the floor under `gapBelow`, whose default (6) it matches exactly so the grip
+         * costs no pixels at the shipping setting.
+         */
+        const val GRIP_H = 6
+
+        /** Width of the grip's centred mark. Short, because it is a hint and not a divider. */
+        const val GRIP_MARK_W = 22
+
+        val HAND: Cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
 
         /** How far a "next line is below the frame" comparison may miss by. One line of rounding, no more. */
         const val LINE_SLACK = 4
@@ -1239,14 +1686,13 @@ class CodeNestView(
 
         // Shared with the token box, because the reader sees one object (constraint 18).
         val SOLID = LeaderArt.SOLID
-        val DASHED = LeaderArt.DASHED
 
         fun leaderBase(): Color = LeaderArt.leaderBase()
 
         fun leaderColor(collapsed: Boolean): Color = LeaderArt.leaderColor(collapsed)
 
-        fun leaderPath(leader: NestLeader, x1: Int, x2: Int, w: Int, bottom: Int, arrowTurn: Float): GeneralPath =
-            LeaderArt.leaderPath(leader, x1, x2, w, bottom, arrowTurn)
+        fun leaderPath(leader: NestLeader, x1: Int, x2: Int, w: Int, bottom: Int): GeneralPath =
+            LeaderArt.leaderPath(leader, x1, x2, w, bottom)
 
         /**
          * How many deferred passes the landing is allowed before it stops trying.
@@ -1289,6 +1735,12 @@ class CodeTreeEdge(
      * column extent, not only its row (schema decision 1). Null means "the whole trimmed line".
      */
     val callToken: String? = null,
+    /**
+     * Which match of [callToken] on [parentLine], 1-based — the schema's `callOccurrence`. Only needed when
+     * the same token appears twice on the call line; past the last match the leader falls back to the whole
+     * trimmed line, exactly as a null token does.
+     */
+    val callOccurrence: Int = 1,
 )
 
 /** Whether a child was actually nested, and if not, why — so degrading to top-level is visible, not silent. */
@@ -1335,13 +1787,16 @@ enum class LeaderState {
  * mode would have to *restore* both borders and draw nothing between them — a fourth mode, not an off-switch.
  * `FLARE` never got built: dismissed on the strength of the pre-flight PNGs before the sandbox ever opened.
  *
- * All three are specified to the pixel in `TreeOfCode.md` §1a⁵ 1 and measured in `spikes/tree1a5/OutlineProbe.java`;
+ * All three are specified to the pixel in `TreeOfCode.rules.md` §1a⁵ 1 and measured in `spikes/tree1a5/OutlineProbe.java`;
  * the shapes live in [LeaderArt.leaderPath], which is the only place they exist.
  */
 enum class NestLeader {
     /**
      * **The diagonals.** Two straight runs, box's bottom-left corner → frame's top-left and bottom-right →
-     * top-right. Box: left, top, right. Frame: left, right, bottom. One continuous path, and the default.
+     * top-right. Box: left, top, right. Frame: left, right, bottom. One continuous path.
+     *
+     * Was the default through Phase 1's nine rounds and is not any more — see [BRACE], and the note on
+     * [NestStyle.leader] for why the change is recorded rather than just made.
      */
     CORNERS,
 
@@ -1356,20 +1811,103 @@ enum class NestLeader {
      *
      * Its advantage over [CORNERS], and the reason both ship: *"unlike diagonals braces do not overlap with header
      * text"* — the run sits in the strip's own top row, where a diagonal cuts down across the whole band.
+     *
+     * **The default since Phase 4**, on that advantage: the reader took it before the Phase 3/4 round rather
+     * than after one, so it is a preference stated in advance and not a verdict a round produced.
      */
     BRACE,
 
     /**
      * **A reference, not a join.** Box: all four sides. Frame: all four sides. The box's bottom border continues
      * past its own bottom-right corner — collinear, so it reads as the edge extended and not as a new line leaving a
-     * corner — runs right to an x between the box's right edge and the frame's, turns down, and ends in an
-     * arrowhead pointing at the frame's top border **without touching it**.
+     * corner — runs right to an x between the box's right edge and the frame's, turns down, and ends in an arrowhead
+     * landing on the frame's top border.
      *
-     * The probe measures that as two components where the other modes are one, which is the whole difference between
-     * pointing at something and being attached to it. The turn-down x is the only free parameter in any of the three
-     * shapes — see [NestStyle.arrowTurn].
+     * **Two earlier readings of this mode were wrong and both were corrected by the G1c′ round**, so they are named
+     * here rather than left as plausible: the head does *not* stop short of the frame (*"arrow does not reach header top
+     * per 2px"* — a floating arrowhead reads as misdrawn, not as a distinction), and connectivity does *not*
+     * discriminate the mode (the outline is one component here as in the other two). What makes it a reference is that
+     * **both outlines stay closed** — the suppressed-edge count, not the gap and not the component count.
+     *
+     * Its turn-down x used to be the one free parameter in any of the three shapes; it is settled at the midpoint now
+     * ([LeaderArt.ARROW_TURN]).
      */
     ARROW,
+}
+
+/**
+ * **Which shape carries the collapse/expand gesture on the invoking token box** — the *mode*, no longer the weight.
+ *
+ * The affordance exists because the G1c″ round replaced the collapsed stub row with nothing, taking the expand gesture
+ * with it. 1a‴ verdict 4's row was not *wrong* — a bare label read as grey text in the caller's code, a dashed border
+ * read as folded — the question changed to whether there should be a row at all, and a well-drawn row is still a row.
+ * So the affordance moved onto the box.
+ *
+ * **Weight is settled and has left this enum.** G1c⁗ judged the three weights and kept one: *"out of all chevrons the
+ * 'double' is best — scrap others."* So `SINGLE` and `CIRCLED` are **deleted**, every chevron here is the double stroke,
+ * and what stays open is the axis it points along and whether it is a chevron at all. Same round, same rule as the
+ * edge-button's deletion: an option that still compiles reads as one still on offer.
+ *
+ * **Position is settled too**: floating past a gap to the right of the box — *"floating chevron is best — doesn't hinder
+ * code in box"* — for the two chevron modes. [BOTTOM_BORDER] is the exception, and it is an exception on purpose.
+ *
+ * Geometry lives in [LeaderArt.chevronRect] and [LeaderArt.chevronWidth] — one place, because the same call positions
+ * the painter and hit-tests the click ([CodeNestView.Nesting] installs that on the *host* editor, a custom highlighter
+ * renderer having nothing to attach a listener to).
+ */
+enum class ChevronStyle {
+    /** No affordance on the box at all. The control: it is what proves the chevron is what the reader is clicking. */
+    NONE,
+
+    /**
+     * `»` beside the box, pointing **right to expand and left to collapse** — G1c‴'s shape at G1c⁗'s chosen weight,
+     * and the default through Phase 1's rounds. [BOTTOM_BORDER] is the default now.
+     *
+     * The axis is the open question the reader named: a horizontal chevron reads as *"there is more of this along the
+     * line"*, which is where the callee's code actually is (in another file, reached by following the call).
+     */
+    HORIZONTAL,
+
+    /**
+     * The same double stroke turned a quarter: `⌄` to expand, `⌃` to collapse, in the same rectangle.
+     *
+     * Reads as *"there is more of this below"*, which is where the expansion physically opens. Same target as
+     * [HORIZONTAL] so the reader's hand does not have to learn a second place — only the glyph turns.
+     */
+    VERTICAL,
+
+    /**
+     * **No chevron: the box's own bottom border, thickened to `LeaderArt.BOX_BOTTOM_THICK` and clickable, with a tiny
+     * down triangle set into it.** Clicking it expands the nesting.
+     *
+     * **This mode is deliberately asymmetric, and it is the first affordance here that is.** The bottom border exists
+     * only while collapsed — constraint 16 gives the box no bottom edge once the nesting is open, because that edge *is*
+     * the leader — so there is nothing to thicken and nothing to click in the expanded state. Collapsing back therefore
+     * falls to the two things that already accept it: the leader strip above the child's header
+     * ([CodeNestView.LeaderStrip], clickable since 1a‴) and the arrow in [NestLeader.ARROW].
+     *
+     * **The strip now says so, which is the Phase 3/4 round's correction.** The gesture was always there and nothing
+     * pointed at it, so an expanded nesting read as having lost its control — *"you are right to suggest a hint for
+     * collapse"*. [LeaderArt.collapseHintRect] puts an upward accent triangle under the invoking token, in the strip
+     * between the call row and the child's header. A hint and not a target: the strip's whole band stays the click,
+     * so there is still exactly one place to press and nothing new to hit-test.
+     *
+     * Which re-opens 1a‴ verdict 4's *"exactly one affordance"* as a real choice rather than a rule: this mode trades one
+     * target in both directions for a target that never leaves the box's own outline. The reader asked for all three to
+     * be configurable, so the trade is theirs to make — but a mode where expand and collapse live in different places has
+     * to be judged as such, which is what `case: same-file` is for (no header band, so the strip is the only fallback).
+     *
+     * The thickening is on the **bottom** edge, not the right wall, and that distinction is why this is not the deleted
+     * `EDGE_BUTTON` returning: a thickened right wall ate the invoking token's own glyphs, which is what got it rejected
+     * (*"floating chevron … doesn't hinder code in box"*). The bottom edge is below the text row's descenders.
+     *
+     * **The default since Phase 4, which puts its asymmetry on the default path** — so the round judged it as the
+     * shipped shape rather than as an alternative, and it came back with the missing half named. What is left of the
+     * asymmetry is real and is not a defect: expanding is a click *on the box* and collapsing is a click *below* it,
+     * one row apart, now that both states say where. And [NestStyle.boxPadBelow]'s 3 px is load-bearing rather than a
+     * comparison, because it is what keeps this border off the descenders it was measured overlapping.
+     */
+    BOTTOM_BORDER,
 }
 
 /**
@@ -1379,41 +1917,74 @@ enum class NestLeader {
  * reads as nesting, so no width is spent on an indent), and its non-zero values only reproduced a defect the
  * reader had already rejected — past ~24 px the frame's left edge passes the invoking token and the left diagonal
  * runs backwards. A knob whose other settings are known-bad is not a setting.
+ *
+ * **Data, so that a re-style can ask whether anything actually changed.** [restyleNest] re-applies every
+ * nesting's frame inset and re-arms the landing, which moves the reader's own scroll — acceptable when the
+ * leader mode really did change, and a defect when Settings ▸ Apply merely repainted a callout colour. See
+ * [TreePlanView.restyle].
  */
-class NestStyle(
+/**
+ * **What a step change does to the nestings it is not narrating** — `NestStyle.stepFold`, and the K3 round's
+ * *"for some steps explainer keeps expanded items, though it's not required and only takes up space."*
+ *
+ * The schema has nothing to say here and deliberately so: no [com.audioexplainer.Step] field states which frames
+ * are open, because openness is a property of the reader's screen and not of the walkthrough. The author says
+ * which frames a step *touches*; which of the others are worth their height is the surface's judgement, and this
+ * is that judgement as one setting.
+ *
+ * `collapseAllExcept` is the whole mechanism in every mode, so the difference between these three is only *when*
+ * it runs — never what it does. An ancestor of a touched node is never folded (it would hide the narration), and
+ * stepping back into a folded node re-expands it innermost-first, so no value here can strand the reader in code
+ * they cannot see.
+ */
+enum class StepFold {
+    /** Never fold on a step change: the tree only ever moves when the reader moves it. */
+    NEVER,
+
     /**
-     * Height of the leader strip — **the vertical distance from the box's bottom-edge level to the frame's top**,
-     * and therefore not a spacing default. `null` means [LeaderArt.defaultStripHeight], which is the shipping
-     * behaviour; a number is the bench's override for the sweep.
-     *
-     * All three leaders originate on the box's bottom row and have to arrive at the frame's, so this number *is* a
-     * diagonal's slope, a brace's drop and how far `ARROW` descends before its head. Every one of the three shapes
-     * changes character with it, which makes it something to judge by eye at a stated width (constraint 9) rather
-     * than a gap to pick.
-     *
-     * **It is not one number, and the G1c′ round is what settled that** — 22 px was chosen on the probe's PNGs for
-     * all three, and on real code the answer split: *"corners and brace — 14px enough, arrow needs 22px."* Which is
-     * the shape of the thing rather than a preference, so it belongs to the mode ([LeaderArt.defaultStripHeight])
-     * and not to this class.
+     * Fold only while the mounted scene is over `PlanLoader.LINE_BUDGET` — what shipped before K3, and it is
+     * kept as the control that says whether the budget was doing anything on its own.
      */
-    val stripHeightOverride: Int? = null,
-    val leader: NestLeader = NestLeader.CORNERS,
+    OVER_BUDGET,
+
     /**
-     * Where [NestLeader.ARROW] turns down, as a fraction of the span from the box's right edge to the frame's.
-     *
-     * The only free parameter in any of the three shapes, so it is the only one with a number to defend: 0.5, the
-     * midpoint, judged on the probe's 30 / 50 / 70 % sweep at 640 px. Ignored by the other two modes.
+     * Fold on every step change. The default since K3: a nesting the step does not touch is spending height on
+     * code the narration is not about, and the budget was never the reason that was true — it only decided
+     * whether anyone did something about it.
      */
-    val arrowTurn: Float = LeaderArt.DEFAULT_ARROW_TURN,
+    ALWAYS,
+}
+
+data class NestStyle(
     /**
-     * Put the single collapse control in the nested node's header band (1a‴ verdict 4).
-     *
-     * A knob because "no visible affordance at all" is a real alternative: the leader strip accepts the click
-     * whether or not a triangle is drawn on it, and 1a‴'s complaint was about there being *two* marks rather than
-     * about there being one.
+     * **`BRACE` since Phase 4, and `CORNERS` before it.** Recorded rather than quietly swapped, because §1c's
+     * rule is that a default is a *judged verdict* — nine rounds ran on `CORNERS`. This one is the reader
+     * changing their mind before the Phase 3/4 round rather than after it, on `BRACE`'s stated advantage
+     * (*"unlike diagonals braces do not overlap with header text"*), so what Reset now restores is a
+     * preference and not a measurement. If the round sends it back, the verdict wins.
      */
-    val toggleInHeader: Boolean = true,
-    /** Space between the nested frame and the host's next line of code. */
+    val leader: NestLeader = NestLeader.BRACE,
+    /**
+     * Which shape carries the box's collapse/expand gesture — and **this is a shipped user setting, not a spike knob.**
+     *
+     * G1c⁗ settled the weight (double) and then asked for the *mode* to stay configurable: *"I think we should allow
+     * other configurations — current left/right chevron, the up/down chevron, and one more chevronless bottom border
+     * mode."* So unlike the knobs this class was full of, the survivors here are not candidates awaiting a verdict; they
+     * are three answers the reader wants to keep — and Phase 4 shipped all four as *Settings ▸ Tools ▸ Audio Explainer ▸ Code tree ▸ Collapse control*, resolved from the persisted name by [TreeStyle].
+     *
+     * [ChevronStyle.NONE] stays as the control — with it a nesting has no affordance at all, which is the only thing
+     * that proves the other three are what the click is reaching. It is also the last knob left in this class that is
+     * a *comparison* rather than a choice, the header-band toggle having been deleted in the post-G1c⁗ cleanup: the
+     * chevron won verdict 4's "exactly one affordance", so a second control in the header had nothing left to be.
+     */
+    val chevron: ChevronStyle = ChevronStyle.BOTTOM_BORDER,
+    /**
+     * **Which nestings a step change folds away** — see [StepFold]. `ALWAYS` since K3, where the reader read the
+     * previous default as the defect: the fold ran only over the line budget, so a scene comfortably under it kept
+     * every nesting open through every step regardless of what the step was about.
+     */
+    val stepFold: StepFold = StepFold.ALWAYS,
+    /** Space between the nested frame and the host's next line of code. Also the drag grip's band — `GRIP_H`. */
     val gapBelow: Int = 6,
     /**
      * Grow a **top-level** node that hosts a nesting to its content instead of capping it (constraint 8).
@@ -1430,18 +2001,98 @@ class NestStyle(
     val growHosts: Boolean = true,
     val gap: Int = 12,
     val inset: Int = 14,
+    /**
+     * **Scrollable room below the last root node** — constraint 21, and the fix for the G1c‴ round's finding 1.
+     *
+     * *"When I start dragging up … the subeditor bottom actually stays in place — instead top of subeditor moves down.
+     * This is probably due to scroll … The behaviour goes away if I expand collapsed lines below — there's now plenty of
+     * scroll space below."* Both halves of that are right, and the arithmetic says the gesture cannot be saved at the
+     * gesture: with the pane scrolled to its maximum, shrinking the content by `d` **forces** the offset down by `d`,
+     * and the dragged edge's absolute position falls by `d` too, so its position on screen is unchanged by
+     * construction. Keeping it under a pointer that moved needs an offset the clamp no longer allows.
+     *
+     * So the fix is upstream of the drag: keep this much scrollable room past the last node, and the clamp only bites
+     * once a single gesture has consumed it. It earns its place independently — without it the last node's own bottom
+     * edge can only ever be read at the very bottom of the pane.
+     *
+     * A number to judge, not a measured one. Too small and finding 1 comes back on a long drag; too large and the pane
+     * scrolls into emptiness, which reads as content missing.
+     */
+    val bottomSlack: Int = 240,
+    /**
+     * **Rows the token box owns below the call row** — constraint 22, G1c⁵'s ask, and one number behind two symptoms.
+     *
+     * *"In the bottom_border mode it is desirable to increase the bottom padding, as the border overlaps letter
+     * bottoms and commas… Also the collapsed boxes touch each other in collapsed mode in `wide` (where they are
+     * sequential)."* Both are the same missing height. A text row is `lineHeight` tall and its descenders reach the
+     * bottom of it, and [LeaderArt.BOX_BOTTOM_IS_STRIP_ROW_0] puts the box's bottom edge on the row *after* the call
+     * row — which while collapsed is the **next statement's own row**, and in `wide` that next statement is the next
+     * call site. So one number was being asked to be three things: the descenders' clearance, the box's bottom edge,
+     * and the following box's top edge.
+     *
+     * The room is taken twice over, and only one of the two halves is the padding:
+     *
+     * - **expanded** — the frame's *top inset* ([NestedFrame.applyBorder]), so the strip's row 0 moves down with the
+     *   box's bottom edge and the identity above stays literally true;
+     * - **collapsed** — [collapsedFrameHeight], which is `2 ×` this: the pad under the box, then the same again as
+     *   clear space before the next row of code. That second half is what stops sequential boxes touching, and it is
+     *   why the collapsed frame is no longer 0 px.
+     *
+     * **A knob, because the right value is a judgement and one of its values is the control.** `0` reproduces the
+     * shape G1c⁵ judged — box flush to the row, boxes touching in `wide` — which is the only way to be sure the fix
+     * is what moved the pixels. `3` is what the round asked for. `5` is [LeaderArt.BOX_BOTTOM_THICK], the one value
+     * that puts the *whole* clickable band clear of the text rather than only its lower half — worth seeing beside
+     * `3`, because the complaint was about the band and not only about the edge.
+     */
+    val boxPadBelow: Int = 3,
+    /**
+     * **Whether a landing node's editor gets a page of scrollable room past its last line** — G1c⁶, and the third
+     * surface on which [bottomSlack]'s argument has now been made. See [CodeNodeView.setLandingSlack] for the
+     * arithmetic; this is only the switch, and it is a switch rather than a number for the reason given there.
+     *
+     * **A knob because it has a visible cost, not because the value is in doubt.** `false` is the control and
+     * reproduces G1c⁵'s and G1c⁶'s finding exactly: collapse a nesting inside a node that landed on a member and the
+     * node drops to line 1. `true` fixes that and buys a node the ability to be wheeled down into a page of blank
+     * space, which is the reader's call and no measurement's — the same trade [bottomSlack] names in its own last
+     * paragraph, one surface in.
+     */
+    val nodeSlack: Boolean = true,
 ) {
-    /** The strip's height for this mode: the override if there is one, else the mode's own number. */
-    fun stripHeight(): Int = stripHeightOverride ?: LeaderArt.defaultStripHeight(leader)
+    /**
+     * **The collapsed frame's height** — `2 × boxPadBelow`, and no longer zero.
+     *
+     * One derivation shared by the frame that publishes it and the check that asserts it, which is the rule this file
+     * keeps re-learning. G1c″'s *"hide it totally in collapsed view, leaving only the invoker box"* is about the
+     * **child** and still holds exactly: nothing of the child survives a collapse and no row is reserved for one. What
+     * survives is the box's own bottom margin, which was never the child's to give up. Two of these rows, because the
+     * box needs one below it and the next line of code needs one below that — see [boxPadBelow].
+     */
+    fun collapsedFrameHeight(): Int = boxPadBelow * 2
+
+    /**
+     * The strip's height — **the vertical distance from the box's bottom-edge level to the frame's top**, and
+     * therefore a property of the leader mode rather than a spacing default.
+     *
+     * All three leaders originate on the box's bottom row and have to arrive at the frame's, so this number *is* a
+     * diagonal's slope, a brace's drop and how far `ARROW` descends before its head. **It is not one number, and the
+     * G1c′ round is what settled that** — 22 px was chosen for all three on the pre-flight probe's PNGs, and on real
+     * code the answer split: *"corners and brace — 14px enough, arrow needs 22px."* So it belongs to the mode, and the
+     * bench's `auto/14/22/30` override is deleted now that `auto` has won.
+     */
+    fun stripHeight(): Int = LeaderArt.defaultStripHeight(leader)
 
     fun with(
-        stripHeightOverride: Int? = this.stripHeightOverride,
         leader: NestLeader = this.leader,
-        arrowTurn: Float = this.arrowTurn,
-        toggleInHeader: Boolean = this.toggleInHeader,
+        chevron: ChevronStyle = this.chevron,
+        stepFold: StepFold = this.stepFold,
         gapBelow: Int = this.gapBelow,
         growHosts: Boolean = this.growHosts,
         gap: Int = this.gap,
         inset: Int = this.inset,
-    ) = NestStyle(stripHeightOverride, leader, arrowTurn, toggleInHeader, gapBelow, growHosts, gap, inset)
+        bottomSlack: Int = this.bottomSlack,
+        boxPadBelow: Int = this.boxPadBelow,
+        nodeSlack: Boolean = this.nodeSlack,
+    ) = NestStyle(
+        leader, chevron, stepFold, gapBelow, growHosts, gap, inset, bottomSlack, boxPadBelow, nodeSlack,
+    )
 }

@@ -71,13 +71,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         @JvmField var gapGutter: Boolean = true
         @JvmField var gapGutterWidth: Int = DEF_GAP_WIDTH
 
-        // ── Step decorations (MoreUI step 1) ───────────────────────────────────
-
-        /**
-         * Docked callout above the active highlight, showing that highlight's own short label. Renders
-         * nothing when the walkthrough carries no per-highlight label, so plain plans are unaffected.
-         */
-        @JvmField var callout: Boolean = true
+        // ── Callout appearance ─────────────────────────────────────────────────
 
         /** Callout box background: [accentColor] blended this far toward the editor background. */
         @JvmField var calloutTintPercent: Int = DEF_CALLOUT_TINT
@@ -138,54 +132,136 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         @JvmField var calloutBelow: Boolean = false
 
         /**
-         * Relation arrows follow [accentColor] like every other decoration unless this is off, in which case
-         * they use [arrowColor]. A flag plus a colour rather than "blank means inherit", so the colour picker
-         * always has a real colour to show.
+         * **One colour per link slot** — `LinkArt.SLOTS` of them, in slot order, blank meaning *derive*.
+         *
+         * This replaced an `arrowUseAccent` flag plus a single `arrowColor`, which could only ever move the
+         * *base* of the hue rotation: five links on one step took five hues off it whether the reader liked
+         * those hues or not. What a reader actually wants to fix is a specific slot that reads badly against
+         * their theme, and that is a picker per slot.
+         *
+         * **Blank is not "no colour", it is "the derived one"**, and it is the default for every slot, so out
+         * of the box this changes nothing: `LinkArt.color(accent, slot)` still answers, slot 0 is still the
+         * accent, and `probes/LinkBench.java`'s hue-distance assertions still measure the shipped palette.
+         * A stored list shorter than `SLOTS` — an older settings file, or a hand-edited one — reads as blank
+         * from there on for the same reason.
          */
-        @JvmField var arrowUseAccent: Boolean = true
-        @JvmField var arrowColor: String = DEF_ACCENT_COLOR
+        @JvmField var arrowSlotColors: MutableList<String> = MutableList(LinkArt.slots()) { "" }
 
-        /** Arrow line width in tenths of a px — 14 is the 1.4 px hairline the arrows shipped with. */
+        /**
+         * Link line width in tenths of a px.
+         *
+         * **10, not the 14 it was.** Until the K1 round this value was parsed into a style object nothing
+         * read, so the number here and the 1.0 px `LinkArt` actually strokes had been free to disagree —
+         * and had. Wiring the knob up moved the default to the drawing rather than the drawing to the
+         * default: 1 px is what shipped and what nine rounds judged.
+         */
         @JvmField var arrowThicknessTenths: Int = DEF_ARROW_THICKNESS
 
-        /** Arrowhead length (and width) in px. */
+        /** Arrowhead length (and width) in px — also the direction indicator's size on the rail. */
         @JvmField var arrowHeadSize: Int = DEF_ARROW_HEAD
 
-        /** Square the elbow's corners instead of rounding them. */
+        /** Square every turn in a link's run instead of rounding it to `LinkArt`'s 4 px. */
         @JvmField var arrowSquareElbow: Boolean = false
 
         /**
          * Draw a relation's note beside the arrow's leg. Off leaves that text to the callout box and the
-         * gutter pointer's tooltip, which carry it anyway — useful on a busy file.
+         * portal's tooltip, which carry it anyway — useful on a busy file.
          */
         @JvmField var arrowLabels: Boolean = true
 
-        /**
-         * Include a highlight's one-line `example` (an `input → output` illustration) in the callout box,
-         * below the prose aside and drawn upright so it reads as code. Gated *inside* [callout] — the example
-         * lives in that box, so turning the box off hides it too. Does nothing on highlights with no
-         * `example`, which is most of them.
-         */
-        @JvmField var calloutExample: Boolean = true
+        // **There is no "Step decorations" group any more, and that is deliberate.**
+        //
+        // `callout`, `calloutExample`, `tokenFlash`, `tokenFlashMs` and `relations` were five switches over
+        // four things the *narrator* had already decided to say. Every one of them was inert on a step that
+        // carried no `note` / `example` / `token` / `relations` — which is most steps — so what they actually
+        // offered was the power to silence a step that did have something to add. A walkthrough's author put
+        // it there; hiding it is not a preference, it is a way to be shown less than you were told.
+        //
+        // They are gone rather than pinned to `true`: a setting that only has one useful value is a row in a
+        // dialog, a field in `audioExplainer.xml` and a branch in the renderer, all of them costing reading
+        // for nothing. The flash's duration went with them — `DEF_TOKEN_FLASH_MS` is now simply what the
+        // fade takes, and it stayed a named constant so `SpotlightRenderer` and its KDoc still agree on one
+        // number.
+
+        // ── The code tree (Phase 4) ────────────────────────────────────────────
+        //
+        // **Every default here is a judged verdict, not a starting point**, which is what makes Reset-to-
+        // defaults restore the shape the reader actually approved across G1c′–G1c⁷ rather than whatever a
+        // constructor happened to say. `TreeStyle` is the one place these strings become the enums, and
+        // `PlanProbe` asserts each default names a real constant *and* agrees with `NestStyle()` /
+        // `CodeNodeStyle()`'s own default — two transcriptions of one verdict is exactly the drift this
+        // project keeps paying for.
+        //
+        // Values are the enum constant names (case-insensitively), so there is no second vocabulary to keep
+        // in step. An unrecognised one degrades to the default rather than failing the load: a settings file
+        // written by a newer build must not stop the tree from drawing.
 
         /**
-         * Briefly flash the identifier named by a highlight's `token` anchor when that step goes active,
-         * fading from [accentColor] into the line's own glow. Does nothing on highlights with no `token`,
-         * or when the token can't be found in the highlighted lines.
+         * **The leader mode** — `CORNERS` / `BRACE` / `ARROW`, and the headline setting of this whole group.
+         *
+         * One choice with three values and **no fourth**: constraint 16 makes the leader carry the token
+         * box's bottom edge and the child frame's top edge in the two joining modes, so "no leader" would
+         * leave a bottomless box above a topless frame with nothing between them. Chrome travels with it and
+         * is *not* offered beside it for the same reason — see [com.audioexplainer.tree.NodeChrome].
          */
-        @JvmField var tokenFlash: Boolean = true
-
-        /** Total flash duration in milliseconds; the fade is spread over this. */
-        @JvmField var tokenFlashMs: Int = DEF_TOKEN_FLASH_MS
+        @JvmField var treeLeader: String = DEF_TREE_LEADER
 
         /**
-         * Draw the relationships a walkthrough declares (`relations`): an arrow between two lines of the file
-         * on screen, and a clickable gutter pointer + callout line for a target the editor can't point at
-         * (another file, an off-screen symbol). One toggle covers both forms — they are two renderings of the
-         * same authored fact, and a reader who doesn't want arrows over their code doesn't want half of them
-         * either. Does nothing on walkthroughs that declare no relations, which is most of them.
+         * Which shape carries a nesting's collapse/expand gesture: `HORIZONTAL` / `VERTICAL` /
+         * `BOTTOM_BORDER` / `NONE`. Asked for outright — *"we should allow other configurations"* — and
+         * `NONE` is the control that shows what the click was reaching.
          */
-        @JvmField var relations: Boolean = true
+        @JvmField var treeChevron: String = DEF_TREE_CHEVRON
+
+        /**
+         * What a step change does to the nestings it is **not** narrating: `NEVER` / `OVER_BUDGET` / `ALWAYS`.
+         *
+         * The one tree setting whose subject is the *walkthrough* rather than the picture, and it is here rather
+         * than in the schema on purpose — no step says which frames are open, because openness is a property of
+         * the reader's screen and not of the plan. See [com.audioexplainer.tree.StepFold].
+         */
+        @JvmField var treeStepFold: String = DEF_TREE_STEP_FOLD
+
+        /** How much of a node's path its caption shows: `FULL` / `PROJECT_RELATIVE` / `BASENAME`. */
+        @JvmField var treePath: String = DEF_TREE_PATH
+
+        /**
+         * How a node the step is not talking about is pushed back: `NONE` / `TINT` / `BORDER` /
+         * `TINT_AND_BORDER`. Every value is a **background** — constraint 1 leaves no foreground option to
+         * offer, because a foreground dim flattens each dimmed row to one grey and destroys the semantic
+         * colour the whole architecture exists to keep.
+         */
+        @JvmField var treeDeemphasis: String = DEF_TREE_DEEMPHASIS
+
+        /**
+         * How an elided run is drawn, and whether the reader can open it: `OPENABLE` (plain fold +
+         * placeholder) or `SEALED` (prettier, and shut for good — constraint 6, measured).
+         */
+        @JvmField var treeElision: String = DEF_TREE_ELISION
+
+        /**
+         * The **ceiling** on a node's height in px, not its size: constraint 8 orders it
+         * `min(excerpt, content, this + embedded + callout)`, so a short member gets its own few lines and
+         * only a long one meets this number.
+         */
+        @JvmField var treeMaxHeight: Int = DEF_TREE_MAX_HEIGHT
+
+        /**
+         * Let **every** node grow to its content instead of capping it. Off by default, and constraint 19 is
+         * why it is worth a warning rather than a shrug: a node with no viewport smaller than its content
+         * cannot be scrolled, so switching this on switches off the per-node reveal that Phase 3's attention
+         * policy is built out of.
+         */
+        @JvmField var treeGrowNodes: Boolean = false
+
+        /**
+         * Grow a **top-level** node that hosts a nesting, rather than capping it (`NestStyle.growHosts`).
+         *
+         * Narrowed to the root by the G1c′ round and left on: capping the root gives it an inner scrollbar
+         * inside the outer pane — two scrollbars for one node. Off is the comparison it has always been:
+         * the root at [treeMaxHeight] plus whatever is embedded, against the whole caller.
+         */
+        @JvmField var treeGrowHosts: Boolean = true
 
         // ── TTS / narration (Phase 7) ──────────────────────────────────────────
 
@@ -278,7 +354,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         const val DEF_CALLOUT_ARC = 6
         const val DEF_CALLOUT_BAR_W = 3
         const val DEF_CALLOUT_TEXT_SCALE = 100
-        const val DEF_ARROW_THICKNESS = 14
+        const val DEF_ARROW_THICKNESS = 10
         const val DEF_ARROW_HEAD = 7
 
         const val CALLOUT_FRAME_BAR = "bar"
@@ -286,6 +362,25 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         const val CALLOUT_FRAME_SOLID = "solid"
         const val CALLOUT_FRAME_NONE = "none"
         const val CALLOUT_FRAME_COMMENT = "comment"
+
+        // The tree's shipped defaults (Phase 4). Enum constant names, resolved in `TreeStyle`; each one is
+        // asserted against the enum *and* against the style class's own default, so the two cannot drift.
+        //
+        // Six of the nine are §1c's judged verdicts. **Three are not, and saying so is the point**: the leader
+        // and the collapse control were changed to `BRACE` / `BOTTOM_BORDER` by the reader before the Phase
+        // 3/4 round, where nine earlier rounds had run on `CORNERS` / `HORIZONTAL`; and the step fold arrives
+        // at `ALWAYS` from a K3 observation rather than from a comparison — *"for some steps explainer keeps
+        // expanded items, though it's not required and only takes up space"* — so `OVER_BUDGET`, the value that
+        // shipped, is on the page as the control that says whether it was the budget doing the work. A
+        // preference stated in advance is not the same kind of thing as a verdict a round produced, and Reset
+        // restores whichever one is here — so which it is has to be written down.
+        const val DEF_TREE_LEADER = "BRACE"
+        const val DEF_TREE_CHEVRON = "BOTTOM_BORDER"
+        const val DEF_TREE_STEP_FOLD = "ALWAYS"
+        const val DEF_TREE_PATH = "PROJECT_RELATIVE"
+        const val DEF_TREE_DEEMPHASIS = "TINT"
+        const val DEF_TREE_ELISION = "OPENABLE"
+        const val DEF_TREE_MAX_HEIGHT = 600
 
         const val DEF_TOKEN_FLASH_MS = 700
         const val DEF_ACTIVE_GLOW_COLOR = "FFFFFF"

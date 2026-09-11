@@ -2,7 +2,7 @@ package com.audioexplainer
 
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.OSProcessHandler
-import com.intellij.execution.process.ProcessAdapter
+import com.intellij.execution.process.ProcessListener
 import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.process.ProcessOutputTypes
 import com.intellij.notification.NotificationGroupManager
@@ -162,11 +162,11 @@ class ClaudeExplainer {
             if (lang.code != Languages.DEFAULT_CODE) {
                 appendLine(
                     "LANGUAGE: Generate the walkthrough in ${lang.displayName} (${lang.autonym}). Write the " +
-                        "`title`, every segment `title` and `explanation`, and every highlight `ttsText`, " +
+                        "`title`, every frame `title` and `explanation`, and every step `ttsText`, " +
                         "`explanation` and `note` in ${lang.displayName}. Keep code identifiers, file paths, and API names " +
-                        "verbatim (do NOT translate code) — a highlight's `token` especially, since it must match the " +
-                        "source text exactly to resolve, and its `example`, which is code. The same split applies to a " +
-                        "segment's `relations`: their `note` is prose, their `token` and `symbol` are code. " +
+                        "verbatim (do NOT translate code) — a beat's `token` and a frame's `callToken` especially, since " +
+                        "both must match the source text exactly to resolve, and `example`, which is code. The same split " +
+                        "applies to a frame's `relations`: their `note` is prose, their `token` and `symbol` are code. " +
                         "You MUST put \"language\":\"${lang.code}\" at the top " +
                         "level of the `set_plan` JSON.",
                 )
@@ -187,58 +187,87 @@ class ClaudeExplainer {
             appendLine(step1)
             if (skillPath != null) {
                 appendLine(
-                    "2. Build a lean `set_plan` (usually 1-2 segments) with dense, pointer-style highlights and good " +
-                        "plain-text `ttsText`, following docs/plan-schema.md exactly. Where a one-line aside next to " +
-                        "the code would genuinely help (a constraint, a gotcha, the reason behind a magic number), add " +
-                        "an optional one-sentence `note` to that highlight — sparingly, not on every one. Where a " +
-                        "highlight is really about ONE identifier, add an optional `token` with that name copied " +
-                        "verbatim from those lines, so the plugin can flash it — again sparingly. Where a concrete " +
+                    "2. Build a lean `set_plan` (usually 1-2 frames) with dense, pointer-style steps and good " +
+                        "plain-text `ttsText`, following docs/plan-schema.md exactly. A plan is `frames` (each one a " +
+                        "file plus the `keep` ranges visible in it — header rows as \"context\", the member itself as " +
+                        "\"focus\") plus `steps` (the narration, in order, each naming its frame and the `ranges` it " +
+                        "lights). EVERY line a step lights must be inside its frame's `keep`. Where a one-line aside " +
+                        "next to the code would genuinely help (a constraint, a gotcha, the reason behind a magic " +
+                        "number), add an optional one-sentence `note` to that step — sparingly, not on every one. " +
+                        "Where a step is really about ONE identifier, add an optional `beats` entry — " +
+                        "{\"line\":N,\"token\":\"…\"} with the name copied verbatim from THAT line, so the plugin " +
+                        "can pulse it — again sparingly. Where a concrete " +
                         "case would clarify a tricky transformation or a surprising result, add an optional " +
                         "ONE-LINE `example` (\"Parse(\\\"2024-01\\\") → DateOnly(2024, 1, 1)\") — one line only, and " +
                         "only where it teaches something the code doesn't show. Where two places are genuinely " +
                         "linked — a value produced on one line and consumed on another, a call whose target is in " +
-                        "another file — add an optional segment-level `relations` entry and the plugin will draw the " +
-                        "connection; 2-3 per segment at most, and anchor an endpoint inside the highlight it belongs to.",
+                        "another file — add an optional frame-level `relations` entry and the plugin will draw the " +
+                        "connection; 2-3 per frame at most, and anchor an endpoint inside the step it belongs to. " +
+                        "Declare a link ONCE: a cross-file one is drawn as a matched pair of portals, one in each " +
+                        "place, so give its far end both `file` and `line`. " +
+                        "Every plan renders as a tree of code — do not send `view` at all. When the explanation IS " +
+                        "a caller-callee chain, give each nested frame `parent`, `callLine` and `callToken` (the " +
+                        "call line must be a line the parent keeps). When it walks over several unrelated places " +
+                        "in turn, group the frames into `scene`s: frames sharing a `scene` are on screen together " +
+                        "and a step in another scene replaces them, so a long walkthrough keeps a handful of files " +
+                        "visible rather than all of them. A `parent` must be in the same `scene`.",
                 )
             } else {
                 // No skill dir on disk, so docs/plan-schema.md is unreachable and the agent has nothing to
                 // read. This inline copy is the FALLBACK mirror only — keep it in sync with that doc, which
                 // stays the source of truth for every other caller.
                 appendLine(
-                    "2. Build a lean `set_plan` (usually 1-2 segments) with dense, pointer-style highlights and good " +
+                    "2. Build a lean `set_plan` (usually 1-2 frames) with dense, pointer-style steps and good " +
                         "plain-text `ttsText`. Schema (1-based, inclusive line ranges; absolute file paths):",
                 )
                 appendLine(
-                    "   {\"type\":\"set_plan\",\"title\":\"…\",\"language\":\"${lang.code}\",\"segments\":[{\"id\":0,\"file\":\"…\",\"start\":N,\"end\":N," +
-                        "\"title\":\"…\",\"explanation\":\"…\",\"highlights\":[{\"start\":N,\"end\":N,\"ttsText\":\"…\",\"explanation\":\"…\",\"note\":\"…\",\"example\":\"…\",\"token\":\"…\"}]," +
-                        "\"relations\":[{\"kind\":\"flow\",\"from\":{\"line\":N,\"token\":\"…\"},\"to\":{\"line\":N,\"token\":\"…\"},\"note\":\"…\"}]}]}",
+                    "   {\"type\":\"set_plan\",\"title\":\"…\",\"language\":\"${lang.code}\"," +
+                        "\"frames\":[{\"id\":0,\"file\":\"…\",\"title\":\"…\",\"explanation\":\"…\",\"scene\":0," +
+                        "\"keep\":[{\"start\":N,\"end\":N,\"role\":\"context\"},{\"start\":N,\"end\":N,\"role\":\"focus\"}]," +
+                        "\"relations\":[{\"kind\":\"flow\",\"from\":{\"line\":N,\"token\":\"…\"},\"to\":{\"line\":N,\"token\":\"…\"},\"note\":\"…\"}]}]," +
+                        "\"steps\":[{\"frame\":0,\"ranges\":[{\"start\":N,\"end\":N}],\"ttsText\":\"…\",\"explanation\":\"…\"," +
+                        "\"note\":\"…\",\"example\":\"…\",\"beats\":[{\"line\":N,\"token\":\"…\"}]}]}",
                 )
                 appendLine(
-                    "   Highlight `note` is optional: ONE plain-text sentence, drawn as a callout box beside the code. " +
+                    "   A frame is ONE file plus the `keep` ranges visible in it — everything else is folded away. List " +
+                        "the class/method header rows yourself as \"context\" ranges (nothing derives them) and the " +
+                        "member the frame is about as the one \"focus\" range. EVERY line a step lights must be inside " +
+                        "its frame's `keep`, or it highlights a fold placeholder.",
+                )
+                appendLine(
+                    "   Step `note` is optional: ONE plain-text sentence, drawn as a callout box beside the code. " +
                         "Use it only where a margin aside helps; omit it otherwise.",
                 )
                 appendLine(
-                    "   Highlight `example` is optional: ONE line showing the code in action with concrete values " +
+                    "   Step `example` is optional: ONE line showing the code in action with concrete values " +
                         "(\"Parse(\\\"2024-01\\\") → DateOnly(2024, 1, 1)\"), drawn under the note. One line is a hard " +
                         "limit — no fences, no multi-statement snippets. Omit it unless a concrete case clarifies.",
                 )
                 appendLine(
-                    "   Highlight `token` is optional: the ONE identifier that highlight is about, copied verbatim from " +
-                        "its own lines (the plugin flashes it). Omit it when there is no single focal name.",
+                    "   Step `beats` is optional: [{\"line\":N,\"token\":\"…\"}], the ONE identifier that step is " +
+                        "about, copied verbatim from that line (the plugin pulses it). The line must be one the " +
+                        "step lights. Omit `beats` when there is no single focal name.",
                 )
                 appendLine(
-                    "   Segment `relations` is optional: each entry links two places — `kind` \"flow\" (A feeds B) or " +
-                        "\"backforth\", and `from`/`to` each {\"line\":N,\"token\":\"…\"}, or {\"file\":\"…\",\"symbol\":\"…\"} " +
+                    "   Frame `relations` is optional: each entry links two places — `kind` \"flow\" (A feeds B) or " +
+                        "\"backforth\", and `from`/`to` each {\"line\":N,\"token\":\"…\"}, or {\"file\":\"…\",\"line\":N,\"token\":\"…\"} " +
                         "for somewhere in another file, plus a short optional `note`. The plugin draws an arrow when both " +
-                        "ends are lines of this file and a clickable pointer otherwise. 2-3 per segment at most, and one " +
-                        "endpoint MUST be inside the highlight the relation belongs to or it is never shown.",
+                        "ends are lines of this file, and otherwise a matched pair of portals — one at each end, " +
+                        "so give a cross-file end a `file`, a `line` AND a `token`. 2-3 per frame " +
+                        "at most, and one endpoint MUST be inside the step the relation belongs to or it is never shown.",
                 )
             }
-            appendLine("   Use field names start/end/title/ttsText/highlights — never startLine/endLine/label/subHighlights.")
+            appendLine(
+                "   Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/" +
+                    "startLine/endLine/label/subHighlights.",
+            )
             appendLine("   The top-level \"language\" is the walkthrough's language code (\"en\" if English).")
             appendLine(
                 "3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and " +
-                    "~/.claude-explainer-token). Use a skill helper script, or curl directly. A {\"ok\":true} reply = success.",
+                    "~/.claude-explainer-token). Use a skill helper script, or curl directly. A {\"ok\":true} reply = " +
+                    "success. The reply also carries an `issues` array whenever the plan was partly dropped or " +
+                    "degraded — READ IT: an [error] there means the user cannot see part of what you wrote " +
+                    "(an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.",
             )
             appendLine(
                 "4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. " +
@@ -292,7 +321,7 @@ class ClaudeExplainer {
         val finalText = AtomicReference<String?>(null)
         val isError = AtomicBoolean(false)
 
-        handler.addProcessListener(object : ProcessAdapter() {
+        handler.addProcessListener(object : ProcessListener {
             override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
                 if (outputType == ProcessOutputTypes.STDERR) {
                     synchronized(lock) { stderr.append(event.text) }
@@ -381,7 +410,9 @@ class ClaudeExplainer {
         }
 
         val state = runCatching { service<ExplainerServerService>().server.walkthrough.getState() }.getOrNull()
-        val planLoaded = state != null && state.title.isNotEmpty() && state.segments.isNotEmpty()
+        // Frames, not projected segments: a plan whose frames all resolved but whose steps were dropped is
+        // still a plan that arrived, and the notification below says how much of it there is.
+        val planLoaded = state != null && state.title.isNotEmpty() && state.plan.frames.isNotEmpty()
 
         if (result.isError && !planLoaded) {
             val detail = result.finalText?.takeIf { it.isNotBlank() } ?: result.stderrTail.takeIf { it.isNotBlank() }
@@ -402,7 +433,8 @@ class ClaudeExplainer {
             activateSidebar(project)
             notify(
                 project, NotificationType.INFORMATION, "Walkthrough ready",
-                "<b>${StringUtil.escapeXmlEntities(state.title)}</b> — ${state.segments.size} segment(s). " +
+                "<b>${StringUtil.escapeXmlEntities(state.title)}</b> — ${state.plan.frames.size} frame(s), " +
+                    "${state.plan.steps.size} step(s). " +
                     "Open the <b>Audio Explainer</b> tool window and press Play.",
             )
         } else {

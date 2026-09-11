@@ -1,0 +1,88 @@
+{
+  "type": "set_plan",
+  "title": "Occurrence — the same token, counted",
+  "language": "en",
+  "frames": [
+    {
+      "id": 0,
+      "file": "src/Fixture.Core/SubInvoker.cs",
+      "title": "SubInvoker.Apply",
+      "explanation": "Every step here names a token that appears MORE THAN ONCE in its own range, so the only thing that decides which glyph is marked is `occurrence`. The renderer counts qualifying matches across the whole range, not per line — steps 5 and 6 are what prove that.",
+      "keep": [
+        { "start": 66, "end": 85, "role": "focus" }
+      ],
+      "relations": [
+        {
+          "kind": "flow",
+          "from": { "line": 77, "token": "running", "occurrence": 2 },
+          "to": { "line": 81, "token": "running", "occurrence": 1 },
+          "note": "the value read on 77, into the guard on 81 — the FROM end is the second `running` on its line"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "frame": 0,
+      "ranges": [{ "start": 77, "end": 77 }],
+      "token": "running",
+      "occurrence": 1,
+      "explanation": "Occurrence 1 of 2 on one line",
+      "note": "The assignment TARGET — leftmost `running` on line 77.",
+      "ttsText": "The running total is reassigned here, and the name appears twice on this one line. Occurrence one is the target being written."
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 77, "end": 77 }],
+      "token": "running",
+      "occurrence": 2,
+      "explanation": "Occurrence 2 of 2 on one line",
+      "note": "The ARGUMENT — same line, same token, one occurrence later. If this marks the same glyph as the step before, occurrence is being ignored.",
+      "ttsText": "Occurrence two is the same name used as the argument, further right on the same line."
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 82, "end": 82 }],
+      "token": "guarded.Amount",
+      "occurrence": 1,
+      "explanation": "A dotted token, twice on a line",
+      "note": "`guarded.Amount` is not a bare identifier — the whole-word test has to accept a dot on neither flank.",
+      "ttsText": "The rounded amount is compared against the original, so the same dotted expression appears twice on this line."
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 82, "end": 82 }],
+      "token": "guarded.Amount",
+      "occurrence": 2,
+      "explanation": "Its second appearance",
+      "ttsText": "Occurrence two is the right-hand side of that comparison."
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 68, "end": 78 }],
+      "token": "Apply",
+      "occurrence": 2,
+      "explanation": "Counting ACROSS lines, not within one",
+      "note": "Occurrence 1 is the declaration on line 68; occurrence 2 is the call on line 77. The count runs over the whole range.",
+      "ttsText": "The method's own name appears twice in this range — once where it is declared and once where an adjustment's own Apply is called."
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 76, "end": 78 }],
+      "token": "running",
+      "occurrence": 4,
+      "explanation": "The last one that exists",
+      "note": "Four in this range: one on 76, two on 77, one on 78. This is the boundary case that must still resolve.",
+      "ttsText": "Across these three lines the running total is named four times, and this is the fourth."
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 76, "end": 78 }],
+      "token": "running",
+      "occurrence": 5,
+      "explanation": "One past the end — validate and drop",
+      "note": "There is no fifth. The step must still render its lines and its callout; only the flash is dropped. A step that vanishes here is the defect.",
+      "ttsText": "Asking for a fifth occurrence when there are four is the validate-and-drop path: the step is unaffected, the pulse simply does not happen."
+    }
+  ]
+}

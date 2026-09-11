@@ -8,7 +8,7 @@ For each segment:
 
 Sidebar active (from step 0):
 ```bash
-~/.claude/skills/audio-explainer/scripts/explainer.sh send '{"type": "goto", "segmentId": {id}}'
+~/.claude/skills/audio-explainer/scripts/explainer.sh send '{"type": "goto", "frameId": {id}}'
 ```
 
 Fallback (no sidebar):

@@ -5,29 +5,37 @@ audio-explains selected code / the symbol under the cursor, with synced line hig
 **Claude Code (headless)** as the backbone. See `../JetbrainsAudioExplainer.md` for the full plan.
 
 This skeleton covers **Phase 1** (loads in Rider), **Phase 2** (loopback server implementing the
-reused wire protocol), **Phase 3** (editor spotlight highlighting driven by walkthrough state),
+reused wire protocol), **Phase 3** (the spotlight highlighting stack driven by walkthrough state),
 **Phase 3.5** (a Settings page under **Tools → Audio Explainer** to tune the highlight appearance),
 **Phase 4** (the JCEF sidebar tool window that reuses the upstream webview UI, with a Swing fallback),
 **Phase 5** (the **Explain This (Audio)** editor context-menu action that captures context and runs a
 background task), **Phase 6** (the headless Claude backbone: the action shells out to `claude -p`,
 which generates a walkthrough plan for the code under the cursor and POSTs it back), and **Phase 7**
 (cross-platform **Kokoro TTS**: a local `kokoro-onnx` server over TCP plus the narration driver that
-speaks each highlight in sync with the editor spotlight, with a guided one-click setup). Phase 8
+speaks each highlight in sync with the highlighted code, with a guided one-click setup). Phase 8
 (packaging) and Phase 7b (a Windows SAPI emergency fallback) are `TODO`.
 
 ## What's here
+- `../TreeOfCode.rules.md` — **read this before changing the tree.** The 23 numbered constraints and the 11
+  numbered schema decisions that production KDoc cites *by number*, plus the caps and where each number came
+  from, the platform facts a compiler cannot check, the link system's shape, what must come out before a
+  release, what is
+  deferred and why, the round loop and the operational notes. It replaces the phase plan and the per-phase
+  ledger, which were deleted once the tree was built and judged — it keeps what something else depends on and
+  drops the history.
 - `build.gradle.kts` / `settings.gradle.kts` — Gradle + IntelliJ Platform Gradle Plugin 2.x, targeting Rider 2026.1.4 (branch 261).
 - `src/main/resources/META-INF/plugin.xml` — tool window, context-menu action, startup activity, app service.
 - `com/audioexplainer/ExplainerServer.kt` — HTTP loopback server (full wire contract: `/api/health|state|actions|message|save|load|walkthroughs`), drops `~/.claude-explainer-{port,token}`.
 - `Walkthrough.kt` — walkthrough state machine (port of upstream `walkthrough.ts`).
-- `EditorHighlighter.kt` — the walkthrough's `WalkthroughListener`: resolves each segment's file off the EDT, opens its editor, and drives a `SpotlightRenderer` for it.
+- `TreePlanController.kt` — the walkthrough's `WalkthroughListener`, and the only rendering surface: resolves every frame's file off the EDT, opens one **tree-of-code** tab (`tree/TreePlanView.kt`), and tells its node editors which step to draw. Stepping into another *scene* replaces the tree; a one-frame scene renders as a one-node tree, which is why there is no longer an in-place spotlight over the user's own editor tab. Nodes are views of the **live** documents, so the view watches the VFS: a file deleted under an open tree drops its node and keeps the rest, and a file replaced at the same path is re-taken rather than dropped.
 - `SpotlightRenderer.kt` — the editor spotlight *drawing* stack (port of `highlight.ts`): dim/active/gap layers, callout inlay, relation arrows and pointers, token flash. One instance per editor (decorations are per-editor, not per-document), so a multi-editor surface can reuse it. Reads appearance from the settings service on every render.
-- `tree/CodeNodeView.kt` — one node of the in-progress **tree-of-code** surface (`TreeOfCode.md` phase 1a′): a viewer editor over the *real* document, everything outside the node's kept line ranges folded away, chrome + size-to-content-with-a-cap around it, its own `SpotlightRenderer`, and height resync on fold / font / colour-scheme / **inlay** / width change (rendering a step changes a node's height, because the callout inlay wraps at node width). Not wired into any user-facing entry point yet — driven only by the spike benches below.
-- `tree/CodeNestView.kt` — **the chosen layout** (`TreeOfCode.md` phase 1a‴, "Arch C"): a child node embedded *inside* its parent's editor directly under the line that calls it, via `EditorEmbeddedComponentManager` (an `impl`-package API, measured working on a viewer editor — and `offsetToXY` counts the block inlay, so the host's text reflows below the child instead of being drawn over). The invoking token is boxed and two diagonals run from it to the nested frame's top corners, painted in the frame's own top margin — which is why this needs **no overlay** at all. A nesting collapses to a one-row stub and re-expands, unlike a `CustomFoldRegion`. Unrelated top-level nodes stack in a scroll pane as before.
-- `spike/` — throwaway probe vehicles for `TreeOfCode.md`, reachable at **Tools → Audio Explainer → Spike: …**. `SpikeNestedNodeAction` and `SpikeNodeViewAction` are the interactive benches for `CodeNestView` / `CodeNodeView` — every alternative is a button, and `write report` dumps numbered measurements + PNGs under `<project>/scratchpad/`. `SpikeNodeTreeEditorProvider` is the throwaway `FileEditorProvider` both of them open their tab in. The Phase 0 / 0b / 1a″ benches were deleted with the surfaces they judged. Deleted at the end of Phase 1.
-- `spikes/` (repo root, not Kotlin) — plain-`javac` Swing probes that answer the questions which are about Swing rather than about the IDE, in seconds instead of a 4–7 minute sandbox launch. Each carries a deliberately failing control, because a probe with no control has a worthless PASS. `tree1a4/` is the live one: it measured where each chrome actually *draws* its border line, that z-order (not container painting) is what makes a leader reach into the child, the token box's padding, and that a control buried behind an editor component is unreachable. The earlier three were deleted once their findings were in `TreeOfCode.md`'s constraint list.
-- `AudioExplainerSettings.kt` — app-level `PersistentStateComponent` (`audioExplainer.xml`) holding the tunable highlight appearance.
-- `HighlightSettingsConfigurable.kt` — the **Settings → Tools → Audio Explainer** page (Kotlin UI DSL); live-re-styles an active walkthrough on Apply. A **theme** change re-styles it too, via `EditorHighlighter`'s own colour-scheme subscription — the palette is computed per render, so without that the decorations keep the previous theme's colours.
+- `tree/CodeNodeView.kt` — one node of the **tree-of-code** surface (`TreeOfCode.rules.md` §1a′): a viewer editor over the *real* document, everything outside the node's kept line ranges folded away, chrome + size-to-content-with-a-cap around it, its own `SpotlightRenderer`, and height resync on fold / font / colour-scheme / **inlay** / width change (rendering a step changes a node's height, because the callout inlay wraps at node width). Driven by `TreePlanController`.
+- `tree/CodeNestView.kt` — **the chosen layout** (`TreeOfCode.rules.md` §1a‴, "Arch C"): a child node embedded *inside* its parent's editor directly under the line that calls it, via `EditorEmbeddedComponentManager` (an `impl`-package API, measured working on a viewer editor — and `offsetToXY` counts the block inlay, so the host's text reflows below the child instead of being drawn over). The invoking token is boxed and two diagonals run from it to the nested frame's top corners, painted in the frame's own top margin — which is why this needs **no overlay** at all. A nesting collapses to a one-row stub and re-expands, unlike a `CustomFoldRegion`. Unrelated top-level nodes stack in a scroll pane as before.
+- `spike/` — the dev fixture harness for the tree, reachable at **Tools → Audio Explainer → Fixture plans (dev)**. `FixturePlanActions.kt` loads one of the hand-written acceptance plans in `fixtures/plans/` through the real `Plan` serializer and steps it with `Ctrl+Alt+Shift+.` / `,`, so a judged round needs neither a TTS server nor hand-edited JSON. Ten entries: seven plans (four clean, two failure paths, one over the line budget), the two step actions and a stop. The Phase 1 interactive benches and the two `javac` probe directories under `spikes/` were deleted once the production host rendered the real schema — they judged a hard-coded fixture, which is the job `fixtures/plans/` now does against the real thing; the **disposal audit** went the same way — a round's instrument rather than a feature. It drove three open/close cycles over the scene fixture, walked every crossing and reported `EditorFactory.getAllEditors()` against a pre-open baseline; what a crossing costs is in `TreeOfCode.rules.md` under *The caps*, and the instrument itself is gone. **This package and its `plugin.xml` action group are dev-only and must be deleted together before a release** — they stay only while the tree still needs judged rounds.
+- `../probes/` — the automated checks, and there is no test source set: three `javac` probes that **import** the production classes (`PlanProbe` over `PlanLoader`/`PlanOutline`/`WalkthroughStorage`/`TreeStyle` — 105 assertions, `PlanFileProbe` over the acceptance plans, `LinkBench` over the link drawing — 212 assertions and 13 PNGs) plus two Python gates over the repo (`gates.py`: the `noCompiledSerializer` stub, `plugin.xml` class references, resource XML, line endings, skill manifest, `VERSION`, fences, and that a plan has exactly one destination; `check_fixture.py`: every relation endpoint verified against the file it points at). `probes/README.md` has the commands.
+- `AudioExplainerSettings.kt` — app-level `PersistentStateComponent` (`audioExplainer.xml`) holding the tunable highlight appearance and the tree's shape. Its `DEF_TREE_*` defaults are the verdicts nine judged rounds settled, so Reset-to-defaults restores what was actually approved.
+- `tree/TreeStyle.kt` — the one place a persisted setting becomes a `NestStyle`/`CodeNodeStyle`. Values are enum constant names, so there is no second vocabulary; an unrecognised one degrades to the default rather than stopping the tree from drawing.
+- `HighlightSettingsConfigurable.kt` — the **Settings → Tools → Audio Explainer** page (Kotlin UI DSL). Its first group is the **code tree's own shape** — the nesting leader (`BRACE` by default, or `CORNERS`/`ARROW`), the collapse control, the caption path, node de-emphasis, the elision style and the height ceiling — and the rest decorate the lines inside a node. On Apply it asks `TreePlanController.refresh()`, which re-styles the tree when the shape changed and re-renders the step when only a colour did; a **theme** change re-renders it too, via each node view's own colour-scheme subscription, because the palette is computed per render.
 - `WalkthroughStorage.kt` — per-workspace save/load under `<project>/.walkthroughs/` (port of `storage.ts`).
 - `ExplainThisAction.kt` — the **Explain This (Audio)** context-menu action: captures the caret/selection + project-relative file, packages an `ExplainRequest`, and runs a cancellable "Explaining…" background task.
 - `ExplainRequest.kt` — the context handed to Claude (`{file, caretLine, selectionText}` + project root / absolute path / selection line range).
@@ -78,29 +86,33 @@ PORT=$(cat ~/.claude-explainer-port); TOKEN=$(cat ~/.claude-explainer-token)
 AUTH="Authorization: Bearer $TOKEN"                                          # skill uses Bearer; x-auth-token also works
 curl -s -H "$AUTH" http://127.0.0.1:$PORT/api/health                         # -> {"status":"ok"}
 curl -s -H "$AUTH" -X POST http://127.0.0.1:$PORT/api/message \
-     -d '{"type":"set_plan","title":"demo","segments":[{"id":1,"file":"a.cs","start":1,"end":5,"title":"intro","explanation":"the whole thing","highlights":[{"start":2,"end":3,"ttsText":"hello"}]}]}'
-                                                                             # -> {"ok":true}
+     -d '{"type":"set_plan","title":"demo",
+          "frames":[{"id":0,"file":"a.cs","title":"A.Method","explanation":"the whole thing",
+                     "keep":[{"start":1,"end":1,"role":"context"},{"start":10,"end":20,"role":"focus"}]}],
+          "steps":[{"frame":0,"ranges":[{"start":10,"end":12}],"ttsText":"hello","token":"Method"}]}'
+                                                                             # -> {"ok":true} (+ "issues" if degraded)
 curl -s -H "$AUTH" http://127.0.0.1:$PORT/api/state                          # -> status "paused", segment echoed back
 ```
 
-Note the corrected segment schema: `{id, file, start, end, title, explanation, highlights:[{start, end, ttsText, explanation?}]}` — 1-based, inclusive. (An earlier draft mistakenly put `ttsText` on the segment; that came from a stale upstream doc.)
+The wire schema is **`frames` + `steps`** — structure separate from timeline — and it is specified in
+`src/main/resources/claude-skill/docs/plan-schema.md`, which is what the agent authors against. A frame is one
+file plus the line ranges kept visible in it (`role: "context" | "focus"`); a step names a frame and the ranges
+active at that moment. There is no `segments` key and no `view` key. The reply carries an `issues` array
+whenever the loader dropped or degraded something — which is the difference between a plan that rendered and
+one that rendered *partly*.
 
-**Phase 3 check:** a `set_plan` whose `segment.file` points at a real file (relative to the open
-project, or absolute) makes Rider open that file and spotlight it: the segment lines are shown at
-full brightness, everything outside is dimmed, the first highlight gets a gold glow + overview-ruler
-mark, other highlights are lightly dimmed, and context ("gap") lines between highlights get a gold
-gutter bar. `stop` (or a `stop` agent message) clears all decorations. The four layers are the
-IntelliJ analogues of upstream's four `TextEditorDecorationType`s (see `SpotlightRenderer.kt` for the
-opacity→foreground-blend mapping).
+**Phase 3 check:** a `set_plan` whose `frames[].file` points at a real file (relative to the open project, or
+absolute) opens a **tree-of-code** tab: one outlined node per frame, showing only that frame's kept lines with
+the rest folded away. In the active node the step's ranges are at full brightness with a gold glow +
+overview-ruler mark, non-active kept lines read as context, and the elided runs between them get a gold gutter
+bar. `stop` (or a `stop` agent message) closes the tab. The layers are the IntelliJ analogues of upstream's four
+`TextEditorDecorationType`s (see `SpotlightRenderer.kt` for the opacity→foreground-blend mapping).
 
-**Phase 3.5 check:** open **Settings/Preferences → Tools → Audio Explainer**. The page exposes the
-dim strengths, glow/accent colours, the non-active-highlight tint, and the gap gutter bar. With a
-walkthrough showing (send the `set_plan` above), change a value and click **Apply** — the live
-spotlight re-styles immediately. Values persist across IDE restarts (stored in `audioExplainer.xml`).
+**Phase 3.5 check:** open **Settings/Preferences → Tools → Audio Explainer**. The **Code tree** group picks the nesting leader, the collapse control, the caption path, node de-emphasis, the elision style and the height ceiling; the groups below it tune the dim strengths, glow/accent colours, the non-active-highlight tint and the gap gutter bar. With a walkthrough showing (send the `set_plan` above), change a value and click **Apply** — the live tree re-styles immediately, and switching the leader is the one to watch, because it changes which border edges the token box and the nested frame draw at all. **Reset to defaults** restores the judged shape. Values persist across IDE restarts (stored in `audioExplainer.xml`).
 
 **Phase 4 check:** with a walkthrough active, open the **Audio Explainer** tool window (right stripe).
 The sidebar shows the title, an outline, the current segment, and a progress bar. **Play/Pause**, **Next**,
-**Prev**, and clicking an outline entry move the walkthrough — and the editor spotlight follows. **Save**
+**Prev**, and clicking an outline entry move the walkthrough — and the tree view follows. **Save**
 prompts for a name and writes to `<project>/.walkthroughs/`; the idle view lists saved walkthroughs to
 reload. Audio (speed/voice + narration) is stubbed until the TTS phase. If JCEF is unavailable, the
 window falls back to a plain Swing control panel wired to the same walkthrough.
@@ -116,7 +128,7 @@ server. The C# symbol is deliberately **not** resolved in-plugin.
 **Phase 6 check:** with the **Claude CLI on PATH**, right-click a method → **Explain This (Audio)**. The
 plugin installs its `audio-explainer` skill to `~/.claude/skills/` (first run), then runs a headless
 `claude -p` that reads the code under your cursor, builds a walkthrough plan, and POSTs it to the loopback
-server. The **Audio Explainer** tool window activates, the sidebar shows the outline, the editor spotlight
+server. The **Audio Explainer** tool window activates, the sidebar shows the outline, the tree view
 follows, and a "Walkthrough ready" balloon appears. If `claude` isn't found, or Claude errors, a
 notification explains why. Audio narration is stubbed until Phase 7 — the walkthrough loads and highlights,
 but nothing is spoken yet. The same skill also works **interactively** in Claude Code ("explain how X
@@ -125,7 +137,7 @@ works"), driving the sidebar over the same loopback contract.
 **Phase 7 check:** run **Tools → Audio Explainer → Set up TTS** and choose **Install Kokoro** (or install
 manually, see Prerequisites) — a background task pip-installs the deps and downloads the ~340 MB voice
 model. Then load a walkthrough and press **Play** in the sidebar: each highlight is **spoken** while the
-editor spotlight and the sidebar outline advance in sync; **Pause** freezes audio and **Play** resumes it;
+tree view and the sidebar outline advance in sync; **Pause** freezes audio and **Play** resumes it;
 **Next/Prev** move by highlight (Shift = by segment); the **speed** buttons and **voice** dropdown take
 effect on the next highlight. If TTS isn't set up, playback is silent (walkthrough still loads + highlights)
 and a one-time setup offer appears. Verify the TTS server standalone with

@@ -571,6 +571,31 @@ code {
     margin: 0 0 8px;
 }
 #outline-list { list-style: none; margin: 0; padding: 0; }
+/* The scene level — drawn only when a plan has more than one scene (see buildOutline). It sits above the
+   frame groups, so it is the one row that is flush left; the groups indent under it. */
+.outline-scene { margin-bottom: 6px; }
+.outline-scene-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 6px;
+	cursor: pointer;
+	border-radius: 3px;
+	font-size: 10.5px;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	opacity: 0.85;
+	border-bottom: 1px solid var(--ae-border);
+}
+.outline-scene-header:hover { background: var(--ae-btn-hover); }
+.outline-scene-header .marker { flex: 0 0 auto; width: 14px; text-align: center; }
+.outline-scene-header .scene-label { flex: 1; }
+.outline-scene-header .segment-progress { font-size: 10px; opacity: 0.8; }
+.outline-scene-header.current { color: var(--ae-fg); font-weight: 600; opacity: 1; }
+.outline-scene-header.current .marker { color: var(--ae-accent); }
+.outline-scene-header.completed .marker { color: var(--ae-completed); }
+.outline-groups { list-style: none; margin: 2px 0 0; padding: 0 0 0 10px; }
+
 .outline-segment { margin-bottom: 2px; }
 .outline-segment-header {
     display: flex;
@@ -605,7 +630,6 @@ code {
 .outline-highlight:hover { background: var(--ae-btn-hover); }
 .outline-highlight .hl-marker { flex: 0 0 auto; width: 10px; text-align: center; font-size: 9px; opacity: 0.85; }
 .outline-highlight .hl-label { flex: 1; }
-.outline-highlight .hl-lines { font-size: 10px; opacity: 0.7; font-family: ui-monospace, Consolas, monospace; }
 .outline-highlight.current { background: var(--ae-btn-bg); color: var(--ae-fg); font-weight: 600; }
 .outline-highlight.current .hl-marker { color: var(--ae-accent); opacity: 1; }
 .outline-highlight.completed { color: var(--ae-fg); }

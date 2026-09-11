@@ -7,13 +7,33 @@ const vscode = acquireVsCodeApi();
 
 let state = {
 	title: "",
-	segments: [],
-	currentSegment: -1,
+	/**
+	 * The outline's row model, as `PlanOutline` builds it: `{scenes:[{id,label,groups:[{frame,title,
+	 * steps:[{index,label}]}]}], scened, steps}`. Content only — the position is `currentStep`, kept apart
+	 * so navigation never rebuilds a row (which would destroy its click handler).
+	 */
+	outline: { scenes: [], scened: false, steps: 0 },
+	/** The plan step showing, or -1. **The whole position model** since Phase 3 flattened it. */
+	currentStep: -1,
+	stepCount: 0,
+	/** What Now Playing shows for that step (a `StepView`), or null: title, explanation, ttsText, location. */
+	now: null,
 	status: "idle",
 	language: "en",
 	languageName: "English",
 	autonym: "English",
 };
+
+/** Every step row of the outline, flattened in narration order — `[{index, label, group, scene}]`. */
+function outlineSteps() {
+	const out = [];
+	for (const scene of state.outline.scenes || []) {
+		for (const group of scene.groups || []) {
+			for (const st of group.steps || []) out.push({ ...st, group, scene });
+		}
+	}
+	return out;
+}
 
 /** Cached saved-walkthrough list (from the plugin's `saved_list` message); rendered/filtered client-side. */
 /** @type {{name: string, title: string, langCode?: string, langTag?: string, langName?: string}[]} */
@@ -34,8 +54,6 @@ let muted = false;
 let audioPlaying = false;
 /** True when audio was intentionally suspended via suspendAudio() (user pause). */
 let intentionallySuspended = false;
-let currentHighlightIndex = 0;
-let totalHighlights = 0;
 /** Last generation phase seen (Phase 7.5 #5) — used to auto-expand the banner on a fresh generation. */
 let genLastPhase = "idle";
 /** True when audio_end arrived but chunks are still pending (AudioContext suspended) */
@@ -70,8 +88,28 @@ let stepBuffers = [];
 let stepSentences = [];
 /** Total buffered audio-seconds for the current step so far. */
 let stepAudioDuration = 0;
+/**
+ * Silence this step's schedule has had inserted into it, in seconds. Two clocks run here and they are not
+ * the same clock: `stepAudioDuration`/`tStart` count *audio content*, while `currentTime - stepStartClock`
+ * counts *wall time since the first buffer started*. They agree only while playback never starves. When a
+ * chunk arrives after the scheduled audio has already drained, playAudioChunk clamps `nextPlayTime` forward
+ * and a silent gap goes into the timeline that the content clock never sees — so from that moment the wall
+ * clock runs permanently ahead and the cursor leads the voice for the rest of the step. Accumulated here
+ * and subtracted by stepElapsed(), which is the one place elapsed is defined.
+ */
+let stepClockSkew = 0;
 /** True once audio_end arrived for the current step (all chunks generated) — a precondition for seeking. */
 let stepAudioEnded = false;
+/**
+ * Each sentence as the server actually spoke it, indexed by si. Empty against a tts_server.py older than
+ * the `stext` field, which is a supported state: the installed copy refreshes only on a VERSION difference
+ * and is editable on disk.
+ */
+let sentenceTexts = [];
+/** Beats already fired this step, by their index in the step's `beats` array. */
+let firedBeats = new Set();
+/** Per-beat resolved sentence: >=0 fires there, -2 suppressed. Absent = not resolvable yet, so retried. */
+let beatSentence = [];
 
 function ensureAudioContext() {
 	if (!audioCtx) {
@@ -86,7 +124,7 @@ function ensureAudioContext() {
 			const chunks = pendingChunks.slice();
 			pendingChunks = [];
 			for (const chunk of chunks) {
-				playAudioChunk(chunk.base64, chunk.sampleRate, chunk.si, chunk.sw);
+				playAudioChunk(chunk.base64, chunk.sampleRate, chunk.si, chunk.sw, chunk.stext);
 			}
 			// If audio_end arrived while suspended, now handle deferred playback completion
 			if (deferredPlaybackComplete) {
@@ -101,12 +139,29 @@ function ensureAudioContext() {
 document.addEventListener("click", () => ensureAudioContext(), { once: true });
 
 
-function playAudioChunk(base64Data, sampleRate, si, sw) {
+/**
+ * Where the next buffer has to start, and how much silence that inserts. A chunk that arrives after
+ * everything scheduled has already drained cannot start in the past, so it starts *now* and the difference
+ * becomes a gap the audio-content clock never sees — the drift [stepClockSkew] exists to cancel.
+ *
+ * [anchored] is false for a step's very first chunk, where `nextAt` is still 0 and this clamp is what
+ * *anchors* the step rather than a starvation; counting that as skew would offset every step by its own
+ * start time.
+ *
+ * Split out of [playAudioChunk] so the arithmetic holding the two clocks together can be asserted without
+ * a Web Audio context (`probes/ClockProbe.js`).
+ */
+function scheduleSlot(nextAt, now, anchored) {
+	if (nextAt >= now) return { at: nextAt, gap: 0 };
+	return { at: now, gap: anchored ? now - nextAt : 0 };
+}
+
+function playAudioChunk(base64Data, sampleRate, si, sw, stext) {
 	ensureAudioContext();
 
 	// If AudioContext is still suspended (no user gesture yet), queue the chunk
 	if (audioCtx.state === "suspended") {
-		pendingChunks.push({ base64: base64Data, sampleRate, si, sw });
+		pendingChunks.push({ base64: base64Data, sampleRate, si, sw, stext });
 		return;
 	}
 
@@ -125,13 +180,14 @@ function playAudioChunk(base64Data, sampleRate, si, sw) {
 	source.playbackRate.value = 1;
 	source.connect(gainNode);
 
-	const now = audioCtx.currentTime;
-	if (nextPlayTime < now) nextPlayTime = now;
+	const slot = scheduleSlot(nextPlayTime, audioCtx.currentTime, stepStartClock !== null);
+	stepClockSkew += slot.gap;
+	nextPlayTime = slot.at;
 	source.start(nextPlayTime);
 	// Read-along timeline (Phase 7.5 #12/#13): the first scheduled buffer marks this step's audio start.
 	if (stepStartClock === null) stepStartClock = nextPlayTime;
 	nextPlayTime += buffer.duration;
-	recordChunk(buffer, si, sw);
+	recordChunk(buffer, si, sw, stext);
 
 	activeSources.push(source);
 	source.onended = () => {
@@ -148,9 +204,12 @@ function playAudioChunk(base64Data, sampleRate, si, sw) {
  * Record a decoded chunk into the step's buffer list + per-sentence map (Phase 7.5 #12/#13). Buffers are
  * retained (with their cumulative audio offset) so a click can seek playback; the sentence map (audio
  * start + duration + word range, from the wire's si/sw) is what anchors the read-along cursor per sentence.
+ * [stext] is the sentence as spoken, kept so a beat can be matched against real output rather than against
+ * anyone's count of sentences (see sentenceForBeat).
  */
-function recordChunk(buffer, si, sw) {
+function recordChunk(buffer, si, sw, stext) {
 	const dur = buffer.duration;
+	if (stext && !sentenceTexts[si]) sentenceTexts[si] = stext;
 	stepBuffers.push({ buffer, offset: stepAudioDuration });
 	let sent = stepSentences[si];
 	if (!sent) {
@@ -256,15 +315,7 @@ function showDoneView() {
 	document.getElementById("active-view").style.display = "none";
 	document.getElementById("done-view").style.display = "";
 	document.getElementById("done-summary").textContent =
-		`${state.segments.length} segments covered`;
-}
-
-/** The highlight object for the current step (bounded), or null if the segment has no highlights. */
-function currentHighlight() {
-	const seg = state.segments.find((s) => s.id === state.currentSegment);
-	if (!seg || !seg.highlights || seg.highlights.length === 0) return null;
-	const i = Math.min(Math.max(currentHighlightIndex, 0), seg.highlights.length - 1);
-	return seg.highlights[i];
+		`${state.stepCount} steps covered`;
 }
 
 /**
@@ -278,8 +329,7 @@ function renderTranscript(animate) {
 	const box = document.getElementById("transcript-box");
 	const el = document.getElementById("transcript-text");
 	if (!box || !el) return;
-	const hl = currentHighlight();
-	const text = hl && hl.ttsText ? hl.ttsText : "";
+	const text = state.now && state.now.ttsText ? state.now.ttsText : "";
 	const bar = document.getElementById("step-progress-fill");
 	if (!text) {
 		box.style.display = "none";
@@ -389,8 +439,123 @@ function resetStepAudioModel() {
 	stepBuffers = [];
 	stepSentences = [];
 	stepAudioDuration = 0;
+	stepClockSkew = 0;
 	stepAudioEnded = false;
 	playbackStartedSent = false;
+	sentenceTexts = [];
+	firedBeats = new Set();
+	beatSentence = [];
+}
+
+
+// ── Beats: a pulse timed to a point in the narration (B1b) ──
+
+/**
+ * The one matching rule — trim, collapse whitespace, lowercase. **`Beat.normalize` in Protocol.kt must do
+ * the same thing.** That side warns an author at load that a phrase is unsayable; this side decides whether
+ * the beat ever fires, and a phrase accepted there but unmatched here is the one failure with no symptom.
+ */
+function beatKey(s) {
+	return String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** The transcript word index where [needle] starts, or -1. Used only when the server sends no `stext`. */
+function wordIndexOfPhrase(needle) {
+	const starts = [];
+	let acc = "";
+	for (const span of transcriptWordSpans) {
+		if (acc) acc += " ";
+		starts.push(acc.length);
+		acc += beatKey(span.textContent);
+	}
+	const at = acc.indexOf(needle);
+	if (at < 0) return -1;
+	let w = 0;
+	while (w + 1 < starts.length && starts[w + 1] <= at) w++;
+	return w;
+}
+
+/**
+ * Which sentence a beat belongs to, or -1 while that cannot be answered yet (sentences stream in, so an
+ * unresolved beat is retried every tick rather than written off).
+ *
+ * Matched against the text the server says it spoke, because "sentence 3" is not a shared idea: the author
+ * counts prose, the splitter counts ASCII enders and a 320-char cap, and this file tokenises the raw
+ * ttsText. A phrase needs no agreement between the three.
+ */
+function sentenceForBeat(beat) {
+	const needle = beatKey(beat.say);
+	if (!needle) return -1;
+	const haveText = sentenceTexts.some((t) => !!t);
+	if (haveText) {
+		for (let si = 0; si < sentenceTexts.length; si++) {
+			if (sentenceTexts[si] && beatKey(sentenceTexts[si]).includes(needle)) return si;
+		}
+		// A phrase quoted across a sentence boundary belongs to the sentence it STARTS in: walk it back a
+		// word at a time and look for a sentence ending with that head. Only once every sentence is in —
+		// mid-stream a short head would happily match some earlier sentence that merely ends the same way.
+		const parts = needle.split(" ");
+		if (stepAudioEnded && parts.length > 2) {
+			for (let take = parts.length - 1; take >= 2; take--) {
+				const head = parts.slice(0, take).join(" ");
+				for (let si = 0; si < sentenceTexts.length; si++) {
+					if (sentenceTexts[si] && beatKey(sentenceTexts[si]).endsWith(head)) return si;
+				}
+			}
+		}
+		return -1;
+	}
+	// No `stext` on the wire: locate the phrase among the transcript's own words and ask which sentence
+	// owns that word. Same answer whenever the two tokenisations agree — which is the normal case, and the
+	// disagreement is exactly what `stext` was added to remove.
+	const wi = wordIndexOfPhrase(needle);
+	if (wi < 0) return -1;
+	const owner = sentenceForWord(wi);
+	return owner ? stepSentences.indexOf(owner) : -1;
+}
+
+/**
+ * Fire every beat whose sentence has begun, once each. Called from the rAF tick with the same
+ * audio-content [elapsed] the cursor uses, so a beat and the highlighted word cannot disagree.
+ *
+ * **At the sentence's start, not the phrase's.** No engine here reports word timings, so a word's position
+ * inside its sentence is interpolated — about a second of error against a 700 ms pulse. A sentence's tStart
+ * is a sum of real decoded buffer durations.
+ */
+function fireDueBeats(elapsed) {
+	const beats = (state.now && state.now.beats) || [];
+	if (beats.length === 0 || firedBeats.size === beats.length) return;
+	for (let i = 0; i < beats.length; i++) {
+		if (firedBeats.has(i) || beatSentence[i] === -2) continue;
+		// A beat with no `say` fires the instant the audio starts, and the plugin already has a measured
+		// signal for that moment (`playback_started`, MoreUI §2.8). Not this loop's job — retired so it is
+		// not re-resolved every frame for the rest of the step.
+		if (!beats[i].say) { beatSentence[i] = -2; continue; }
+		let si = beatSentence[i];
+		if (si === undefined) {
+			si = sentenceForBeat(beats[i]);
+			if (si < 0) continue;
+			// One pulse per sentence. A second beat on the same sentence would fire in the same tick and
+			// cancel the first (startTokenFlash self-cancels), so it is dropped instead of made to
+			// flicker — its absence from the plugin's beat log is the signal.
+			if (beatSentence.indexOf(si) !== -1) { beatSentence[i] = -2; continue; }
+			beatSentence[i] = si;
+		}
+		const sentence = stepSentences[si];
+		if (!sentence || elapsed < sentence.tStart) continue;
+		firedBeats.add(i);
+		vscode.postMessage({ type: "beat", index: state.currentStep, beat: i });
+	}
+}
+
+/**
+ * Audio-content seconds elapsed in this step: wall clock since the first buffer was scheduled, less the
+ * silence [stepClockSkew] records. This is the coordinate system `stepSentences[].tStart` and
+ * `stepBuffers[].offset` are already in, so everything that maps a time onto the transcript — the cursor,
+ * a seek, a beat — reads the same number.
+ */
+function stepElapsed() {
+	return audioCtx.currentTime - stepStartClock - stepClockSkew;
 }
 
 /** Start the rAF loop driving the read-along cursor, if audio is playing and it isn't already running. */
@@ -408,13 +573,11 @@ function updateStepProgress() {
 		// non-zero start offset, or a step whose first chunk lands mid-queue, is still honoured.
 		if (!playbackStartedSent && audioCtx.currentTime >= stepStartClock) {
 			playbackStartedSent = true;
-			vscode.postMessage({
-				type: "playback_started",
-				segmentId: state.currentSegment,
-				highlightIndex: currentHighlightIndex,
-			});
+			vscode.postMessage({ type: "playback_started", index: state.currentStep });
 		}
-		applyReadAlong(audioCtx.currentTime - stepStartClock);
+		const elapsed = stepElapsed();
+		applyReadAlong(elapsed);
+		fireDueBeats(elapsed);
 	}
 	if (audioPlaying) progressRaf = requestAnimationFrame(updateStepProgress);
 }
@@ -536,8 +699,11 @@ function seekToAudioTime(t) {
 	}
 	nextPlayTime = when;
 
-	// Re-anchor the read-along clock so elapsed == target right now; allow a backward jump.
+	// Re-anchor the read-along clock so elapsed == target right now; allow a backward jump. The skew goes
+	// with it: the re-queue above is contiguous, and seeking needs the whole step buffered
+	// (seekAllowed), so no further chunk can arrive to starve this schedule.
 	stepStartClock = audioCtx.currentTime - target;
+	stepClockSkew = 0;
 	lastSpokenWord = -1;
 	applyReadAlong(target);
 
@@ -591,19 +757,19 @@ function render() {
 	document.getElementById("walkthrough-title").textContent = state.title;
 	renderLanguageBadge();
 
-	// Now playing
-	const seg = state.segments.find((s) => s.id === state.currentSegment);
-	const idx = state.segments.findIndex((s) => s.id === state.currentSegment);
+	// Now playing — the frame this step is about, and the one place a file and a line still belong. The
+	// outline says *which step*; this says *where the code is*, and it is clickable.
+	const now = state.now;
 
-	if (seg) {
-		document.getElementById("segment-title").textContent = seg.title;
+	if (now) {
+		document.getElementById("segment-title").textContent = now.title;
 
 		const loc = document.getElementById("segment-location");
-		const fileName = seg.file.split("/").pop();
-		loc.textContent = `${fileName}:${seg.start}-${seg.end}`;
-		loc.dataset.file = seg.file;
-		loc.dataset.start = String(seg.start);
-		loc.dataset.end = String(seg.end);
+		const fileName = (now.file || "").split(/[\\/]/).pop();
+		loc.textContent = now.start > 0 ? `${fileName}:${now.start}-${now.end}` : fileName;
+		loc.dataset.file = now.file;
+		loc.dataset.start = String(now.start);
+		loc.dataset.end = String(now.end);
 	}
 
 	// Play/pause button (SVG icon toggle)
@@ -627,17 +793,17 @@ function render() {
 	}
 
 	// Explanation with fade transition
-	if (seg) {
+	if (now) {
 		const explEl = document.getElementById("explanation-text");
 		explEl.classList.add("fade-out");
 		setTimeout(() => {
-			explEl.innerHTML = simpleMarkdown(seg.explanation);
+			explEl.innerHTML = simpleMarkdown(now.explanation);
 			explEl.classList.remove("fade-out");
 		}, 150);
 	}
 
 	// Outline
-	renderOutline(idx);
+	renderOutline();
 
 	// Transcript of the current step (matches the audio narration)
 	renderTranscript(false);
@@ -749,27 +915,15 @@ function rebuildVoiceOptions(voices, selected) {
 	else if (voices.length) vs.value = voices[0].id;
 }
 
+/**
+ * Global progress — `step+1 / stepCount`.
+ *
+ * It used to sum every segment's highlight count and add the sub-step offset, because the position was two
+ * numbers into a projected list. With one flat index there is nothing to sum.
+ */
 function computeGlobalProgress() {
-	if (state.segments.length === 0) {
-		return { current: 0, total: 0 };
-	}
-	let totalGlobalHighlights = 0;
-	let completedHighlights = 0;
-	const currentIdx = state.segments.findIndex(s => s.id === state.currentSegment);
-
-	for (let i = 0; i < state.segments.length; i++) {
-		const seg = state.segments[i];
-		const segHighlights = (seg.highlights && seg.highlights.length > 0) ? seg.highlights.length : 1;
-		totalGlobalHighlights += segHighlights;
-
-		if (i < currentIdx) {
-			completedHighlights += segHighlights;
-		} else if (i === currentIdx) {
-			completedHighlights += currentHighlightIndex;
-		}
-	}
-
-	return { current: completedHighlights + 1, total: totalGlobalHighlights };
+	if (!state.stepCount) return { current: 0, total: 0 };
+	return { current: Math.max(0, state.currentStep) + 1, total: state.stepCount };
 }
 
 function renderHighlightProgress() {
@@ -795,57 +949,72 @@ function renderHighlightProgress() {
 }
 
 /**
- * Signature of the last full outline build. Content-sensitive: it captures each segment's id, title,
- * file/line range AND every substep's line range + label — not just the highlight COUNT. A rebuild is
- * triggered whenever any of those change, but NOT on mere navigation (which changes currentSegment, not
- * the segments' content), so per-step click handlers survive normal Prev/Next/outline use.
+ * Signature of the last full outline build. **Content-sensitive and position-free**, which is the whole
+ * rule: a rebuild replaces every row, and replacing a row destroys its click handler — so navigation must
+ * never trigger one. It captures each scene's id and label, each group's frame and title, and each step's
+ * index and label; it does NOT capture which step is current.
+ *
+ * Round 3's defect was fixed by pushing the position instead of by touching this, and Phase 3 kept the rule
+ * while adding a level: `scened` is in the signature because turning the scene row on or off changes the DOM
+ * shape, and a plan that gained a scene would otherwise keep the old flat list.
  *
  * The old count-only signature collided when a new plan happened to have the same shape as the previous
- * one (e.g. 6 substeps → 6 substeps): the DOM was not rebuilt, leaving stale labels from the old plan.
+ * one (e.g. 6 substeps -> 6 substeps): the DOM was not rebuilt, leaving stale labels from the old plan.
  * On top of that, a shorter new plan (or an Undo) could leave "ghost" rows of the previous, longer outline
- * on screen even though the DOM was already correct — CEF failed to repaint the region the removed rows
- * vacated (correct new text in the overlapping area, stale old text only below it). renderOutline now
- * (a) rebuilds from scratch whenever the content changed OR the live DOM drifted out of sync
- * (outlineDomInSync — a hard invariant that can never keep a stale row), and (b) forces a full repaint of
- * the scroll region after a rebuild, clearing any ghost pixels (Phase 7.5 #6).
+ * on screen even though the DOM was already correct - CEF failed to repaint the region the removed rows
+ * vacated. renderOutline now (a) rebuilds from scratch whenever the content changed OR the live DOM drifted
+ * out of sync (outlineDomInSync - a hard invariant that can never keep a stale row), and (b) forces a full
+ * repaint of the scroll region after a rebuild, clearing any ghost pixels (Phase 7.5 #6).
  */
 let outlineSignature = "";
 
-/** Content signature of the current segments (see outlineSignature). */
+/** Content signature of the current outline (see outlineSignature). */
 function computeOutlineSignature() {
-	return state.segments
-		.map((s) => {
-			const hls = (s.highlights || [])
-				.map((h) => `${h.start}-${h.end}~${(h.explanation || "").trim()}`)
-				.join(",");
-			return `${s.id}␞${s.title}␞${s.file}:${s.start}-${s.end}␞${hls}`;
+	const o = state.outline || { scenes: [] };
+	return (o.scened ? "S|" : "F|") + (o.scenes || [])
+		.map((sc) => {
+			const groups = (sc.groups || [])
+				.map((g) => {
+					const steps = (g.steps || []).map((st) => `${st.index}~${st.label}`).join(",");
+					return `${g.frame}\u241f${g.title}\u241f${steps}`;
+				})
+				.join("\u2021");
+			return `${sc.id}\u241e${sc.label}\u241e${groups}`;
 		})
-		.join("␟");
+		.join("\u241f");
 }
 
 /**
- * Hard invariant: does the live DOM match state.segments exactly — one <li> per segment, and each
- * segment's rendered substep count equal to its highlights? If not, a stale row survived a previous
- * render and we MUST rebuild rather than reconcile marker classes onto a mismatched tree.
+ * Hard invariant: does the live DOM match the outline exactly - one row per scene (when scened), per group
+ * and per step? If not, a stale row survived a previous render and we MUST rebuild rather than reconcile
+ * marker classes onto a mismatched tree.
  */
 function outlineDomInSync(list) {
-	const lis = list.children;
-	if (lis.length !== state.segments.length) return false;
-	for (let i = 0; i < state.segments.length; i++) {
-		const want = (state.segments[i].highlights || []).length;
-		if (lis[i].querySelectorAll(".outline-highlight").length !== want) return false;
+	const o = state.outline || { scenes: [] };
+	const scenes = o.scenes || [];
+	if (o.scened) {
+		if (list.children.length !== scenes.length) return false;
+		for (let i = 0; i < scenes.length; i++) {
+			const groups = list.children[i].querySelectorAll(".outline-segment");
+			if (groups.length !== (scenes[i].groups || []).length) return false;
+		}
+	} else {
+		const flat = scenes.flatMap((sc) => sc.groups || []);
+		if (list.children.length !== flat.length) return false;
 	}
-	return true;
+	const wantSteps = scenes.reduce(
+		(n, sc) => n + (sc.groups || []).reduce((m, g) => m + (g.steps || []).length, 0), 0);
+	return list.querySelectorAll(".outline-highlight").length === wantSteps;
 }
 
 /**
  * Force CEF to repaint the ENTIRE tool window. JCEF/CEF frequently leaves stale "ghost" pixels after a
- * layout change (a banner appearing/disappearing, a view switch, the outline shrinking) — the DOM/layout
+ * layout change (a banner appearing/disappearing, a view switch, the outline shrinking) - the DOM/layout
  * is correct but the old pixels linger until some input event (a hover) forces a repaint. That's the
  * "crooked layout / loading strip won't hide until I mouse over it" symptom (Phase 7.5 #6).
  *
  * Two independent levers, because CEF's OSR invalidation is flaky and render-mode-dependent:
- *  1. Toggle `body`'s display off/on with forced reflows — invalidates the whole surface at the DOM layer.
+ *  1. Toggle `body`'s display off/on with forced reflows - invalidates the whole surface at the DOM layer.
  *  2. Ask the plugin to call the native `CefBrowser.invalidate()` (via the `repaint` message).
  * Both are synchronous/idempotent and only fire at layout transitions (not on every update or audio tick),
  * so there's no per-frame cost; the display toggle paints only the final state, so there's no flicker.
@@ -858,7 +1027,7 @@ function forceFullRepaint() {
 	body.style.display = "none";
 	void body.offsetHeight; // flush the 'none' so the toggle isn't coalesced away
 	body.style.display = ""; // revert to the stylesheet's display:flex
-	void body.offsetHeight; // flush the restore → forces a fresh paint of the whole surface
+	void body.offsetHeight; // flush the restore -> forces a fresh paint of the whole surface
 	if (scroller) scroller.scrollTop = prev;
 	// Native belt-and-suspenders: let the plugin force a CEF-level repaint too.
 	vscode.postMessage({ type: "repaint" });
@@ -866,12 +1035,12 @@ function forceFullRepaint() {
 
 /**
  * Lightweight, coalesced native repaint. JCEF/CEF also fails to repaint on *non-layout* DOM changes without
- * an input event — e.g. the outline's step markers flipping to ✓/▶ on audio step-advance stayed stale until
- * you moused over them (a mouse event is what makes CEF paint). A single MutationObserver (set up below)
- * calls this on any DOM change; it asks the plugin for a native `CefBrowser.invalidate()` — the programmatic
- * equivalent of that hover. No `body` display toggle here (the change needs a *repaint*, not a relayout), so
- * it never disturbs in-flight CSS fades. Debounced, so a burst of mutations (one step advance touches the
- * progress bar, the outline markers and the transcript) collapses into a single repaint (Phase 7.5 #6).
+ * an input event - e.g. the outline's step markers flipping to a tick on audio step-advance stayed stale
+ * until you moused over them (a mouse event is what makes CEF paint). A single MutationObserver (set up
+ * below) calls this on any DOM change; it asks the plugin for a native `CefBrowser.invalidate()` - the
+ * programmatic equivalent of that hover. No `body` display toggle here (the change needs a *repaint*, not a
+ * relayout), so it never disturbs in-flight CSS fades. Debounced, so a burst of mutations (one step advance
+ * touches the progress bar, the outline markers and the transcript) collapses into a single repaint.
  */
 let nativeRepaintScheduled = false;
 function scheduleNativeRepaint() {
@@ -883,129 +1052,188 @@ function scheduleNativeRepaint() {
 	}, 50);
 }
 
-function renderOutline(currentIdx) {
+/** One step row. Marker + label, and **nothing else** - see buildOutline. */
+function buildStepRow(st) {
+	const li = document.createElement("li");
+	li.className = "outline-highlight";
+	li.dataset.step = String(st.index);
+
+	const marker = document.createElement("span");
+	marker.className = "hl-marker";
+
+	const label = document.createElement("span");
+	label.className = "hl-label";
+	label.textContent = st.label;
+
+	li.appendChild(marker);
+	li.appendChild(label);
+	li.addEventListener("pointerdown", (e) => {
+		e.preventDefault();
+		vscode.postMessage({ type: "goto_step", index: st.index });
+	});
+	return li;
+}
+
+/** One frame group: a clickable header over its step rows. */
+function buildGroupRow(group, ordinal) {
+	const li = document.createElement("li");
+	li.className = "outline-segment";
+
+	const header = document.createElement("div");
+	header.className = "outline-segment-header";
+
+	const marker = document.createElement("span");
+	marker.className = "marker";
+
+	const text = document.createElement("span");
+	text.className = "segment-label";
+	text.textContent = `${ordinal}. ${group.title}`;
+
+	const progress = document.createElement("span");
+	progress.className = "segment-progress";
+
+	header.appendChild(marker);
+	header.appendChild(text);
+	header.appendChild(progress);
+	// A group header is its own first step - with a flat position there is no separate "segment" to go to.
+	const first = (group.steps || [])[0];
+	if (first) {
+		header.addEventListener("pointerdown", (e) => {
+			e.preventDefault();
+			vscode.postMessage({ type: "goto_step", index: first.index });
+		});
+	}
+	li.appendChild(header);
+
+	const stepList = document.createElement("ul");
+	stepList.className = "outline-highlights";
+	for (const st of group.steps || []) stepList.appendChild(buildStepRow(st));
+	li.appendChild(stepList);
+	return li;
+}
+
+/**
+ * **Build the outline: scene -> frame -> step**, with the scene level drawn only when there is more than
+ * one of them.
+ *
+ * Two decisions, both the reader's:
+ *
+ * - **The scene row is conditional.** Three of the four acceptance plans are single-scene, and a lone
+ *   "Scene 1" header over the whole list is an indent that separates nothing - so on those the outline is
+ *   exactly what it was before Phase 3. A plan that really has scenes gains the level, and gains it where
+ *   it carries information: a scene boundary is where the tree gets rebuilt.
+ * - **A step row is a marker and a label.** The line range that used to sit at its right is gone -
+ *   *"putting line numbers/FileNames in outline is actually redundant ... it should only show which
+ *   step/substep we're currently in"*. The file and the line live under Now Playing, where they are a
+ *   clickable location rather than decoration on every row.
+ */
+function buildOutline(list) {
+	const o = state.outline || { scenes: [] };
+	let ordinal = 0;
+	if (!o.scened) {
+		for (const scene of o.scenes || []) {
+			for (const group of scene.groups || []) list.appendChild(buildGroupRow(group, ++ordinal));
+		}
+		return;
+	}
+	for (const scene of o.scenes || []) {
+		const li = document.createElement("li");
+		li.className = "outline-scene";
+
+		const header = document.createElement("div");
+		header.className = "outline-scene-header";
+
+		const marker = document.createElement("span");
+		marker.className = "marker";
+
+		const text = document.createElement("span");
+		text.className = "scene-label";
+		text.textContent = scene.label;
+
+		const progress = document.createElement("span");
+		progress.className = "segment-progress";
+
+		header.appendChild(marker);
+		header.appendChild(text);
+		header.appendChild(progress);
+		const first = ((scene.groups || [])[0] || { steps: [] }).steps[0];
+		if (first) {
+			header.addEventListener("pointerdown", (e) => {
+				e.preventDefault();
+				vscode.postMessage({ type: "goto_step", index: first.index });
+			});
+		}
+		li.appendChild(header);
+
+		const groupList = document.createElement("ul");
+		groupList.className = "outline-groups";
+		for (const group of scene.groups || []) groupList.appendChild(buildGroupRow(group, ++ordinal));
+		li.appendChild(groupList);
+		list.appendChild(li);
+	}
+}
+
+/** done / current / upcoming, for one row, from a step index range against the position. */
+function markerFor(el, markerEl, firstIndex, lastIndex, cls) {
+	const cur = state.currentStep;
+	const isCurrent = cur >= firstIndex && cur <= lastIndex;
+	const isDone = cur > lastIndex;
+	el.className = cls + (isCurrent ? " current" : isDone ? " completed" : "");
+	if (markerEl) markerEl.textContent = isDone ? "\u2713" : isCurrent ? "\u25b6" : "\u25cb";
+}
+
+/**
+ * Paint the outline's state onto the existing rows, rebuilding first only when the *content* changed.
+ *
+ * Position is applied by walking `data-step`, so every row's own index decides its marker - no arithmetic
+ * over segment offsets, which is what round 3's defect was made of.
+ */
+function renderOutline() {
 	const list = document.getElementById("outline-list");
 
 	const signature = computeOutlineSignature();
-
-	// Rebuild the whole list from scratch when the content changed OR when the live DOM has drifted out of
-	// sync with state.segments (outlineDomInSync — a hard invariant). We never reconcile marker classes onto
-	// a mismatched tree, so a stale row from a previous (longer) plan can never linger (Phase 7.5 #6).
 	const needRebuild = signature !== outlineSignature || !outlineDomInSync(list);
 	if (needRebuild) {
 		list.replaceChildren();
 		outlineSignature = signature;
-
-		for (let i = 0; i < state.segments.length; i++) {
-			const seg = state.segments[i];
-			const li = document.createElement("li");
-			li.className = "outline-segment";
-
-			// Segment header (clickable \u2192 jump to & play the segment)
-			const header = document.createElement("div");
-			header.className = "outline-segment-header";
-
-			const marker = document.createElement("span");
-			marker.className = "marker";
-
-			const text = document.createElement("span");
-			text.className = "segment-label";
-			text.textContent = `${i + 1}. ${seg.title}`;
-
-			const progress = document.createElement("span");
-			progress.className = "segment-progress";
-
-			header.appendChild(marker);
-			header.appendChild(text);
-			header.appendChild(progress);
-			header.addEventListener("pointerdown", (e) => {
-				e.preventDefault();
-				vscode.postMessage({ type: "goto_segment", segmentId: seg.id });
-			});
-			li.appendChild(header);
-
-			// Highlight steps \u2014 each is an individually navigable/clickable step of the walkthrough.
-			const highlights = seg.highlights || [];
-			if (highlights.length > 0) {
-				const hlList = document.createElement("ul");
-				hlList.className = "outline-highlights";
-				for (let j = 0; j < highlights.length; j++) {
-					const hl = highlights[j];
-					const hli = document.createElement("li");
-					hli.className = "outline-highlight";
-
-					const hlMarker = document.createElement("span");
-					hlMarker.className = "hl-marker";
-
-					const hlLabel = document.createElement("span");
-					hlLabel.className = "hl-label";
-					hlLabel.textContent = (hl.explanation && hl.explanation.trim()) || `Step ${j + 1}`;
-
-					const hlLines = document.createElement("span");
-					hlLines.className = "hl-lines";
-					hlLines.textContent = hl.start === hl.end ? `${hl.start}` : `${hl.start}\u2013${hl.end}`;
-
-					hli.appendChild(hlMarker);
-					hli.appendChild(hlLabel);
-					hli.appendChild(hlLines);
-					hli.addEventListener("pointerdown", (e) => {
-						e.preventDefault();
-						vscode.postMessage({ type: "goto_highlight", segmentId: seg.id, highlightIndex: j });
-					});
-					hlList.appendChild(hli);
-				}
-				li.appendChild(hlList);
-			}
-
-			list.appendChild(li);
-		}
+		buildOutline(list);
+		// A shrunk outline can leave "ghost" pixels of the old, taller list in CEF; a rebuild forces a repaint.
+		forceFullRepaint();
 	}
 
-	// A shrunk outline can leave "ghost" pixels of the old, taller list in CEF; a rebuild forces a repaint.
-	if (needRebuild) forceFullRepaint();
-
-	// Update state classes on segment headers AND their highlight steps.
-	const items = list.children;
-	for (let i = 0; i < items.length; i++) {
-		const li = items[i];
-		const seg = state.segments[i];
-		const header = li.querySelector(".outline-segment-header");
-
-		if (i === currentIdx) header.className = "outline-segment-header current";
-		else if (i < currentIdx) header.className = "outline-segment-header completed";
-		else header.className = "outline-segment-header";
-
-		const marker = header.querySelector(".marker");
-		if (i < currentIdx) marker.textContent = "\u2713";
-		else if (i === currentIdx) marker.textContent = "\u25B6";
-		else marker.textContent = "\u25CB";
-
-		// Segment progress fraction (prefer live totalHighlights for the current segment).
-		const segTotal = (seg.highlights && seg.highlights.length) || 0;
-		const total = (i === currentIdx && totalHighlights > 0) ? totalHighlights : (segTotal || 1);
+	const cur = state.currentStep;
+	// Groups: marker from the span of step indices the group holds, plus an n/m of its own.
+	for (const groupLi of list.querySelectorAll(".outline-segment")) {
+		const steps = groupLi.querySelectorAll(".outline-highlight");
+		if (!steps.length) continue;
+		const first = Number(steps[0].dataset.step);
+		const last = Number(steps[steps.length - 1].dataset.step);
+		const header = groupLi.querySelector(".outline-segment-header");
+		markerFor(header, header.querySelector(".marker"), first, last, "outline-segment-header");
 		const progress = header.querySelector(".segment-progress");
-		if (total > 1) {
-			let completed;
-			if (i < currentIdx) completed = total;
-			else if (i === currentIdx) completed = currentHighlightIndex + 1;
-			else completed = 0;
-			progress.textContent = `${completed}/${total}`;
+		if (steps.length > 1) {
+			const done = cur > last ? steps.length : cur < first ? 0 : cur - first + 1;
+			progress.textContent = `${done}/${steps.length}`;
 		} else {
 			progress.textContent = "";
 		}
-
-		// Per-step markers/classes.
-		const hlItems = li.querySelectorAll(".outline-highlight");
-		for (let j = 0; j < hlItems.length; j++) {
-			const hli = hlItems[j];
-			const isCurrent = i === currentIdx && j === currentHighlightIndex;
-			const isDone = i < currentIdx || (i === currentIdx && j < currentHighlightIndex);
-			hli.className = "outline-highlight" + (isCurrent ? " current" : isDone ? " completed" : "");
-			const m = hli.querySelector(".hl-marker");
-			if (isDone) m.textContent = "\u2713";
-			else if (isCurrent) m.textContent = "\u25B6";
-			else m.textContent = "\u25CB";
+		for (const row of steps) {
+			const i = Number(row.dataset.step);
+			markerFor(row, row.querySelector(".hl-marker"), i, i, "outline-highlight");
 		}
+	}
+	// Scenes: the same, over every step the scene holds - so a reader can see which mount they are in and
+	// how much of it is left before the tree is replaced.
+	for (const sceneLi of list.querySelectorAll(".outline-scene")) {
+		const steps = sceneLi.querySelectorAll(".outline-highlight");
+		if (!steps.length) continue;
+		const first = Number(steps[0].dataset.step);
+		const last = Number(steps[steps.length - 1].dataset.step);
+		const header = sceneLi.querySelector(".outline-scene-header");
+		markerFor(header, header.querySelector(".marker"), first, last, "outline-scene-header");
+		const progress = header.querySelector(".segment-progress");
+		const done = cur > last ? steps.length : cur < first ? 0 : cur - first + 1;
+		progress.textContent = `${done}/${steps.length}`;
 	}
 }
 
@@ -1029,8 +1257,16 @@ let holdPaused = false;
 
 let shiftHeld = false;
 
+/**
+ * Prev/Next move **one plan step**; holding Shift moves one **group** (the next frame the walk visits).
+ *
+ * The two-icon button predates the flattening, where the choice was "segment" against "highlight" and the
+ * default depended on whether the current segment had sub-steps — which is exactly the coarse/fine confusion
+ * that made Next skip whole frames (G2 round 2). The affordance is worth keeping, so it now means what a
+ * reader would expect: fine by default, coarse on Shift, and the icon says which.
+ */
 function updateNavIcons() {
-	const showSegment = shiftHeld || totalHighlights <= 1;
+	const showSegment = shiftHeld;
 	document.querySelectorAll("#btn-prev, #btn-next").forEach((btn) => {
 		const highlightIcon = btn.querySelector(".icon-highlight");
 		const segmentIcon = btn.querySelector(".icon-segment");
@@ -1092,21 +1328,40 @@ document.getElementById("btn-play-pause").addEventListener("click", () => {
 	vscode.postMessage({ type: "play_pause" });
 });
 
-document.getElementById("btn-next").addEventListener("click", () => {
-	if (shiftHeld || totalHighlights <= 1) {
-		vscode.postMessage({ type: "next" });
-	} else {
-		vscode.postMessage({ type: "next_highlight" });
-	}
-});
+/**
+ * The first step of the group before/after the one holding the current step — Shift+Prev/Next.
+ *
+ * Derived from the outline the sidebar already holds rather than asked for over the wire: the row model is
+ * the grouping, so a second definition of "the next frame" could disagree with what the reader can see.
+ */
+function groupJumpTarget(delta) {
+	const groups = (state.outline.scenes || []).flatMap((sc) => sc.groups || [])
+		.filter((g) => (g.steps || []).length);
+	if (!groups.length) return null;
+	const cur = state.currentStep;
+	const at = groups.findIndex((g) => cur >= g.steps[0].index && cur <= g.steps[g.steps.length - 1].index);
+	if (at === -1) return null;
+	// Going back from anywhere but a group's own first step lands on that first step, which is what a
+	// reader means by "back to the start of this frame".
+	if (delta < 0 && cur > groups[at].steps[0].index) return groups[at].steps[0].index;
+	const target = groups[at + delta];
+	return target ? target.steps[0].index : null;
+}
 
-document.getElementById("btn-prev").addEventListener("click", () => {
-	if (shiftHeld || totalHighlights <= 1) {
-		vscode.postMessage({ type: "prev" });
-	} else {
-		vscode.postMessage({ type: "prev_highlight" });
+function navigate(delta) {
+	if (shiftHeld) {
+		const target = groupJumpTarget(delta);
+		if (target !== null) {
+			vscode.postMessage({ type: "goto_step", index: target });
+			return;
+		}
 	}
-});
+	vscode.postMessage({ type: delta > 0 ? "next" : "prev" });
+}
+
+document.getElementById("btn-next").addEventListener("click", () => navigate(+1));
+
+document.getElementById("btn-prev").addEventListener("click", () => navigate(-1));
 
 document.getElementById("btn-restart").addEventListener("click", () => {
 	vscode.postMessage({ type: "restart" });
@@ -1415,38 +1670,35 @@ window.addEventListener("message", (event) => {
 			break;
 		}
 
-		case "highlight_advance": {
-			currentHighlightIndex = msg.highlightIndex;
-			totalHighlights = msg.totalHighlights;
-			renderHighlightProgress();
-			const hlIdx = state.segments.findIndex((s) => s.id === state.currentSegment);
-			if (hlIdx !== -1) renderOutline(hlIdx);
-			// New step → reset the read-along audio model (clock, retained buffers, sentence map); the next
-			// chunks re-populate it, and renderTranscript rebuilds the word spans (Phase 7.5 #12/#13).
+		case "step_advance": {
+			// Narration has started this step. The *position* already arrived in an `update` (the walkthrough
+			// fires one move event and the sidebar pushes on it), so this no longer carries a cursor to
+			// assign — what it carries is the moment: reset the read-along audio model (clock, retained
+			// buffers, sentence map) so the next chunks re-populate it (Phase 7.5 #12/#13).
+			if (typeof msg.index === "number" && msg.index !== state.currentStep) break;
 			resetStepAudioModel();
 			lastSpokenWord = -1;
-			// The explanation box keeps the segment-level overview (set in render()); the transcript box
+			// The explanation box keeps the frame-level overview (set in render()); the transcript box
 			// tracks the current step's spoken words. This is the text that matches the audio.
 			renderTranscript(true);
 			break;
 		}
 
 		case "update": {
-			const prevSegment = state.currentSegment;
+			// **One position, and the backend states it.** There is nothing to guess or reset here any more:
+			// round 3's defect was this handler inferring a sub-step from a segment change, and the fix was
+			// to push the position — which is now the whole of it, one integer that every consumer reads.
 			state = {
 				title: msg.title,
-				segments: msg.segments,
-				currentSegment: msg.currentSegment,
+				outline: msg.outline || { scenes: [], scened: false, steps: 0 },
+				currentStep: typeof msg.currentStep === "number" ? msg.currentStep : -1,
+				stepCount: msg.stepCount || 0,
+				now: msg.now || null,
 				status: msg.status,
 				language: msg.language || "en",
 				languageName: msg.languageName || "English",
 				autonym: msg.autonym || "English",
 			};
-			// Only reset highlight state when the segment actually changed
-			if (prevSegment !== msg.currentSegment) {
-				currentHighlightIndex = 0;
-				totalHighlights = 0;
-			}
 			// If something else resumed playback while spacebar was held, clear the flag
 			if (state.status !== "paused") {
 				holdPaused = false;
@@ -1461,7 +1713,7 @@ window.addEventListener("message", (event) => {
 			playBtn.classList.remove("loading");
 			playBtn.removeAttribute("aria-busy");
 			playBtn.removeAttribute("aria-disabled");
-			playAudioChunk(msg.data, msg.sampleRate, msg.si || 0, msg.sw || 1);
+			playAudioChunk(msg.data, msg.sampleRate, msg.si || 0, msg.sw || 1, msg.stext || "");
 			break;
 		}
 

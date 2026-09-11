@@ -1,0 +1,167 @@
+{
+  "type": "set_plan",
+  "title": "Three scenes: the dispatcher, the price, and the leaf",
+  "language": "en",
+  "frames": [
+    {
+      "id": 0,
+      "scene": 0,
+      "file": "src/Fixture.Processing/Dispatcher.cs",
+      "title": "Dispatcher.Dispatch",
+      "explanation": "Scene 0's root. The entry point, and the scene the walkthrough returns to at the end.",
+      "keep": [
+        { "start": 17, "end": 17, "role": "context" },
+        { "start": 45, "end": 59, "role": "focus" }
+      ],
+      "relations": [
+        {
+          "kind": "flow",
+          "from": { "line": 50, "token": "_validation.Handle" },
+          "to": {
+            "file": "src/Fixture.Processing/Handlers/ValidationHandler.cs",
+            "line": 18,
+            "symbol": "ValidationHandler.Handle"
+          },
+          "note": "the child node nested on this line"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "scene": 0,
+      "file": "src/Fixture.Processing/Handlers/ValidationHandler.cs",
+      "title": "ValidationHandler.Handle",
+      "explanation": "Nested inside Dispatch at its call site — a two-node scene.",
+      "parent": 0,
+      "callLine": 50,
+      "callToken": "_validation.Handle",
+      "keep": [
+        { "start": 9, "end": 9, "role": "context" },
+        { "start": 18, "end": 24, "role": "focus" },
+        { "start": 34, "end": 37, "role": "context" }
+      ]
+    },
+    {
+      "id": 2,
+      "scene": 1,
+      "file": "src/Fixture.Processing/Handlers/PricingHandler.cs",
+      "title": "PricingHandler.Handle",
+      "explanation": "Scene 1's root. The same frame that was a nested child in the old one-scene plan is a root here — a frame's place is a property of its scene, not of the file.",
+      "keep": [
+        { "start": 11, "end": 11, "role": "context" },
+        { "start": 29, "end": 41, "role": "focus" }
+      ],
+      "relations": [
+        {
+          "kind": "flow",
+          "from": { "line": 38, "token": "subtotal" },
+          "to": { "line": 39, "token": "MidInvoker.InvokeOn" },
+          "note": "the amount handed down — the in-file arrow, and the control that must still fire inside a scene"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "scene": 1,
+      "file": "src/Fixture.Processing/Invokers.cs",
+      "title": "MidInvoker.InvokeOn",
+      "explanation": "Nested in the pricing handler. Scene 1 is therefore the same shape as scene 0 over different files.",
+      "parent": 2,
+      "callLine": 39,
+      "callToken": "MidInvoker.InvokeOn",
+      "keep": [
+        { "start": 17, "end": 17, "role": "context" },
+        { "start": 36, "end": 43, "role": "focus" },
+        { "start": 51, "end": 53, "role": "context" }
+      ]
+    },
+    {
+      "id": 4,
+      "scene": 2,
+      "file": "src/Fixture.Core/SubInvoker.cs",
+      "title": "SubInvoker.Apply",
+      "explanation": "Scene 2 is one frame: a single file, shown as a one-node tree. This is the shape every 'explain this method' plan now takes.",
+      "keep": [
+        { "start": 15, "end": 15, "role": "context" },
+        { "start": 68, "end": 85, "role": "focus" }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "frame": 0,
+      "ranges": [{ "start": 45, "end": 49 }],
+      "token": "_failures",
+      "explanation": "Scene 0 — Dispatch starts clean",
+      "ttsText": "Dispatch takes one order, throws on null, and empties the failure list it is about to fill."
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 50, "end": 52 }],
+      "token": "_validation",
+      "explanation": "Three handlers, one of them nested here",
+      "note": "Only validation is a node in this scene. The other two handlers get their own scene.",
+      "ttsText": "Then three handlers run in a fixed order. This scene keeps only the first of them on screen, because a scene is what the reader is looking at rather than everything the plan will ever mention."
+    },
+    {
+      "frame": 1,
+      "ranges": [{ "start": 18, "end": 24 }],
+      "token": "problems",
+      "explanation": "Into the nested node",
+      "ttsText": "Validation counts what it inspected and starts a list of problems, one string per thing wrong with the order."
+    },
+    {
+      "frame": 1,
+      "ranges": [{ "start": 34, "end": 37 }],
+      "token": "Verdict",
+      "explanation": "The verdict leaves this frame",
+      "ttsText": "It returns a clean verdict when the problem list is empty, and a rejected one carrying the problems when it is not."
+    },
+    {
+      "frame": 2,
+      "ranges": [{ "start": 29, "end": 36 }],
+      "token": "verdict",
+      "explanation": "Scene 1 — the tree is rebuilt",
+      "note": "Scene change: the two nodes of scene 0 are gone and two different ones are up.",
+      "example": "verdict rejected → Money.Zero, and nothing below this line runs",
+      "ttsText": "Now the pricing handler. Notice that the previous two files are no longer on screen: this step is in another scene, so the whole tree was replaced rather than added to."
+    },
+    {
+      "frame": 2,
+      "ranges": [{ "start": 38, "end": 41 }],
+      "token": "MidInvoker.InvokeOn",
+      "explanation": "And hands the subtotal down",
+      "ttsText": "It takes the order subtotal and hands it to the invoker, with the scale factor and the shared options."
+    },
+    {
+      "frame": 3,
+      "ranges": [{ "start": 36, "end": 43 }],
+      "token": "Normalize",
+      "explanation": "Into scene 1's nested node",
+      "ttsText": "The invoker validates the factor, counts the invocation, and normalises the amount before deciding whether it is worth settling."
+    },
+    {
+      "frame": 4,
+      "ranges": [{ "start": 68, "end": 79 }],
+      "token": "ResolveEnabled",
+      "explanation": "Scene 2 — one file, one node",
+      "note": "A one-frame scene. This is what 'Explain This (Audio)' on a single method now looks like.",
+      "ttsText": "The leaf. Every enabled adjustment runs over the amount in registration order, and each one is recorded before the next runs."
+    },
+    {
+      "frame": 4,
+      "ranges": [{ "start": 81, "end": 85 }],
+      "token": "GuardAgainstNegative",
+      "explanation": "Still in scene 2 — no rebuild",
+      "ttsText": "Then it guards against a negative total and rounds to the configured precision, returning the amount unchanged when it is already rounded."
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 54, "end": 57 }],
+      "token": "verdict.Problems",
+      "explanation": "Back in scene 0 — rebuilt, not restored",
+      "note": "The scene is built fresh. Any node you collapsed or resized in it earlier is back at its default.",
+      "ttsText": "And back to Dispatch to finish: if the verdict was not acceptable, its problems become the dispatcher's failures. Scene zero is built again from scratch, because the tree holds one scene at a time."
+    }
+  ]
+}

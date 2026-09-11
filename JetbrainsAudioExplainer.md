@@ -12,7 +12,7 @@ plugin** (no ReSharper backend module) and therefore runs unchanged in Rider, ID
 WebStorm, etc.
 
 > **This document is a build log, phase by phase, and is not edited retroactively.** One rename since
-> matters when following its code references: `TreeOfCode.md` Phase 1a split the drawing half out of
+> matters when following its code references: `TreeOfCode.rules.md` Phase 1a split the drawing half out of
 > `EditorHighlighter.kt` into **`SpotlightRenderer.kt`**, so `EditorHighlighter.colors()` /
 > `.refresh()` / `clearTracked()` below are now `SpotlightRenderer.colors()` / `.flashToken()` +
 > `EditorHighlighter.refresh()` / `SpotlightRenderer.clear()`. Where a section says `EditorHighlighter`

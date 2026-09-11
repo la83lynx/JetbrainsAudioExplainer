@@ -31,18 +31,23 @@ import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 
 /**
- * Loopback HTTP server reproducing code-explainer's `vscode-extension/src/server.ts` wire contract
- * byte-for-byte, so the reused agent skill (`explainer.sh` + SKILL.md + docs) works unchanged.
- * Port + auth token are published to `~/.claude-explainer-{port,token}` for discovery.
+ * Loopback HTTP server, port + auth token published to `~/.claude-explainer-{port,token}` for discovery.
+ * It began as a byte-for-byte port of code-explainer's `vscode-extension/src/server.ts`; the `set_plan`
+ * body is the `frames` + `steps` schema since Phase 2 and the three segment-surgery messages are retired
+ * with it (`TreeOfCode.rules.md` Phase 2 decision 10), so the wire contract is this project's own now.
  *
  * Routes (all JSON, auth via `Authorization: Bearer <token>` or `x-auth-token`, `OPTIONS` un-authed):
  *   GET  /api/health        -> {"status":"ok"}
- *   GET  /api/state         -> {title,currentSegment,status,totalSegments,currentIndex,segment}
+ *   GET  /api/state         -> {title,step,stepCount,status,totalFrames,totalScenes,frame,...}
  *   GET  /api/actions?timeout=<sec>  -> long-poll: 200 UserAction | 204 on timeout (1..120s, default 30)
- *   POST /api/message       -> {"ok":true}  (set_plan|insert_after|replace_segment|remove_segments|goto|resume|stop)
+ *   POST /api/message       -> {"ok":true,"frames":N,"steps":N,"issues":[...]}  (set_plan|goto|resume|stop)
  *   POST /api/save          -> {"ok":true,"filePath":...}
  *   GET  /api/walkthroughs  -> {"walkthroughs":[{name,title,filePath}]}
- *   POST /api/load          -> {"ok":true,"title":...,"segments":N}
+ *   POST /api/load          -> {"ok":true,"title":...,"frames":N,"steps":N}
+ *
+ * **`issues` on a `set_plan` reply is the one channel that reaches the agent that authored the plan.** A
+ * frame dropped, a cycle cut, a step lighting a line its frame elides — all of it comes back on the POST,
+ * because §1b's requirement is that a plan rendering three of its four frames says so.
  *
  * The upstream WebSocket channel is intentionally NOT ported: it only carried `state` broadcasts
  * and inbound AgentMessages (both redundant with HTTP), no reused client ever connects to it, and
@@ -109,9 +114,9 @@ class ExplainerServer {
     fun saveCurrentWalkthrough(name: String?): String? {
         val storage = this.storage ?: return null
         val state = walkthrough.getState()
-        if (state.title.isEmpty() || state.segments.isEmpty()) return null
+        if (state.title.isEmpty() || state.plan.frames.isEmpty()) return null
         return try {
-            storage.save(state.title, state.segments, state.language, name)
+            storage.save(state.plan, name)
         } catch (e: Exception) {
             log.warn("sidebar save failed", e)
             null
@@ -129,7 +134,7 @@ class ExplainerServer {
     fun loadSavedWalkthrough(name: String): Boolean {
         val storage = this.storage ?: return false
         val data = storage.load(name) ?: return false
-        walkthrough.setPlan(data.title, data.segments, data.language)
+        walkthrough.setPlan(data)
         return true
     }
 
@@ -182,15 +187,21 @@ class ExplainerServer {
 
     private fun handleGetState(ex: HttpExchange) {
         val state = walkthrough.getState()
-        val currentSeg = state.segments.getOrNull(state.currentIndex)
+        val now = walkthrough.currentStepView()
         sendJson(ex, 200, buildJsonObject {
             put("title", state.title)
-            put("currentSegment", currentSeg?.id ?: -1)
+            // **One position.** `currentSegment` + `currentIndex` + `currentHighlight` were three spellings
+            // of a two-level cursor into a projected list that no longer exists; an agent polling this now
+            // reads the plan's own step index, which is the same number the sidebar and the tree hold.
+            put("step", state.stepIndex)
+            put("stepCount", state.stepCount)
             put("status", state.status)
-            put("totalSegments", state.segments.size)
-            put("currentIndex", state.currentIndex)
+            put("totalFrames", state.plan.frames.size)
+            put("totalSteps", state.plan.steps.size)
+            put("totalScenes", walkthrough.getResolvedPlan()?.scenes?.size ?: 0)
             put("language", state.language)
-            put("segment", if (currentSeg != null) json.encodeToJsonElement(currentSeg) else JsonNull)
+            // The step showing, as the sidebar's Now Playing sees it: which frame, its prose, the narration.
+            put("frame", if (now != null) json.encodeToJsonElement(now) else JsonNull)
         })
     }
 
@@ -219,40 +230,56 @@ class ExplainerServer {
         if (!validateAgentMessage(obj)) {
             sendJson(ex, 400, error("Invalid message format")); return
         }
-        try {
+        val resolved = try {
             dispatchAgentMessage(obj)
         } catch (e: Exception) {
-            // Upstream trusts segment internals; a decode failure here means a malformed payload.
+            // A decode failure here means a malformed payload; the *contents* of a well-formed plan are
+            // reported below rather than rejected.
             log.warn("agent message dispatch failed", e)
             sendJson(ex, 400, error("Invalid message format")); return
         }
-        sendJson(ex, 200, buildJsonObject { put("ok", true) })
+        sendJson(ex, 200, buildJsonObject {
+            put("ok", true)
+            // Everything wrong with the plan, back to the only reader who can fix it — the agent that just
+            // wrote it. §1b's second requirement: a plan that renders three of its four frames has to say
+            // so, or the fourth reads as a renderer defect. Absent when the plan was clean, so a
+            // well-formed plan's reply is byte-identical to what it always was.
+            if (resolved != null) {
+                put("frames", resolved.frames.size)
+                put("steps", resolved.steps.size)
+                if (resolved.issues.isNotEmpty()) {
+                    putJsonArray("issues") { resolved.issues.forEach { add(it.toString()) } }
+                }
+            }
+        })
     }
 
-    private fun dispatchAgentMessage(obj: JsonObject) {
+    /**
+     * Run one agent message, returning the [ResolvedPlan] when the message loaded one (so the responder can
+     * report its issues) and null otherwise.
+     *
+     * **`insert_after` / `replace_segment` / `remove_segments` are gone** (Phase 2 decision 10): they edited
+     * a segment list that is no longer the source of truth, and a live plan is now changed by POSTing a new
+     * `set_plan` — which the agent can do, because it is holding the whole plan already.
+     */
+    private fun dispatchAgentMessage(obj: JsonObject): ResolvedPlan? {
         when (obj["type"]!!.jsonPrimitive.content) {
-            "set_plan" -> {
-                val plan = json.decodeFromJsonElement<Plan>(obj)
-                walkthrough.setPlan(plan.title, plan.segments, plan.language)
+            "set_plan" -> return walkthrough.setPlan(json.decodeFromJsonElement<Plan>(obj))
+            "goto" -> {
+                // `frameId` is the name since Phase 2; `segmentId` is still read as an alias, because an
+                // agent holding an old prompt spells it that way. Both resolve the same: the **first step**
+                // whose primary frame is that id. A `stepIndex` may also be given, which is exact — an agent
+                // that knows the plan's own step order no longer has to name a frame to reach a step.
+                val step = obj["stepIndex"]?.jsonPrimitive?.int
+                    ?: (obj["frameId"] ?: obj["segmentId"])?.jsonPrimitive?.int
+                        ?.let { walkthrough.firstStepOfFrame(it) }
+                    ?: return null
+                walkthrough.navigateToStep(step)
             }
-            "insert_after" -> {
-                val after = obj["afterSegment"]!!.jsonPrimitive.int
-                val segs = json.decodeFromJsonElement<List<Segment>>(obj["segments"]!!)
-                walkthrough.insertAfter(after, segs)
-            }
-            "replace_segment" -> {
-                val id = obj["id"]!!.jsonPrimitive.int
-                val seg = json.decodeFromJsonElement<Segment>(obj["segment"]!!)
-                walkthrough.replaceSegment(id, seg)
-            }
-            "remove_segments" -> {
-                val ids = json.decodeFromJsonElement<List<Int>>(obj["ids"]!!)
-                walkthrough.removeSegments(ids)
-            }
-            "goto" -> walkthrough.navigateTo(obj["segmentId"]!!.jsonPrimitive.int)
             "resume" -> walkthrough.play()
             "stop" -> walkthrough.stop()
         }
+        return null
     }
 
     private fun handleSave(ex: HttpExchange) {
@@ -262,7 +289,7 @@ class ExplainerServer {
             sendJson(ex, 500, error("Storage not available")); return
         }
         val state = walkthrough.getState()
-        if (state.title.isEmpty() || state.segments.isEmpty()) {
+        if (state.title.isEmpty() || state.plan.frames.isEmpty()) {
             sendJson(ex, 400, error("No active walkthrough")); return
         }
         var name: String? = null
@@ -275,7 +302,7 @@ class ExplainerServer {
             name = stringField(parsed as? JsonObject, "name")
         }
         val filePath = try {
-            storage.save(state.title, state.segments, state.language, name)
+            storage.save(state.plan, name)
         } catch (e: Exception) {
             log.warn("save failed", e)
             sendJson(ex, 500, error("Failed to save walkthrough")); return
@@ -326,12 +353,16 @@ class ExplainerServer {
         if (data == null) {
             sendJson(ex, 404, error("Walkthrough not found")); return
         }
-        walkthrough.setPlan(data.title, data.segments, data.language)
+        val resolved = walkthrough.setPlan(data)
         sendJson(ex, 200, buildJsonObject {
             put("ok", true)
             put("title", data.title)
-            put("segments", data.segments.size)
+            put("frames", resolved.frames.size)
+            put("steps", resolved.steps.size)
             put("language", data.language)
+            if (resolved.issues.isNotEmpty()) {
+                putJsonArray("issues") { resolved.issues.forEach { add(it.toString()) } }
+            }
         })
     }
 
@@ -343,11 +374,12 @@ class ExplainerServer {
         val type = typePrim.content
         if (type !in VALID_AGENT_MESSAGE_TYPES) return false
         return when (type) {
-            "set_plan" -> isJsonString(obj["title"]) && obj["segments"] is JsonArray
-            "insert_after" -> isJsonNumber(obj["afterSegment"]) && obj["segments"] is JsonArray
-            "replace_segment" -> isJsonNumber(obj["id"]) && obj["segment"] is JsonObject
-            "remove_segments" -> obj["ids"] is JsonArray
-            "goto" -> isJsonNumber(obj["segmentId"])
+            // `steps` is not required here: a plan with frames and no steps renders as structure with no
+            // narration, which the loader reports (`plan.no-steps`) rather than rejects. Rejecting at the
+            // wire level would turn a reportable authoring mistake into a 400 with no detail.
+            "set_plan" -> isJsonString(obj["title"]) && obj["frames"] is JsonArray
+            "goto" -> isJsonNumber(obj["frameId"]) || isJsonNumber(obj["segmentId"]) ||
+                isJsonNumber(obj["stepIndex"])
             "resume", "stop" -> true
             else -> false
         }
@@ -442,9 +474,7 @@ class ExplainerServer {
         private const val PORT_FILE = ".claude-explainer-port"
         private const val TOKEN_FILE = ".claude-explainer-token"
 
-        private val VALID_AGENT_MESSAGE_TYPES = setOf(
-            "set_plan", "insert_after", "replace_segment", "remove_segments", "goto", "resume", "stop",
-        )
+        private val VALID_AGENT_MESSAGE_TYPES = setOf("set_plan", "goto", "resume", "stop")
 
         private fun generateToken(): String {
             val bytes = ByteArray(32)

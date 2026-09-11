@@ -191,5 +191,10 @@ Default: `1.0`. Always pass the user's speed setting (the plugin sends the sideb
 ## Spoken text rules
 
 - **Plain text only** — no backticks, bold, line numbers, file paths
-- **2-4 sentences** — shorter than the written explanation
+- **Say identifiers in English, at least the first time.** `camelCase`, `PascalCase` and `snake_case` are read
+  badly by every engine — run together, spelled out, or stressed on the wrong syllable. Write *"the readiness
+  gate"* or *"the resolve-enabled flag"* rather than `isReadyToResolve`, and if the exact name matters, give it
+  once in prose and then use the plain-English form. This decides what the user actually hears, so it is worth
+  more care than the written `explanation`, which they can read at their own pace
+- **1-2 sentences per step** — shorter than the written explanation. This is the fourth doc to have carried a number for it; `docs/plan-schema.md` binds, and 3-6 belongs to a podcast segment, not to a walkthrough step
 - **Conversational** — as if explaining to a colleague

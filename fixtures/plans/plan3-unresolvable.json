@@ -1,0 +1,82 @@
+{
+  "type": "set_plan",
+  "title": "Unresolvable anchors — validate and drop",
+  "language": "en",
+  "frames": [
+    {
+      "id": 0,
+      "file": "src/Fixture.Core/SubInvoker.cs",
+      "title": "SubInvoker.Apply",
+      "explanation": "Every step whose anchor cannot be found must still render its lines, its callout and its links — only the pulse is dropped. Each failing case sits BESIDE a case where the same mechanism succeeds, so a step that draws nothing cannot be mistaken for an instrument that is simply blind.",
+      "keep": [
+        { "start": 66, "end": 85, "role": "focus" }
+      ],
+      "relations": [
+        {
+          "kind": "flow",
+          "from": { "line": 73, "token": "running" },
+          "to": { "line": 81, "token": "running" },
+          "note": "a resolvable pair, so the link drawing is a control for the token drops below"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "frame": 0,
+      "ranges": [{ "start": 81, "end": 84 }],
+      "token": "guarded",
+      "explanation": "CONTROL — this one resolves",
+      "note": "Read this step first. If it does not pulse, every drop below is meaningless.",
+      "ttsText": "The guarded value is the anchor here, and it is present, so this step pulses."
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 68, "end": 85 }],
+      "token": "nonexistentSymbol",
+      "explanation": "Absent from the file entirely",
+      "note": "The plain miss. Lines, callout and links must all still draw.",
+      "ttsText": "This step names an identifier that does not appear anywhere in the method, which is the simplest way an anchor fails."
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 76, "end": 78 }],
+      "token": "Running",
+      "explanation": "Right word, wrong case",
+      "note": "`running` is on all three of these lines. `Running` is on none — the match is case-sensitive, and this is the pair that proves it.",
+      "ttsText": "Capitalising the first letter is enough to miss: the anchor is matched exactly, not loosely."
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 82, "end": 84 }],
+      "token": "running",
+      "explanation": "In the file, outside the range",
+      "note": "`running` occurs four times in this method but not once in lines 82–84. The search window is the STEP's ranges, never the whole file.",
+      "ttsText": "The running total is named plenty of times in this method, but not in the lines this step is about, so there is nothing here to mark."
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 77, "end": 77 }],
+      "token": "Apply(",
+      "explanation": "CONTROL — resolves only on the second pass",
+      "note": "A non-identifier anchor: the whole-word pass rejects `Apply(` because a letter follows the bracket's left flank, and the bare-substring pass is what finds it. This is the pair that justifies `resolveToken` running twice.",
+      "ttsText": "An anchor that includes its opening bracket cannot match as a whole word, and is found by the substring pass instead."
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 70, "end": 71 }],
+      "token": "   ",
+      "explanation": "Blank after trimming",
+      "note": "Dropped before the search runs at all — the upstream guard, not a failed match.",
+      "ttsText": "An anchor that is nothing but whitespace is discarded before anything is looked for."
+    },
+    {
+      "frame": 0,
+      "ranges": [{ "start": 81, "end": 81 }],
+      "token": "GuardAgainstNegative",
+      "explanation": "CONTROL — the last word is that it still works",
+      "note": "Ending on a hit rather than a miss, so a run that silently stopped pulsing partway through is visible.",
+      "ttsText": "The guard call resolves normally, which closes the plan on a case that works."
+    }
+  ]
+}

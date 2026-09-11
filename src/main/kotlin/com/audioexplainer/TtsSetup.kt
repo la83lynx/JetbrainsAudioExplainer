@@ -58,7 +58,7 @@ object TtsSetup {
     fun install(project: Project?, onDone: (() -> Unit)? = null) {
         settings.state.ttsSetupPrompted = true
         ProgressManager.getInstance().run(object : Task.Backgroundable(anyProject(project), "Setting up Kokoro TTS", true) {
-            override fun run(indicator: ProgressIndicator) = withDone(onDone) {
+            override fun run(indicator: ProgressIndicator): Unit = withDone(onDone) {
                 indicator.isIndeterminate = true
                 var status = tts.status(refresh = true)
                 if (status.availability == TtsService.Availability.PYTHON_MISSING) {
@@ -107,7 +107,7 @@ object TtsSetup {
      */
     fun installLanguagePacks(project: Project?, onDone: (() -> Unit)? = null) {
         ProgressManager.getInstance().run(object : Task.Backgroundable(anyProject(project), "Installing Japanese/Chinese TTS packs", true) {
-            override fun run(indicator: ProgressIndicator) = withDone(onDone) {
+            override fun run(indicator: ProgressIndicator): Unit = withDone(onDone) {
                 indicator.isIndeterminate = true
                 val status = tts.status(refresh = true)
                 if (status.availability == TtsService.Availability.PYTHON_MISSING) {
@@ -147,7 +147,7 @@ object TtsSetup {
      */
     fun installPiper(project: Project?, onDone: (() -> Unit)? = null) {
         ProgressManager.getInstance().run(object : Task.Backgroundable(anyProject(project), "Installing Piper (offline-neural TTS)", true) {
-            override fun run(indicator: ProgressIndicator) = withDone(onDone) {
+            override fun run(indicator: ProgressIndicator): Unit = withDone(onDone) {
                 indicator.isIndeterminate = true
                 val status = tts.status(refresh = true)
                 if (status.availability == TtsService.Availability.PYTHON_MISSING) {
@@ -182,7 +182,7 @@ object TtsSetup {
      */
     fun downloadPiperVoice(project: Project?, voiceKey: String, onDone: (() -> Unit)? = null) {
         ProgressManager.getInstance().run(object : Task.Backgroundable(anyProject(project), "Downloading Piper voice", true) {
-            override fun run(indicator: ProgressIndicator) = withDone(onDone) {
+            override fun run(indicator: ProgressIndicator): Unit = withDone(onDone) {
                 indicator.isIndeterminate = true
                 val status = tts.status(refresh = true)
                 if (status.availability == TtsService.Availability.PYTHON_MISSING) {
@@ -223,7 +223,7 @@ object TtsSetup {
      */
     fun deletePiperVoice(project: Project?, voiceKey: String, onDone: (() -> Unit)? = null) {
         ProgressManager.getInstance().run(object : Task.Backgroundable(anyProject(project), "Deleting Piper voice", false) {
-            override fun run(indicator: ProgressIndicator) = withDone(onDone) {
+            override fun run(indicator: ProgressIndicator): Unit = withDone(onDone) {
                 indicator.isIndeterminate = true
                 indicator.text = "Removing “$voiceKey”…"
                 if (!tts.deletePiperVoice(voiceKey)) {

@@ -20,8 +20,8 @@ This question allows custom answers — the user may describe their specific con
 
 | Option | Description |
 |--------|-------------|
-| **Overview** | High-level architecture, data flow, how pieces connect. 40-80 lines per segment, 4-8 segments. |
-| **Deep Dive** | Line-by-line, patterns, design decisions. 15-40 lines per segment, 8-15 segments. |
+| **Overview** | High-level architecture, data flow, how pieces connect. 3-6 steps per frame, and fewer frames on screen at a time. |
+| **Deep Dive** | Line-by-line, patterns, design decisions. 6-12 steps per frame, and the call chain nested on screen. |
 
 ## Question 3: Delivery mode
 
