@@ -27,7 +27,8 @@
         <postStartupActivity implementation="com.audioexplainer.ServerStartupActivity"/>
         <!-- The tree host, and now the only one (Phase 2). Accepts only TreePlanVirtualFile, so no file of
              the user's can reach it; HIDE_DEFAULT_EDITOR keeps the platform from offering a text tab beside it.
-             The Phase 0b/1 bench provider that used to sit here went with the com.audioexplainer.spike benches. -->
+             The dev bench provider that used to sit here, and the fixture-plan menu beside it, came out with
+             the com.audioexplainer.spike package before release. -->
         <fileEditorProvider implementation="com.audioexplainer.tree.TreePlanEditorProvider"/>
         <applicationService serviceImplementation="com.audioexplainer.ExplainerServerService"/>
         <applicationService serviceImplementation="com.audioexplainer.AudioExplainerSettings"/>
@@ -56,71 +57,6 @@
                     class="com.audioexplainer.ConfigureTtsAction"
                     text="Audio engines…"
                     description="Open the per-engine narration settings: status, install Kokoro / language packs, Windows voices"/>
-            <!-- DEV-ONLY, and the vehicle every judged round since Phase 2 has used. The acceptance plans
-                 live in the repo, so a menu entry loads one and the reader never leaves the IDE — which is what
-                 stopped rounds failing for reasons that said nothing about the code. Goes with the
-                 com.audioexplainer.spike package once the tree needs no more judged rounds. -->
-            <group id="AudioExplainer.G2Round" text="Fixture plans (dev)" popup="true">
-                <action id="AudioExplainer.LoadScenesTourPlan"
-                        class="com.audioexplainer.spike.LoadScenesTourPlanAction"
-                        text="1 &#x2014; Load: Three scenes (the scene model)"
-                        description="fixtures/plans/scenes-tour.json: 5 frames in 3 scenes, 10 steps, 3 rebuilds. The tree is REPLACED at steps 5, 8 and 10 and stands still everywhere else. Step 10 returns to scene 0, which is rebuilt rather than restored"/>
-                <action id="AudioExplainer.LoadSingleFramePlan"
-                        class="com.audioexplainer.spike.LoadSingleFramePlanAction"
-                        text="2 &#x2014; Load: One method as a one-node tree"
-                        description="fixtures/plans/single-frame.json: 1 frame, 3 steps, one in-file arrow. The commonest shape there is, and the case round 3 judged as good as the in-place surface it replaced"/>
-                <action id="AudioExplainer.LoadTreeLinksPlan"
-                        class="com.audioexplainer.spike.LoadTreeLinksPlanAction"
-                        text="3 &#x2014; Load: Links — one scene, wide, deep, cross-frame"
-                        description="fixtures/plans/tree-links.json: 5 frames (3 siblings + a grandchild) in ONE scene, 10 steps, four cross-frame relations. The subject for the portal-pair work, and the regression control: a plan that never mentions scenes must render with 0 rebuilds"/>
-                <action id="AudioExplainer.LoadLinkFanPlan"
-                        class="com.audioexplainer.spike.LoadLinkFanPlanAction"
-                        text="4 &#x2014; Load: Five links on one line (the routing fan)"
-                        description="fixtures/plans/link-fan.json: 3 root nodes, 6 steps, FIVE links per step. Steps 1-2 are five token links off one row, diving then rising, two of them landing on one far row; step 3 is five line-end links off one row; steps 4-5 are three same-editor links plus two portals off one row, at line level then token level; step 6 is five links off five DIFFERENT pairs of rows, which is the routing staircase. No nesting anywhere in it, so what is judged is the routing and nothing else"/>
-                <separator/>
-                <action id="AudioExplainer.LoadOccurrencePlan"
-                        class="com.audioexplainer.spike.LoadOccurrencePlanAction"
-                        text="5 &#x2014; Load: The same token, counted (occurrence)"
-                        description="fixtures/plans/plan2-occurrence.json: 1 frame, 7 steps, every one anchored on a token that occurs more than once in its own range. Steps 1-2 and 3-4 are pairs on ONE line (plain and dotted); step 5 counts across two lines; step 7 asks for one occurrence past the end, which must cost the pulse and nothing else"/>
-                <action id="AudioExplainer.LoadUnresolvablePlan"
-                        class="com.audioexplainer.spike.LoadUnresolvablePlanAction"
-                        text="6 &#x2014; Load: Anchors that cannot resolve"
-                        description="fixtures/plans/plan3-unresolvable.json: 1 frame, 7 steps. Absent, wrong case, outside the range, blank, and one that resolves only on the substring pass — each beside a control that succeeds. First and last steps resolve, so a run that stopped pulsing partway is visible"/>
-                <action id="AudioExplainer.LoadBrokenTreeLinksPlan"
-                        class="com.audioexplainer.spike.LoadBrokenTreeLinksPlanAction"
-                        text="7 &#x2014; Load: Bad call line (failure path)"
-                        description="Entry 3's plan with frame 2's callLine set to 140, a line its parent does not keep. Expect [warn] frame.call-line-not-kept, and frame 2 rendered at top level WITH its own child still nested inside it"/>
-                <action id="AudioExplainer.LoadCrossSceneParentPlan"
-                        class="com.audioexplainer.spike.LoadCrossSceneParentPlanAction"
-                        text="8 &#x2014; Load: Parent in another scene (failure path)"
-                        description="Entry 1's plan with frame 3 moved to scene 2, where its parent has no node. Expect [warn] frame.parent-other-scene and scene 2 showing TWO top-level nodes — degraded, not dropped"/>
-                <action id="AudioExplainer.LoadOverBudgetPlan"
-                        class="com.audioexplainer.spike.LoadOverBudgetPlanAction"
-                        text="9 &#x2014; Load: Over the line budget (pressure path)"
-                        description="Entry 3's plan with the root frame keeping the rest of its file: 88 kept lines against the cap of 60. The extreme rather than the only case &#8212; the fold now runs on every step whatever the budget says, and two of the other fixtures are over the cap on their own. Expect [info] scene.line-budget-exceeded, and a step touching one handler collapsing the nestings it does not touch"/>
-                <action id="AudioExplainer.LoadBeatsPlan"
-                        class="com.audioexplainer.spike.LoadBeatsPlanAction"
-                        text="10 &#x2014; Load: Beats (PLAY this one, do not step)"
-                        description="fixtures/plans/plan4-beats.json: 1 frame, 7 steps. A beat with a `say` fires off the playback clock, so Next/Previous shows no pulse for steps 1-4 — press Play. Step 1 is three beats on three lines; step 2 three beats on one line; step 3 is the &quot;e.g.&quot; split, where a sentence NUMBER would land wrong; step 4 puts two beats in one sentence and only the first may fire; step 5 is one pulse and no timing; step 6 is a five-line callout; step 7 is the LEGACY shape — a bare token over two ranges, with the token in the second, which is the case that used to resolve to nothing"/>
-                <separator/>
-                <action id="AudioExplainer.NextPlanStep"
-                        class="com.audioexplainer.spike.NextPlanStepAction"
-                        text="Next step"
-                        description="Advance one plan step. No TTS involved, so a round can judge what is drawn without a narration server">
-                    <keyboard-shortcut keymap="$default" first-keystroke="control alt shift PERIOD"/>
-                </action>
-                <action id="AudioExplainer.PreviousPlanStep"
-                        class="com.audioexplainer.spike.PreviousPlanStepAction"
-                        text="Previous step"
-                        description="Go back one plan step">
-                    <keyboard-shortcut keymap="$default" first-keystroke="control alt shift COMMA"/>
-                </action>
-                <separator/>
-                <action id="AudioExplainer.ClearPlan"
-                        class="com.audioexplainer.spike.ClearPlanAction"
-                        text="Clear the plan (stop)"
-                        description="Stop the walkthrough: the tree tab closes. Read the editor count after this — a scene change releases and creates editors on every crossing, so a leak would compound here"/>
-            </group>
         </group>
     </actions>
 </idea-plugin>

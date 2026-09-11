@@ -1655,8 +1655,8 @@ class CodeNodeSpec(
      * The excerpt of interest, or null if this node has nothing to land on.
      *
      * **The guess is "the second kept range"**, and it is a guess about *authoring* rather than about code: a node
-     * keeps its class header first and the member it is about second, which is what every case in
-     * `fixtures/TreeSpike` does and what `plan-schema.md` will require. A single-range node has no separate header,
+     * keeps its class header first and the member it is about second, which is what every acceptance plan did
+     * and what `plan-schema.md` requires. A single-range node has no separate header,
      * so its one range *is* the excerpt.
      */
     fun focusRange(): IntRange? {

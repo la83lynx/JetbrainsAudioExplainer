@@ -116,8 +116,8 @@ else:
 
 # 7. markdown fences balanced ------------------------------------------------
 unbalanced = []
-docs = ['TreeOfCode.rules.md', 'MoreUI.md', 'probes/README.md',
-        'fixtures/plans/README.md', os.path.join(skill, 'docs/plan-schema.md')]
+docs = ['README.md', 'JetbrainsAudioExplainer.md', 'ExplainerLanguages.md', 'probes/README.md',
+        os.path.join(skill, 'docs/plan-schema.md')]
 for f in docs:
     t = io.open(f, encoding='utf-8').read()
     if t.count('\n```') % 2:

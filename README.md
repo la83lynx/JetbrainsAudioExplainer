@@ -1,28 +1,25 @@
-# JetBrains Audio Explainer (Rider) — Phase 1–2 skeleton
+# JetBrains Audio Explainer (Rider)
 
 Native IntelliJ-Platform plugin that adds **"Explain This (Audio)"** to the editor context menu:
 audio-explains selected code / the symbol under the cursor, with synced line highlighting, using
-**Claude Code (headless)** as the backbone. See `../JetbrainsAudioExplainer.md` for the full plan.
+**Claude Code (headless)** as the backbone.
 
-This skeleton covers **Phase 1** (loads in Rider), **Phase 2** (loopback server implementing the
-reused wire protocol), **Phase 3** (the spotlight highlighting stack driven by walkthrough state),
-**Phase 3.5** (a Settings page under **Tools → Audio Explainer** to tune the highlight appearance),
-**Phase 4** (the JCEF sidebar tool window that reuses the upstream webview UI, with a Swing fallback),
-**Phase 5** (the **Explain This (Audio)** editor context-menu action that captures context and runs a
-background task), **Phase 6** (the headless Claude backbone: the action shells out to `claude -p`,
-which generates a walkthrough plan for the code under the cursor and POSTs it back), and **Phase 7**
-(cross-platform **Kokoro TTS**: a local `kokoro-onnx` server over TCP plus the narration driver that
-speaks each highlight in sync with the highlighted code, with a guided one-click setup). Phase 8
-(packaging) and Phase 7b (a Windows SAPI emergency fallback) are `TODO`.
+**Everything the plugin does is built and judged.** The loopback server and the reused wire protocol, the
+**tree of code** that renders a walkthrough, the JCEF sidebar (Swing fallback when JCEF is off), the headless
+`claude -p` backbone, cross-platform narration across four TTS tiers (Kokoro, Piper, Windows SAPI, espeak-ng)
+with ~50 languages, and read-along narration whose pulses land on the words being spoken. **What is left is
+Phase 8 — packaging, signing and the Marketplace listing**; `JetbrainsAudioExplainer.md` has that checklist
+and the known limitations, and `ExplainerLanguages.md` the multi-language design.
 
 ## What's here
-- `../TreeOfCode.rules.md` — **read this before changing the tree.** The 23 numbered constraints and the 11
-  numbered schema decisions that production KDoc cites *by number*, plus the caps and where each number came
-  from, the platform facts a compiler cannot check, the link system's shape, what must come out before a
-  release, what is
-  deferred and why, the round loop and the operational notes. It replaces the phase plan and the per-phase
-  ledger, which were deleted once the tree was built and judged — it keeps what something else depends on and
-  drops the history.
+- **Where the cited rules went.** KDoc through `tree/`, `PlanLoader`, `LinkArt`, `Protocol` and
+  `SpotlightRenderer` cites `TreeOfCode.rules.md` — its 23 numbered constraints, 11 schema decisions and the
+  caps — and `MoreUI.md` by section. Both were the build plans for work that is now finished and judged, so
+  they came out of the tree with the rest of the release cleanup. **They are not lost: `git show
+  4fead42:TreeOfCode.rules.md` and `git show 4fead42:MoreUI.md`** — the commit immediately before the cleanup
+  holds both, so every citation in the source still resolves. Read them before reopening a decision the tree
+  already took; the *rules* those numbers stand for are restated in the KDoc that cites them, which is why the
+  code is the surviving copy.
 - `build.gradle.kts` / `settings.gradle.kts` — Gradle + IntelliJ Platform Gradle Plugin 2.x, targeting Rider 2026.1.4 (branch 261).
 - `src/main/resources/META-INF/plugin.xml` — tool window, context-menu action, startup activity, app service.
 - `com/audioexplainer/ExplainerServer.kt` — HTTP loopback server (full wire contract: `/api/health|state|actions|message|save|load|walkthroughs`), drops `~/.claude-explainer-{port,token}`.
@@ -31,8 +28,7 @@ speaks each highlight in sync with the highlighted code, with a guided one-click
 - `SpotlightRenderer.kt` — the editor spotlight *drawing* stack (port of `highlight.ts`): dim/active/gap layers, callout inlay, relation arrows and pointers, token flash. One instance per editor (decorations are per-editor, not per-document), so a multi-editor surface can reuse it. Reads appearance from the settings service on every render.
 - `tree/CodeNodeView.kt` — one node of the **tree-of-code** surface (`TreeOfCode.rules.md` §1a′): a viewer editor over the *real* document, everything outside the node's kept line ranges folded away, chrome + size-to-content-with-a-cap around it, its own `SpotlightRenderer`, and height resync on fold / font / colour-scheme / **inlay** / width change (rendering a step changes a node's height, because the callout inlay wraps at node width). Driven by `TreePlanController`.
 - `tree/CodeNestView.kt` — **the chosen layout** (`TreeOfCode.rules.md` §1a‴, "Arch C"): a child node embedded *inside* its parent's editor directly under the line that calls it, via `EditorEmbeddedComponentManager` (an `impl`-package API, measured working on a viewer editor — and `offsetToXY` counts the block inlay, so the host's text reflows below the child instead of being drawn over). The invoking token is boxed and two diagonals run from it to the nested frame's top corners, painted in the frame's own top margin — which is why this needs **no overlay** at all. A nesting collapses to a one-row stub and re-expands, unlike a `CustomFoldRegion`. Unrelated top-level nodes stack in a scroll pane as before.
-- `spike/` — the dev fixture harness for the tree, reachable at **Tools → Audio Explainer → Fixture plans (dev)**. `FixturePlanActions.kt` loads one of the hand-written acceptance plans in `fixtures/plans/` through the real `Plan` serializer and steps it with `Ctrl+Alt+Shift+.` / `,`, so a judged round needs neither a TTS server nor hand-edited JSON. Ten entries: seven plans (four clean, two failure paths, one over the line budget), the two step actions and a stop. The Phase 1 interactive benches and the two `javac` probe directories under `spikes/` were deleted once the production host rendered the real schema — they judged a hard-coded fixture, which is the job `fixtures/plans/` now does against the real thing; the **disposal audit** went the same way — a round's instrument rather than a feature. It drove three open/close cycles over the scene fixture, walked every crossing and reported `EditorFactory.getAllEditors()` against a pre-open baseline; what a crossing costs is in `TreeOfCode.rules.md` under *The caps*, and the instrument itself is gone. **This package and its `plugin.xml` action group are dev-only and must be deleted together before a release** — they stay only while the tree still needs judged rounds.
-- `../probes/` — the automated checks, and there is no test source set: three `javac` probes that **import** the production classes (`PlanProbe` over `PlanLoader`/`PlanOutline`/`WalkthroughStorage`/`TreeStyle` — 105 assertions, `PlanFileProbe` over the acceptance plans, `LinkBench` over the link drawing — 212 assertions and 13 PNGs) plus two Python gates over the repo (`gates.py`: the `noCompiledSerializer` stub, `plugin.xml` class references, resource XML, line endings, skill manifest, `VERSION`, fences, and that a plan has exactly one destination; `check_fixture.py`: every relation endpoint verified against the file it points at). `probes/README.md` has the commands.
+- `../probes/` — **the automated checks, and there is no test source set.** Three `javac` probes that *import* the production classes (`PlanProbe` over `PlanLoader`/`PlanOutline`/`WalkthroughStorage`/`TreeStyle` — 134 assertions; `TokenProbe` over the anchor's `findNth` — 18; `LinkBench` over the link drawing — 217 and 13 PNGs), one `node` probe over the webview's playback clock (`ClockProbe` — 44, extracted out of the shipped `sidebar.js` by name rather than copied), and `gates.py` over the repo (the `noCompiledSerializer` stub, `plugin.xml` class references, resource XML, line endings, the skill manifest, `VERSION`, fences, and that a plan has exactly one destination). They import rather than transcribe, which is what separated them from the deleted `spikes/` and is why they outlived the fixtures. `probes/README.md` has the commands.
 - `AudioExplainerSettings.kt` — app-level `PersistentStateComponent` (`audioExplainer.xml`) holding the tunable highlight appearance and the tree's shape. Its `DEF_TREE_*` defaults are the verdicts nine judged rounds settled, so Reset-to-defaults restores what was actually approved.
 - `tree/TreeStyle.kt` — the one place a persisted setting becomes a `NestStyle`/`CodeNodeStyle`. Values are enum constant names, so there is no second vocabulary; an unrecognised one degrades to the default rather than stopping the tree from drawing.
 - `HighlightSettingsConfigurable.kt` — the **Settings → Tools → Audio Explainer** page (Kotlin UI DSL). Its first group is the **code tree's own shape** — the nesting leader (`BRACE` by default, or `CORNERS`/`ARROW`), the collapse control, the caption path, node de-emphasis, the elision style and the height ceiling — and the rest decorate the lines inside a node. On Apply it asks `TreePlanController.refresh()`, which re-styles the tree when the shape changed and re-renders the step when only a colour did; a **theme** change re-renders it too, via each node view's own colour-scheme subscription, because the palette is computed per render.
@@ -49,7 +45,7 @@ speaks each highlight in sync with the highlighted code, with a guided one-click
 - `AudioExplainerSidebar.kt` — JCEF sidebar hosting the reused webview (`resources/sidebar/*`), bridged to the walkthrough via `JBCefJSQuery`.
 - `AudioExplainerSwingSidebar.kt` — no-JCEF fallback: basic transport controls driving the walkthrough.
 - `resources/sidebar/sidebar.{html,js,css}` — the ported webview (html/js near-verbatim from upstream; css is a JetBrains-theme-aware rewrite).
-- `Protocol.kt` — `Plan` / `Segment` / `Highlight` / `UserAction` matching upstream `types.ts` exactly.
+- `Protocol.kt` — **the wire schema, and the one place a new field is declared**: `Plan` / `Frame` / `Step` / `Beat` / `Relation` / `Endpoint`, plus the `Outline*` / `StepView` projections the sidebar reads and `UserAction`. A `Beat` is `{ line, token, occurrence?, say? }` — the *only* anchor shape in the plugin, the same one a relation endpoint and a call line use. The canonical prose for it is `claude-skill/docs/plan-schema.md`; the two must move together.
 - `LICENSE-code-explainer` — MIT attribution for reused code-explainer assets (keep in every distribution).
 
 ## Prerequisites

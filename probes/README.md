@@ -1,7 +1,7 @@
 # `probes/` — three-second checks on the pure parts
 
-Four `javac` probes — two over the schema layer, one over the token anchor, and a **bench** over the link
-drawing — one `node` probe over the webview's playback clock, and two Python gates over the repo itself. They exist because `PlanLoader`, `PlanOutline`,
+Three `javac` probes — one over the schema layer, one over the token anchor, and a **bench** over the link
+drawing — one `node` probe over the webview's playback clock, and one Python gate over the repo itself. They exist because `PlanLoader`, `PlanOutline`,
 `WalkthroughStorage`, `TreeStyle` and the renderer's own `findNth` are pure arithmetic over line numbers, paths and strings — no VFS, no documents, no EDT — so every question about them is answerable
 in seconds, and finding a mis-numbered `keep` range in a four-minute sandbox launch instead is a bad trade.
 
@@ -20,7 +20,6 @@ so a green tick cannot come from an instrument that is simply blind.
 | Probe | Asks |
 |---|---|
 | `PlanProbe.java` | Does each degrade do what the caps say? Cycle broken at the frame that closes it, over-deep frame re-rooted, un-kept call line dropped to top level, focus inferred and reported, step range outside `keep` reported, duplicate id first-wins, soft caps counted. Plus **the outline** (Phase 3): runs and revisits not merged, every step reachable exactly once in plan order, the scene level on only when a plan has more than one scene, a revisited scene as two rows reusing its number, `stepView`'s enclosing span — and that a step row carries **no** `start`/`end`/`file`/`ranges`, with a control asserting it does carry its index and label. **Plus the scene model**: grouping in step order, a revisited scene counted twice, cross-scene parent re-rooted, cross-scene step reference dropped, the budget per scene rather than per plan, and that a plan mentioning no `scene` is exactly one scene. **Plus Phase 4's two**: a saved walkthrough round-trips through `WalkthroughStorage` into a temp workspace and back — `scene`, the nesting link, the `keep` roles, a relation's own endpoint file, and the resolved scene count — with the on-disk text asserted to hold *relative* paths, so the whole section cannot pass on a save/load that did nothing; and the tree's shipped settings defaults are asserted to be the style classes' own defaults, to be §1c's verdicts by name, and to name real enum constants, with an unknown value shown degrading and a real one shown being read |
-| `PlanFileProbe.java` | Do the hand-written acceptance plans in `fixtures/plans/` load with **no** error or warn, and does every step resolve to a **scene**? Reports the scene grouping, flags any scene over the line budget, and prints **the outline the sidebar will draw** — scene rows, whether the scene level is on, groups, and step rows — failing if any step has no row to reach it from. Structure only — whether line 86 really holds that call is the VFS's answer, and the tree view gives it |
 | `TokenProbe.java` | **The B1a anchor's boundaries**, hand-traced for two phases and asserted here. `to` is exclusive, so a token *ending* on it resolves and one *starting* on it does not — both sides measured, one character apart. The scan steps by `i = idx + 1`, so overlapping hits are each counted **and** an empty needle terminates instead of spinning (it is dropped upstream by `resolveToken` before it can arrive, but the loop is safe on its own — the hand trace had this the other way round). `occurrence` counts *qualifying* matches, so whole-word `#2` of `rate rateTable rate` is the standalone one and the same `#2` without whole-word is the one inside `rateTable`. `_` and `$` flank an identifier, `-` does not. And the pair that justifies `resolveToken`'s two passes: `Parse(` fails whole-word and resolves as a bare substring. **Not reachable here**: `resolveToken` itself needs an `Editor`, so the empty-needle guard and the order of the two passes are read, not asserted |
 | `LinkBench.java` | **The link drawing's bench, and the spike eight rounds of reshaping were judged from.** Mock nodes, up to five links at once, both anchors, both joins, both directions, resting beside hovered — **13 PNGs**, of which five carry a round's questions: `link-label.png` (a spread fan with a short link hovered, round 8's label position beside round 11's — the same call, one argument apart), `link-lanes.png` (three same-editor links and two portals off one row, rest beside hover, 3× — round 7's picture), `link-fan.png` (five links off one row, both directions), `link-forms.png` (the `TOKEN`/`LINE_END` × `LINE`/`PORTAL` taxonomy at 4×, where the `∩` and the staple are directly comparable), `link-dim.png` (all five slots, rest beside hover, dark **and** light). It imports `LinkArt` and draws with it, so it cannot drift from what the editor paints. Assertions cover what is *fact* rather than taste. **Round 11's one, and it is the yardstick**: a short link's label must start beside *its own* end and not
 beside the furthest lane's — the reader's *"'short' link text feels detached"*. Six assertions on drawn ink at
@@ -36,7 +35,6 @@ reading. **Round 9's two**: a fanned token end's **stem** measured for all 4 fan
 | `ClockProbe.js` | **The webview's playback clock**, which had no instrument at all until B1b needed one. `node probes/ClockProbe.js`, no build step. It **extracts** `scheduleSlot` / `recordChunk` / `stepElapsed` / `currentWordFor` / `sentenceForWord` / `beatKey` / `sentenceForBeat` / `fireDueBeats` out of `sidebar.js` by name and runs them in a `vm` context — a copy would pass forever while the shipped file drifted, and a rename raises instead of quietly testing nothing. Two clocks live in that file and they disagree only when playback starves: a 1.5 s underrun is measured leaving the cursor **three words of a six-word sentence** ahead of the voice, with the un-corrected elapsed kept as the control and a healthy stream asserted to bank no correction at all. Then the beats: a phrase resolving to the piece the splitter made out of `e.g.` (where a sentence *number* lands wrong), a straddling phrase left unresolved mid-stream and resolved to the sentence it starts in once every sentence is known, the no-`stext` fallback, firing once and only at its sentence's start, and two beats in one sentence collapsing to one pulse — with the same two phrases in *different* sentences as the control. Shares `beat-normalize.tsv` with `PlanProbe` |
 | `beat-normalize.tsv` | Not a probe — **the one copy of the beat-matching rule**, read by `PlanProbe` (Kotlin's `Beat.normalize`) and `ClockProbe` (the webview's `beatKey`). A phrase the loader accepts and the webview never matches is the only failure in B1b with no symptom, so the two implementations are asserted against one table instead of against each other |
 | `gates.py` | The build gates, none of which a green compile implies: no `noCompiledSerializer` stub in `build/classes` (dropping `@Serializable` **compiles** and throws at runtime), every `plugin.xml` class reference resolving to a compiled class, every resource XML parsing, no mixed line endings, the skill manifest matching disk, `VERSION` bumped, markdown fences balanced, and **one destination for a plan** — the tree controller built once and registered once, with no code naming the deleted `view` field (comments may, and do: the record of why it went is the thing worth keeping). `python probes/gates.py` from the repo root, after `compileKotlin` |
-| `check_fixture.py` | Every relation endpoint in every acceptance plan verified against the **file it points at** — line in range, token present on that line, span under the cap — plus the per-step link count under both the round-7 and round-8 pair keys. It is what says a fixture still poses the case it was written for. `python probes/check_fixture.py` |
 
 ## Running them
 
@@ -57,10 +55,9 @@ printf -- '-cp\n"%s"\n' "$CP" > build/probe/cp.txt
 
 javac -nowarn "@build/probe/cp.txt" -d build/probe probes/*.java
 java "@build/probe/cp.txt" PlanProbe
-java "@build/probe/cp.txt" PlanFileProbe fixtures/plans/*.json
 java "@build/probe/cp.txt" TokenProbe
 node probes/ClockProbe.js                # no classpath, no build — it reads sidebar.js directly
-java -Dide.ui.scale=1.0 -Dsun.java2d.uiScale.enabled=false "@build/probe/cp.txt" LinkBench scratchpad/link-round11
+java -Dide.ui.scale=1.0 -Dsun.java2d.uiScale.enabled=false "@build/probe/cp.txt" LinkBench build/probe/pngs
 #   the last argument is an optional output dir; omit it and the PNGs go to build/probe
 ```
 
@@ -92,8 +89,8 @@ Two notes that cost a few minutes each:
 - **Git Bash mangles a `;`-separated `-cp`** when it is passed straight through. Write the whole `-cp "…"`
   line into a file and run `java "@argfile"`, or set `MSYS_NO_PATHCONV=1`.
 
-Expected: `105 pass / 0 fail` from `PlanProbe`, `PASS — no error/warn issues in any plan` from `PlanFileProbe`,
-`18 pass / 0 fail` from `TokenProbe`, and `212 pass / 0 fail` from `LinkBench`.
+Expected: `134 pass / 0 fail` from `PlanProbe`, `18 pass / 0 fail` from `TokenProbe`,
+`217 pass / 0 fail` from `LinkBench`, and `44 pass / 0 fail` from `ClockProbe`.
 
 `LinkBench` also prints a count of ends the room check rejected, and it is **0** at the mock node widths it
 currently draws. That number used to be quoted here as evidence the room check works, which it was not: it was
@@ -111,7 +108,7 @@ asserting a design the reader has not judged yet; printing them is what lets the
 `PlanProbe` asserts invariants that are meant to hold forever (a cycle must never nest, every step must be
 reachable from exactly one outline row, a saved plan must come back with its scenes), so it is closer to a
 unit test than to a spike, and it has now grown through two phases without being promoted. **It wants a test
-source set**, and the argument gets stronger each time: 105 assertions are run by a `javac` line in a README,
+source set**, and the argument gets stronger each time: 134 assertions are run by a `javac` line in a README,
 which means they run when somebody remembers. Until then this is the cheapest thing that works.
 
 `TokenProbe` is the same kind of thing and the argument applies to it unchanged — an anchor that resolves
@@ -119,4 +116,7 @@ at a line end is an invariant, not a spike. It passed 18 for 18 on its first run
 rule is the suspicious outcome, so two assertions were deliberately inverted to watch them fail before the
 run was believed.
 
-`PlanFileProbe` lives as long as `fixtures/plans/` does.
+`PlanFileProbe` and `check_fixture.py` are **gone**, and they went for a reason worth recording: both read
+`fixtures/`, so when the acceptance plans and the C# fixture came out before release they had nothing left to
+assert. Every surviving probe builds its own inputs, which is why they outlived the fixtures — an instrument
+that depends on a corpus dies with the corpus.

@@ -32,10 +32,10 @@ import javax.swing.JPanel
  * **The production tree of node views** — a [ResolvedPlan]'s frames rendered as [CodeNestView]'s nested
  * nodes, and its steps rendered by driving each node's own [com.audioexplainer.SpotlightRenderer].
  *
- * This is what replaces `com.audioexplainer.spike` as the thing that draws a tree. The spike benches build
- * the same [CodeNodeSpec]s from hard-coded text anchors over `fixtures/TreeSpike` and synthesise a timeline
- * from range order; here both come from the plan, which is the whole of Phase 2's point: **the agent states
- * the frames and the steps, the plugin picks the picture.**
+ * This replaced the `com.audioexplainer.spike` benches, since deleted, as the thing that draws a tree. Those
+ * built the same [CodeNodeSpec]s from hard-coded text anchors over a bundled C# fixture and synthesised a
+ * timeline from range order; here both come from the plan, which is the whole of Phase 2's point: **the agent
+ * states the frames and the steps, the plugin picks the picture.**
  *
  * Three things it deliberately keeps from the bench, because each cost a round to learn:
  *
