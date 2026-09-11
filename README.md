@@ -9,7 +9,9 @@ audio-explains selected code / the symbol under the cursor, with synced line hig
 `claude -p` backbone, cross-platform narration across four TTS tiers (Kokoro, Piper, Windows SAPI, espeak-ng)
 with ~50 languages, and read-along narration whose pulses land on the words being spoken. **What is left is
 Phase 8 — packaging, signing and the Marketplace listing**; `JetbrainsAudioExplainer.md` has that checklist
-and the known limitations, and `ExplainerLanguages.md` the multi-language design.
+and the known limitations, and `ExplainerLanguages.md` the one sandbox session the four narration tiers
+still want. The living reference for the tiers and the voice catalogue is `claude-skill/docs/tts.md`, which
+ships to users.
 
 ## What's here
 - **Where the cited rules went.** KDoc through `tree/`, `PlanLoader`, `LinkArt`, `Protocol` and

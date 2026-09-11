@@ -10,7 +10,8 @@ highlighting the relevant lines, using **Claude Code (headless)** as the reasoni
 > What follows is only what has not been done.
 >
 > The multi-language work (L1–L9: Piper, Windows SAPI, espeak-ng, the voice manager, ~50 languages) has its
-> own document — `ExplainerLanguages.md` — and its own two open items, listed below.
+> own document — `ExplainerLanguages.md`. It is all built and engine-gated; what it still wants is one
+> `runIde` session, and that session is listed below too.
 
 ---
 
@@ -47,9 +48,12 @@ JetBrains re-signs on upload; the signature only proves integrity/authorship. To
 
 ## Also open
 
-- **The `runIde` UI pass for L7 and L9** (`ExplainerLanguages.md`). Both are code-complete and gated
-  end-to-end against the real engines, but the Windows-SAPI tier and the Piper voice-manager dialog have not
-  been driven by hand in a sandbox. L6 and L8 have had theirs.
+- **One `runIde` session over the narration tiers** — seven checks, listed in `ExplainerLanguages.md`. All of
+  L1–L9 is code-complete and gated end-to-end against the real engines; what none of it has had is a human
+  driving the UI. The two that carry real risk are **L4** (set a language, right-click Explain This — the
+  full Claude → prompt → wire → voice path, never once run end to end) and **L9** (the Piper voice-manager
+  dialog, which nobody has seen). The same session should pick up the unjudged UX batch: the localized
+  `Explain This` label, the Solution Explorer entry, and the saved list's filter / delete / delete-all.
 
 ---
 
