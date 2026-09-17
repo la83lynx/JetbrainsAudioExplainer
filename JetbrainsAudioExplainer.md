@@ -48,12 +48,18 @@ JetBrains re-signs on upload; the signature only proves integrity/authorship. To
 
 ## Also open
 
-- **One `runIde` session over the narration tiers** — seven checks, listed in `ExplainerLanguages.md`. All of
-  L1–L9 is code-complete and gated end-to-end against the real engines; what none of it has had is a human
-  driving the UI. The two that carry real risk are **L4** (set a language, right-click Explain This — the
-  full Claude → prompt → wire → voice path, never once run end to end) and **L9** (the Piper voice-manager
-  dialog, which nobody has seen). The same session should pick up the unjudged UX batch: the localized
-  `Explain This` label, the Solution Explorer entry, and the saved list's filter / delete / delete-all.
+- **Re-check Japanese narration by ear.** Everything else in the narration tiers is judged — the `runIde`
+  session of 2026-09-16 passed all seven checks plus the UX batch, the install console and the C++ row, and
+  confirmed the three fixes from the round before (see `ExplainerLanguages.md`). The one thing it found is
+  the one thing still open: Kokoro's Japanese was being phonemized by espeak, which reads kanji aloud as
+  *"Chinese letter"*. `KokoroEngine` now routes Japanese through misaki and its embedded identifiers through
+  espeak-en. Verified by measurement, **not** by ear — 48.8 s of audio for one step became 13.6 s and a
+  sentence that used to die on the 510-phoneme cap now survives — so what it still wants is somebody
+  listening to a Japanese walkthrough. Same for the Latin identifiers inside it: `Interlocked.Exchange`
+  should now sound like English words, not letters.
+- **The C++ build-tools row is reported but unproven on a machine that lacks a compiler.** Everything it
+  says was measured on a machine that *has* one; the "no C++ build tools found" branch has never been on
+  screen. Low stakes — it neither blocks nor is load-bearing — but it is the one state nobody has seen.
 
 ---
 
@@ -127,6 +133,14 @@ tree-of-code tab (N node editors + links)  +  JCEF ToolWindow (controls + audio)
    never a column, never a sentence number. An agent can quote a name out of code it just read and
    cannot predict where a regex or a renderer will cut it.
 4. **Distribution = public JetBrains Marketplace**, signed with a self-generated cert (no CA purchase; $0).
+5. **Links are declared on the frame; the step's ranges decide when they show.** A `relations` entry belongs
+   to a *frame* because a relation outlives any one step, and it is drawn on whichever step's **first active
+   range** holds one of its two endpoints (`Endpoint.inStepBand`, one owner — `PlanLoader` reports a relation
+   no step will ever draw). A step's `beats` are a different thing entirely: token *pulses* timed to a phrase
+   of the narration. So steps do control which links appear, by what they light rather than by listing them.
+   **The cost, and it is real:** an author cannot say "show this link on step 5" without step 5's opening
+   range covering an endpoint. Per-step link lists were considered and not built — they would let the same
+   link be declared five times and drift.
 
 ---
 

@@ -93,6 +93,9 @@ public final class PlanProbe {
     /** An endpoint in this frame's own file. */
     static Endpoint at(int line) { return new Endpoint(null, line, "tok", 1, null); }
 
+    /** An endpoint naming its file explicitly — the form that makes the owner lookup a real choice. */
+    static Endpoint atFile(String file, int line) { return new Endpoint(file, line, "tok", 1, null); }
+
     static Relation rel(String kind, Endpoint from, Endpoint to) {
         return new Relation(kind, from, to, "note");
     }
@@ -661,6 +664,35 @@ public final class PlanProbe {
                 Collections.singletonList(step(0, ctx(10, 20)))));
         check("relation: an endpoint on a line the frame does not keep is reported",
                 has(relUnkept, "relation.endpoint-not-kept"));
+
+        // **Two frames over ONE file** — a `.cs` holding two classes, which is the ordinary shape and the one
+        // a path-only owner lookup got wrong. Frame 1's window is 20..40, so an endpoint naming that file at
+        // line 30 belongs to frame 1; read against frame 0's 1..12 it looks elided, and the tree made the
+        // matching mistake in `frameOwning` — it planted a link's far half in frame 0's node, on a row that
+        // node does not display, which is a portal with no other end. One predicate now answers both.
+        ResolvedPlan relSplit = PlanLoader.INSTANCE.resolve(plan(
+                Arrays.asList(
+                        relFrame(0, "A.cs", ctx(1, 12), rel(Relation.KIND_FLOW, at(5), atFile("A.cs", 30))),
+                        relFrame(1, "A.cs", ctx(20, 40))),
+                Collections.singletonList(step(0, ctx(1, 8)))));
+        check("relation: with two frames on one file, an endpoint is read against the frame that SHOWS it",
+                lacks(relSplit, "relation.endpoint-not-kept"));
+        // The control, and it is what stops the fix from being "never report anything": a line NO window on
+        // that file holds is still on a placeholder, and still reported.
+        ResolvedPlan relSplitGone = PlanLoader.INSTANCE.resolve(plan(
+                Arrays.asList(
+                        relFrame(0, "A.cs", ctx(1, 12), rel(Relation.KIND_FLOW, at(5), atFile("A.cs", 60))),
+                        relFrame(1, "A.cs", ctx(20, 40))),
+                Collections.singletonList(step(0, ctx(1, 8)))));
+        check("relation: and a line no window on that file holds is still reported",
+                has(relSplitGone, "relation.endpoint-not-kept"));
+
+        // The predicate itself, at both edges: `shows` decides which window owns a line, so an off-by-one
+        // here moves a link's far half to the wrong node rather than merely mis-wording an issue.
+        ResolvedFrame splitSecond = relSplit.frame(1);
+        check("frame: shows() is inclusive at both ends of a kept range, and false one line outside either",
+                splitSecond != null && splitSecond.shows(20) && splitSecond.shows(40)
+                        && !splitSecond.shows(19) && !splitSecond.shows(41));
 
         // A relation shows only while a step whose FIRST range holds one of its ends is active. Both ends
         // kept and neither in any step's band is a relation that exists and is never seen.

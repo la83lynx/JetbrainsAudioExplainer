@@ -39,6 +39,16 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 /**
+ * Where a provisioning subprocess's raw output goes besides the IDE log — in practice
+ * [InstallConsoleDialog.append]. A plain function type so [TtsService] never imports the dialog: the service
+ * knows there is somewhere to write and nothing about what is reading.
+ *
+ * Called from the process-reader thread, once per line. An implementation must be cheap and must marshal its
+ * own UI work; the service does not do it for you.
+ */
+typealias InstallSink = (String) -> Unit
+
+/**
  * Robotic-voice tuning sent in a TTS `tune` request (mirrors [EspeakProfile]). `roughness` is
  * espeak-native (0 = smoothest). Runtime params (pitch/range/wordGap) + Layer-2 params
  * (consonants/roughness/flutter/breath) in one bundle; only used for `Engine.ESPEAK` voices.
@@ -417,42 +427,215 @@ class TtsService : Disposable {
         return nm ?: "Speaker ${i + 1}"
     }
 
-    // ── Guided setup (first-run / Tools action) ────────────────────────────────
+    // ── Native toolchain detection (the Japanese pack's hidden prerequisite) ───
 
-    /** `python -m pip install …` the TTS dependencies, surfacing progress on [indicator]. */
-    fun installDependencies(indicator: ProgressIndicator): Boolean {
-        val python = pythonCommand() ?: return false
-        indicator.text = "Installing Kokoro TTS dependencies (pip)…"
-        val cmd = python + listOf("-m", "pip", "install", "--disable-pip-version-check", "kokoro-onnx", "onnxruntime", "numpy")
-        val ok = streamToIndicator(cmd, indicator) { line -> indicator.text2 = tailLine(line) }
-        cachedStatus = null
-        return ok
+    @Volatile private var cachedMsvc: Boolean? = null
+
+    /** Set by [probeMsvc] — a VS instance with the toolset that the installer marks incomplete. */
+    @Volatile private var cachedMsvcBroken: String? = null
+
+    /**
+     * **Whether this machine can compile a Python C extension** — which on Windows means the MSVC build
+     * tools, and off Windows is assumed (the failure this exists for prints a Microsoft error string).
+     *
+     * Detected with **vswhere**, the installer-shipped query tool Microsoft provides precisely because
+     * `cl.exe` is not on `PATH` outside a developer prompt — looking for the compiler directly reports
+     * "missing" on machines that have it.
+     *
+     * **The query mirrors setuptools', flag for flag**, because the question is not "is there a compiler on
+     * this disk" but "will the build find one". `setuptools._distutils` runs
+     * `vswhere -latest -prerelease -requires <VC.Tools.x86.x64> -property installationPath -products *`, and
+     * a compiler that query cannot see is a compiler pip will not use.
+     *
+     * Both halves of that were measured on the machine where the Japanese pack failed, and both matter:
+     *
+     * - `-requires` is not optional. A bare query there answers `Visual Studio Community 2022`; the same
+     *   query asking for the **component** answers nothing — a Visual Studio without the C++ workload. "Is
+     *   Visual Studio installed?" would have claimed a compiler that is not there.
+     * - **`isComplete` is transient, so an empty strict query is not enough to say "no".** vswhere hides
+     *   instances the installer flags incomplete, and it flags them while an update or repair is in flight.
+     *   Measured on the dev machine inside one afternoon: a *Build Tools 2019* (MSVC 14.29) built a C
+     *   extension for pip at 15:29; two hours later that same instance read `isComplete: false` and both the
+     *   strict query and setuptools' own `_find_vc2017()` answered nothing; an hour later it read `true`
+     *   again. A probe that sampled the middle moment would have warned "no compiler" about a machine that
+     *   had just compiled. So a second `-all` query runs when the strict one comes back empty, and an
+     *   instance found there still counts as **having** a toolchain — [flaggedIncompleteMsvcInstall] only
+     *   colours how it is reported.
+     *
+     * Cached, because it is a subprocess and the answer changes only when the user installs something; the
+     * settings panel's "Re-check" passes [refresh].
+     */
+    fun msvcBuildTools(refresh: Boolean = false): Boolean {
+        if (!SystemInfo.isWindows) return true
+        if (!refresh) cachedMsvc?.let { return it }
+        val found = probeMsvc()
+        cachedMsvc = found
+        log.info("MSVC build tools: ${if (found) "present" else "not found"}")
+        return found
+    }
+
+    /** The last [msvcBuildTools] answer without probing — null if never asked (for non-blocking UI). */
+    fun cachedMsvcBuildTools(): Boolean? = if (!SystemInfo.isWindows) true else cachedMsvc
+
+    /**
+     * Where a toolchain lives that the strict query refused to admit — an instance the Visual Studio
+     * Installer currently flags incomplete. Null when the strict query found one, and null when there is
+     * nothing installed at all.
+     *
+     * This is **not** a failure verdict: the flag is transient (see [msvcBuildTools]) and pip has been
+     * observed building against exactly such an instance. It earns a more careful sentence than a plain
+     * tick — name the path, say the installer has it mid-operation, suggest a Repair *if* a compile
+     * actually fails. Telling this user to download 1.5 GB they already have would be wrong.
+     */
+    fun flaggedIncompleteMsvcInstall(): String? = if (!SystemInfo.isWindows) null else cachedMsvcBroken
+
+    private fun probeMsvc(): Boolean {
+        val programFiles = System.getenv("ProgramFiles(x86)") ?: "C:\\Program Files (x86)"
+        val vswhere = Path.of(programFiles, "Microsoft Visual Studio", "Installer", "vswhere.exe")
+        if (!Files.isRegularFile(vswhere)) {
+            cachedMsvcBroken = null
+            return false
+        }
+        if (vswhereInstallPath(vswhere, all = false) != null) {
+            cachedMsvcBroken = null
+            return true
+        }
+        // The strict query — setuptools' own — found nothing. Before calling that "no compiler", ask again
+        // including instances flagged incomplete, because that flag comes and goes while the Visual Studio
+        // Installer works. One found here is a toolchain: report it with a caveat, never as an absence.
+        cachedMsvcBroken = vswhereInstallPath(vswhere, all = true)
+        return cachedMsvcBroken != null
     }
 
     /**
-     * `pip install misaki[ja] / misaki[zh]` — the extra packs Japanese/Chinese narration needs (Phase L5).
-     * Base `kokoro-onnx` does not pull these; they add large transitive deps (fugashi/unidic for Japanese,
-     * jieba for Chinese), so they're an explicit opt-in surfaced via **Set up TTS**. [langs] are language
-     * codes (`"ja"`, `"zh"`); unknown codes are ignored. Returns true on a clean `pip` exit.
+     * First installation path vswhere reports for an instance carrying the C++ toolset, or null for none.
+     *
+     * [all] lifts vswhere's default filter on incomplete instances, which is the difference between *what the
+     * build will find* (false — setuptools' own query) and *what is on the disk* (true).
      */
-    fun installLanguagePacks(indicator: ProgressIndicator, langs: List<String>): Boolean {
+    private fun vswhereInstallPath(vswhere: Path, all: Boolean): String? {
+        val argv = mutableListOf(
+            vswhere.toString(), "-products", "*", "-latest", "-prerelease",
+            "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "-property", "installationPath",
+        )
+        if (all) argv += "-all"
+        val out = runToCompletion(argv, timeoutMs = 20_000) ?: return null
+        return out.lineSequence().map(String::trim).firstOrNull { it.isNotEmpty() }
+    }
+
+    /**
+     * **True when installing `misaki[ja]` on this machine is likely to fail for want of a compiler.**
+     *
+     * "Likely", and the hedge is honest: whether pip has to build anything depends on whether **mojimoji**
+     * publishes a wheel for *this* Python, which only the index knows. What can be said locally is the pair
+     * that matters — the pack is not importable yet, and there is no toolchain if one turns out to be needed.
+     * On that basis the settings panel offers the download and the installer warns up front, and neither
+     * *blocks* the attempt: a user on a Python with a wheel installs it in seconds and sees nothing.
+     *
+     * Chinese is deliberately not covered. Every `misaki[zh]` dependency — jieba, pypinyin, cn2an — is a
+     * pure-Python wheel, so it has never needed this and saying otherwise would be noise.
+     */
+    fun japanesePackNeedsCompiler(): Boolean =
+        SystemInfo.isWindows && cachedStatus?.misakiJa != true && !msvcBuildTools()
+
+    // ── Guided setup (first-run / Tools action) ────────────────────────────────
+
+    /** `python -m pip install …` the TTS dependencies, surfacing progress on [indicator]. */
+    fun installDependencies(indicator: ProgressIndicator, sink: InstallSink? = null): Boolean {
         val python = pythonCommand() ?: return false
-        val specs = langs.mapNotNull { when (it) { "ja" -> "misaki[ja]"; "zh" -> "misaki[zh]"; else -> null } }.distinct()
-        if (specs.isEmpty()) return true
-        indicator.text = "Installing Japanese/Chinese TTS packs (misaki — large download)…"
-        val cmd = python + listOf("-m", "pip", "install", "--disable-pip-version-check") + specs
-        val ok = streamToIndicator(cmd, indicator) { line -> indicator.text2 = tailLine(line) }
+        indicator.text = "Installing Kokoro TTS dependencies (pip)…"
+        val cmd = python + listOf("-m", "pip", "install", "--disable-pip-version-check", "kokoro-onnx", "onnxruntime", "numpy")
+        val ok = streamToIndicator(cmd, indicator, sink = sink) { line -> indicator.text2 = tailLine(line) }
         cachedStatus = null
         return ok
     }
 
+    /** What [installLanguagePacks] came back with: the codes that did not install, and why, if it can tell. */
+    data class PackInstall(val failed: List<String>, val hint: String? = null) {
+        val allOk: Boolean get() = failed.isEmpty()
+    }
+
+    /**
+     * `pip install misaki[ja]` / `misaki[zh]` — the extra packs Japanese/Chinese narration needs (Phase L5).
+     * Base `kokoro-onnx` does not pull these; they add large transitive deps (fugashi/unidic/mojimoji for
+     * Japanese, jieba/pypinyin/cn2an for Chinese), so they're an explicit opt-in surfaced from **Audio
+     * engines…**. [langs] are language codes (`"ja"`, `"zh"`); unknown codes are ignored.
+     *
+     * **One `pip` run per language, deliberately.** They used to go in one invocation, and pip installs a
+     * command's whole set as a single transaction — so the first pack that cannot build took the other down
+     * with it. That is not hypothetical: on CPython 3.13 `misaki[ja]` pulls **mojimoji**, a Cython extension
+     * with no 3.13 wheel, which has to compile and therefore needs the MSVC build tools; a machine without
+     * them lost Chinese too, though every `zh` dependency is a pure-Python wheel. Split, `zh` survives `ja`.
+     */
+    fun installLanguagePacks(
+        indicator: ProgressIndicator,
+        langs: List<String>,
+        sink: InstallSink? = null,
+    ): PackInstall {
+        val python = pythonCommand() ?: return PackInstall(langs)
+        val failed = mutableListOf<String>()
+        var hint: String? = null
+        for (lang in langs.distinct()) {
+            val spec = when (lang) { "ja" -> "misaki[ja]"; "zh" -> "misaki[zh]"; else -> null } ?: continue
+            if (indicator.isCanceled) break
+            val label = if (lang == "ja") "Japanese" else "Chinese"
+            indicator.text = "Installing the $label TTS pack ($spec — large download)…"
+            // Said before the attempt rather than after it, because "why did that take four minutes and
+            // fail" is a worse question than "this may need a compiler". It is a warning, never a block:
+            // only the index knows whether a wheel exists for this Python.
+            if (lang == "ja" && japanesePackNeedsCompiler()) {
+                sink?.invoke(
+                    "[warning] misaki[ja] pulls mojimoji, a C extension. If there is no prebuilt wheel for " +
+                        "this Python, pip has to compile it — and no MSVC build tools were detected here. " +
+                        "Settings → Audio engines → Kokoro has a button for them.",
+                )
+            }
+            val tail = mutableListOf<String>()
+            val cmd = python + listOf("-m", "pip", "install", "--disable-pip-version-check", spec)
+            if (!streamToIndicator(cmd, indicator, tail, sink) { line -> indicator.text2 = tailLine(line) }) {
+                failed += lang
+                hint = hint ?: failureHint(tail)
+            }
+        }
+        cachedStatus = null
+        return PackInstall(failed, hint)
+    }
+
+    /**
+     * One sentence naming a **known** cause of a failed `pip` run, from the output [streamToIndicator] kept,
+     * or null when it is not one this recognises.
+     *
+     * Only causes the user can act on are worth a sentence; anything else is better served by the log, which
+     * now has the tail. The compiler case earns its place because the message pip prints is long, the fix is
+     * an unrelated download, and the failure looks identical to a network problem from the notification.
+     */
+    private fun failureHint(tail: List<String>): String? {
+        val text = tail.joinToString("\n")
+        return when {
+            text.contains("Microsoft Visual C++ 14.0 or greater is required") ->
+                "A dependency has no prebuilt wheel for this Python and must be compiled, which needs the " +
+                    "<b>Microsoft C++ Build Tools</b> (https://visualstudio.microsoft.com/visual-cpp-build-tools/). " +
+                    "Installing them — or using a Python version the wheel exists for — fixes it."
+            text.contains("Failed building wheel for") ->
+                "A dependency failed to build from source on this Python. The IDE log names which one; a " +
+                    "Python version with a prebuilt wheel for it is usually the quickest way past."
+            Regex("(?i)(could not find a version|no matching distribution)").containsMatchIn(text) ->
+                "pip could not find a distribution for this Python version or platform. See the IDE log."
+            Regex("(?i)(connectionerror|proxyerror|timed out|temporary failure in name resolution)")
+                .containsMatchIn(text) ->
+                "pip could not reach the package index — check the connection or a proxy setting."
+            else -> null
+        }
+    }
+
     /** Download the Kokoro model + voices, surfacing per-file percentage on [indicator]. */
-    fun downloadModel(indicator: ProgressIndicator): Boolean {
+    fun downloadModel(indicator: ProgressIndicator, sink: InstallSink? = null): Boolean {
         val python = pythonCommand() ?: return false
         val script = ensureScript() ?: return false
         indicator.text = "Downloading the Kokoro voice model (~340 MB)…"
         val cmd = python + listOf(script.toString(), "--download") + modelDirArgs()
-        val ok = streamToIndicator(cmd, indicator) { line ->
+        val ok = streamToIndicator(cmd, indicator, sink = sink) { line ->
             val obj = runCatching { json.parseToJsonElement(line.trim()).jsonObject }.getOrNull() ?: return@streamToIndicator
             when (obj["type"]?.jsonPrimitive?.contentOrNull) {
                 "progress" -> {
@@ -471,23 +654,23 @@ class TtsService : Disposable {
 
     /** `python -m pip install piper-tts` — the offline-neural tier's package (Phase L8). Additive: it reuses
      *  the onnxruntime/numpy Kokoro already pulled, so it won't disturb the Kokoro stack. */
-    fun installPiper(indicator: ProgressIndicator): Boolean {
+    fun installPiper(indicator: ProgressIndicator, sink: InstallSink? = null): Boolean {
         val python = pythonCommand() ?: return false
         indicator.text = "Installing Piper (pip)…"
         val cmd = python + listOf("-m", "pip", "install", "--disable-pip-version-check", "piper-tts")
-        val ok = streamToIndicator(cmd, indicator) { line -> indicator.text2 = tailLine(line) }
+        val ok = streamToIndicator(cmd, indicator, sink = sink) { line -> indicator.text2 = tailLine(line) }
         cachedStatus = null
         return ok
     }
 
     /** Download one Piper voice model into the models dir via `--download-piper <key>`, surfacing per-file
      *  percentage on [indicator] (same frames as [downloadModel]). Phase L8. */
-    fun downloadPiperVoice(indicator: ProgressIndicator, voiceKey: String): Boolean {
+    fun downloadPiperVoice(indicator: ProgressIndicator, voiceKey: String, sink: InstallSink? = null): Boolean {
         val python = pythonCommand() ?: return false
         val script = ensureScript() ?: return false
         indicator.text = "Downloading Piper voice “$voiceKey”…"
         val cmd = python + listOf(script.toString(), "--download-piper", voiceKey) + modelDirArgs()
-        val ok = streamToIndicator(cmd, indicator) { line ->
+        val ok = streamToIndicator(cmd, indicator, sink = sink) { line ->
             val obj = runCatching { json.parseToJsonElement(line.trim()).jsonObject }.getOrNull() ?: return@streamToIndicator
             when (obj["type"]?.jsonPrimitive?.contentOrNull) {
                 "progress" -> {
@@ -800,10 +983,20 @@ class TtsService : Disposable {
         serverPort = -1
     }
 
-    /** Stop the server (e.g. after a settings change); it restarts on the next [speak]. */
+    /**
+     * Stop the server (e.g. after a settings change); it restarts on the next [speak].
+     *
+     * **It deliberately leaves [cachedStatus] alone.** [TtsStatus] describes the *environment* — which
+     * interpreter, which packages import, which model and Piper voice files are on disk — and nothing about
+     * the server process, so stopping that process invalidates none of it. Clearing it here was a real defect:
+     * every provisioning path in [TtsSetup] runs `status(refresh = true)` and then `restart()`, so the wipe
+     * landed **after** the refresh and threw away the very answer that had just been fetched. The
+     * [PiperVoiceManagerDialog] then read `cachedPiperVoices()` in its completion callback, got an empty list,
+     * and showed a freshly downloaded voice as not installed — surviving a dialog reopen (same null cache) and
+     * curable only by "Re-check engines", which probes again. Whoever *changes* the environment refreshes it.
+     */
     fun restart() {
         synchronized(serverLock) { stopServerLocked() }
-        cachedStatus = null
     }
 
     override fun dispose() {
@@ -864,7 +1057,36 @@ class TtsService : Disposable {
     }
 
     /** Run a command, feeding each stdout/stderr line to [onLine]; returns true on exit code 0. */
-    private fun streamToIndicator(argv: List<String>, indicator: ProgressIndicator, onLine: (String) -> Unit): Boolean {
+    /**
+     * Run [argv] to completion, feeding each output line to [onLine] (which the provisioning tasks use to
+     * drive `indicator.text2`) and returning whether it exited 0.
+     *
+     * **It also keeps the last [FAIL_TAIL_LINES] lines and logs them on a non-zero exit**, which is the point
+     * of the ring buffer. Every failure notification in [TtsSetup] ends with *"See the IDE log for details"*,
+     * and before this the log held nothing at all: pip's diagnosis went to `text2`, a progress-bar line that
+     * is gone the moment the task ends. A failed `misaki[ja]` install was therefore unexplainable after the
+     * fact — the one case where the user cannot retry usefully, because the reason (no compiler for
+     * `fugashi`, a resolver conflict, a proxy) is exactly what was discarded. Logged at WARN, tail-only,
+     * because a successful pip run is hundreds of lines nobody needs.
+     *
+     * [tailSink], when given, receives that same tail so a caller can *diagnose* rather than merely record —
+     * see [failureHint]. It is filled on success too; callers only read it when the run failed.
+     *
+     * [sink] is the live one — every line, as it arrives, plus the command that produced them and the exit
+     * code that ended them. That is what [InstallConsoleDialog] shows, and the reason the command echo lives
+     * here rather than at each call site: a console that does not name what it ran leaves the reader
+     * guessing which of three pip invocations they are looking at.
+     */
+    private fun streamToIndicator(
+        argv: List<String>,
+        indicator: ProgressIndicator,
+        tailSink: MutableList<String>? = null,
+        sink: InstallSink? = null,
+        onLine: (String) -> Unit,
+    ): Boolean {
+        log.info("running: ${argv.joinToString(" ")}")
+        sink?.invoke("$ ${argv.joinToString(" ")}")
+        val tail = ArrayDeque<String>(FAIL_TAIL_LINES)
         return try {
             val cmd = GeneralCommandLine(argv)
                 .withCharset(StandardCharsets.UTF_8)
@@ -879,7 +1101,12 @@ class TtsService : Disposable {
                         while (nl >= 0) {
                             val line = buf.substring(0, nl)
                             buf.delete(0, nl + 1)
-                            if (line.isNotBlank()) runCatching { onLine(line) }
+                            if (line.isNotBlank()) {
+                                if (tail.size == FAIL_TAIL_LINES) tail.removeFirst()
+                                tail.addLast(line.trim())
+                                sink?.let { s -> runCatching { s(line) } }
+                                runCatching { onLine(line) }
+                            }
                             nl = buf.indexOf("\n")
                         }
                     }
@@ -889,12 +1116,25 @@ class TtsService : Disposable {
             while (!handler.waitFor(200)) {
                 if (indicator.isCanceled) {
                     runCatching { handler.destroyProcess() }
+                    log.info("cancelled: ${argv.firstOrNull()} (${argv.lastOrNull()})")
+                    sink?.invoke("[cancelled]")
                     return false
                 }
             }
-            (handler.exitCode ?: -1) == 0
+            val exit = handler.exitCode ?: -1
+            val lines = synchronized(buf) { tail.toList() }
+            tailSink?.addAll(lines)
+            sink?.invoke(if (exit == 0) "[exit 0]" else "[exit $exit]")
+            if (exit != 0) {
+                log.warn(
+                    "subprocess exited $exit: ${argv.joinToString(" ")}\n" +
+                        if (lines.isEmpty()) "  (no output)" else lines.joinToString("\n") { "  $it" },
+                )
+            }
+            exit == 0
         } catch (e: Exception) {
-            log.warn("streamed subprocess failed: ${argv.firstOrNull()}", e)
+            log.warn("streamed subprocess failed: ${argv.joinToString(" ")}", e)
+            sink?.invoke("[could not start] ${e.message ?: e::class.java.simpleName}")
             false
         }
     }
@@ -913,6 +1153,10 @@ class TtsService : Disposable {
          * engine-specific failure (e.g. an online SAPI voice with no network) by matching this exact string.
          */
         const val SERVER_UNAVAILABLE = "Kokoro TTS server is not available."
+
+        /** How many trailing output lines [streamToIndicator] keeps to log when a provisioning subprocess
+         *  exits non-zero. Enough for a pip traceback's verdict without archiving a successful install. */
+        private const val FAIL_TAIL_LINES = 40
 
         /** Max speakers a multi-speaker Piper model is expanded into individual dropdown voices (Phase L9).
          *  Above this (rare research sets like VCTK/libriTTS with 50–900 speakers) only the default speaker

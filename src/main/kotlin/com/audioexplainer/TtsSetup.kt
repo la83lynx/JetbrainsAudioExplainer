@@ -57,11 +57,13 @@ object TtsSetup {
      */
     fun install(project: Project?, onDone: (() -> Unit)? = null) {
         settings.state.ttsSetupPrompted = true
+        val console = InstallConsoleDialog.open(project, "Setting up Kokoro TTS")
         ProgressManager.getInstance().run(object : Task.Backgroundable(anyProject(project), "Setting up Kokoro TTS", true) {
-            override fun run(indicator: ProgressIndicator): Unit = withDone(onDone) {
+            override fun run(indicator: ProgressIndicator): Unit = withDone(onDone, console) {
                 indicator.isIndeterminate = true
                 var status = tts.status(refresh = true)
                 if (status.availability == TtsService.Availability.PYTHON_MISSING) {
+                    console.finish(false, "No Python interpreter on PATH.")
                     notify(project, NotificationType.ERROR, "Kokoro setup failed",
                         "No Python interpreter was found on PATH. Install Python 3.10+ and try again.")
                     return
@@ -69,9 +71,11 @@ object TtsSetup {
                 if (status.availability == TtsService.Availability.KOKORO_MISSING ||
                     status.availability == TtsService.Availability.UNKNOWN
                 ) {
-                    if (!tts.installDependencies(indicator)) {
+                    if (!tts.installDependencies(indicator, console::append)) {
+                        console.finish(false, "pip install kokoro-onnx onnxruntime did not complete.")
                         notify(project, NotificationType.ERROR, "Kokoro setup failed",
-                            "<code>pip install kokoro-onnx onnxruntime</code> did not complete. See the IDE log for details.")
+                            "<code>pip install kokoro-onnx onnxruntime</code> did not complete — the install " +
+                                "console window has pip's output.")
                         return
                     }
                     status = tts.status(refresh = true)
@@ -79,9 +83,11 @@ object TtsSetup {
                 if (indicator.isCanceled) return
                 if (status.availability == TtsService.Availability.MODEL_MISSING) {
                     indicator.isIndeterminate = false
-                    if (!tts.downloadModel(indicator)) {
+                    if (!tts.downloadModel(indicator, console::append)) {
+                        console.finish(false, "The voice model download did not complete.")
                         notify(project, NotificationType.ERROR, "Kokoro setup failed",
-                            "The voice model download did not complete. Check your connection and try again.")
+                            "The voice model download did not complete — the install console window has the " +
+                                "output. Check your connection and try again.")
                         return
                     }
                 }
@@ -89,9 +95,11 @@ object TtsSetup {
                 if (fin.ready) {
                     settings.state.ttsEngine = AudioExplainerSettings.ENGINE_KOKORO
                     tts.restart()
+                    console.finish(true, "Kokoro is ready.")
                     notify(project, NotificationType.INFORMATION, "Kokoro TTS ready",
                         "Narration is set up. Press <b>Play</b> in the Audio Explainer sidebar to hear the walkthrough.")
                 } else {
+                    console.finish(false, "Prerequisites still incomplete (${fin.availability}).")
                     notify(project, NotificationType.WARNING, "Kokoro setup incomplete",
                         "Setup ran but the prerequisites still aren't all present (${fin.availability}). " +
                             "Try again from <b>Settings → Tools → Audio Explainer → Audio engines</b>.")
@@ -106,21 +114,28 @@ object TtsSetup {
      * present yet the packs still install, and the notification points the user to install Kokoro too.
      */
     fun installLanguagePacks(project: Project?, onDone: (() -> Unit)? = null) {
+        val console = InstallConsoleDialog.open(project, "Installing Japanese & Chinese TTS packs")
         ProgressManager.getInstance().run(object : Task.Backgroundable(anyProject(project), "Installing Japanese/Chinese TTS packs", true) {
-            override fun run(indicator: ProgressIndicator): Unit = withDone(onDone) {
+            override fun run(indicator: ProgressIndicator): Unit = withDone(onDone, console) {
                 indicator.isIndeterminate = true
                 val status = tts.status(refresh = true)
                 if (status.availability == TtsService.Availability.PYTHON_MISSING) {
+                    console.finish(false, "No Python interpreter on PATH.")
                     notify(project, NotificationType.ERROR, "TTS pack install failed",
                         "No Python interpreter was found on PATH. Install Python 3.10+ and try again.")
                     return
                 }
-                if (!tts.installLanguagePacks(indicator, listOf("ja", "zh"))) {
-                    notify(project, NotificationType.ERROR, "TTS pack install failed",
-                        "<code>pip install misaki[ja] misaki[zh]</code> did not complete. See the IDE log for details.")
-                    return
-                }
+                val packs = tts.installLanguagePacks(indicator, listOf("ja", "zh"), console::append)
                 if (indicator.isCanceled) return
+                if (!packs.allOk) {
+                    val names = packs.failed.joinToString(" & ") { if (it == "ja") "Japanese" else "Chinese" }
+                    // Not a `return`: the packs install one language at a time, so the other one may well have
+                    // succeeded, and the status re-check below is what decides what to tell the user.
+                    notify(project, NotificationType.ERROR, "TTS pack install failed",
+                        "<code>pip install misaki[${packs.failed.joinToString("] misaki[")}]</code> did not " +
+                            "complete, so $names narration is not installed. " +
+                            (packs.hint ?: "The install console window has pip's output."))
+                }
                 val fin = tts.status(refresh = true)
                 tts.restart()
                 val ready = listOfNotNull(
@@ -128,6 +143,9 @@ object TtsSetup {
                     if (fin.misakiZh) "Chinese" else null,
                 )
                 when {
+                    // Silent when pip already reported the failure above: two balloons for one cause, the
+                    // second vaguer than the first, is worse than one.
+                    ready.isEmpty() && !packs.allOk -> Unit
                     ready.isEmpty() -> notify(project, NotificationType.WARNING, "TTS packs incomplete",
                         "The misaki packs ran but still aren't importable. Try again, or check the IDE log.")
                     !fin.ready -> notify(project, NotificationType.INFORMATION, "TTS packs installed",
@@ -146,30 +164,37 @@ object TtsSetup {
      * already pulled. [onDone] runs on the EDT (`ModalityState.any()`) so the settings panel can refresh.
      */
     fun installPiper(project: Project?, onDone: (() -> Unit)? = null) {
+        val console = InstallConsoleDialog.open(project, "Installing Piper (offline-neural TTS)")
         ProgressManager.getInstance().run(object : Task.Backgroundable(anyProject(project), "Installing Piper (offline-neural TTS)", true) {
-            override fun run(indicator: ProgressIndicator): Unit = withDone(onDone) {
+            override fun run(indicator: ProgressIndicator): Unit = withDone(onDone, console) {
                 indicator.isIndeterminate = true
                 val status = tts.status(refresh = true)
                 if (status.availability == TtsService.Availability.PYTHON_MISSING) {
+                    console.finish(false, "No Python interpreter on PATH.")
                     notify(project, NotificationType.ERROR, "Piper setup failed",
                         "No Python interpreter was found on PATH. Install Python 3.10+ and try again.")
                     return
                 }
-                if (!tts.installPiper(indicator)) {
+                if (!tts.installPiper(indicator, console::append)) {
+                    console.finish(false, "pip install piper-tts did not complete.")
                     notify(project, NotificationType.ERROR, "Piper setup failed",
-                        "<code>pip install piper-tts</code> did not complete. See the IDE log for details.")
+                        "<code>pip install piper-tts</code> did not complete — the install console window " +
+                            "has pip's output.")
                     return
                 }
                 if (indicator.isCanceled) return
                 val fin = tts.status(refresh = true)
                 if (fin.piperImportable) {
                     tts.restart()
+                    console.finish(true, "Piper is installed.")
                     notify(project, NotificationType.INFORMATION, "Piper installed",
                         "The offline-neural tier is installed. Add a voice under <b>Settings → Tools → Audio " +
                             "Explainer → Audio engines → Piper</b> to narrate a new language.")
                 } else {
+                    console.finish(false, "piper-tts still isn't importable.")
                     notify(project, NotificationType.WARNING, "Piper setup incomplete",
-                        "Setup ran but <code>piper-tts</code> still isn't importable. Try again, or check the IDE log.")
+                        "Setup ran but <code>piper-tts</code> still isn't importable. Try again, or read the " +
+                            "install console window.")
                 }
             }
         })
@@ -181,36 +206,44 @@ object TtsSetup {
      * (chosen in the [PiperVoiceManagerDialog]). [onDone] runs on the EDT so the settings panel can refresh.
      */
     fun downloadPiperVoice(project: Project?, voiceKey: String, onDone: (() -> Unit)? = null) {
+        val console = InstallConsoleDialog.open(project, "Downloading Piper voice “$voiceKey”")
         ProgressManager.getInstance().run(object : Task.Backgroundable(anyProject(project), "Downloading Piper voice", true) {
-            override fun run(indicator: ProgressIndicator): Unit = withDone(onDone) {
+            override fun run(indicator: ProgressIndicator): Unit = withDone(onDone, console) {
                 indicator.isIndeterminate = true
                 val status = tts.status(refresh = true)
                 if (status.availability == TtsService.Availability.PYTHON_MISSING) {
+                    console.finish(false, "No Python interpreter on PATH.")
                     notify(project, NotificationType.ERROR, "Piper voice download failed",
                         "No Python interpreter was found on PATH. Install Python 3.10+ and try again.")
                     return
                 }
                 // piper-tts must be importable before a downloaded voice can be synthesized — install if missing.
-                if (!status.piperImportable && !tts.installPiper(indicator)) {
+                if (!status.piperImportable && !tts.installPiper(indicator, console::append)) {
+                    console.finish(false, "pip install piper-tts did not complete.")
                     notify(project, NotificationType.ERROR, "Piper voice download failed",
                         "<code>pip install piper-tts</code> did not complete (needed before downloading a voice).")
                     return
                 }
                 if (indicator.isCanceled) return
                 indicator.isIndeterminate = false
-                if (!tts.downloadPiperVoice(indicator, voiceKey)) {
+                if (!tts.downloadPiperVoice(indicator, voiceKey, console::append)) {
+                    console.finish(false, "“$voiceKey” did not download.")
                     notify(project, NotificationType.ERROR, "Piper voice download failed",
-                        "The voice “$voiceKey” did not download. Check your connection and try again.")
+                        "The voice “$voiceKey” did not download — the install console window has the " +
+                            "output. Check your connection and try again.")
                     return
                 }
                 val fin = tts.status(refresh = true)
                 tts.restart()
                 if (fin.piperVoices.any { it.key == voiceKey }) {
+                    console.finish(true, "“$voiceKey” is installed.")
                     notify(project, NotificationType.INFORMATION, "Piper voice ready",
                         "“$voiceKey” is installed. Pick it in the Audio Explainer sidebar to narrate that language.")
                 } else {
+                    console.finish(false, "“$voiceKey” isn't showing as installed.")
                     notify(project, NotificationType.WARNING, "Piper voice incomplete",
-                        "The download ran but “$voiceKey” isn't showing as installed. Try again, or check the IDE log.")
+                        "The download ran but “$voiceKey” isn't showing as installed. Try again, or read " +
+                            "the install console window.")
                 }
             }
         })
@@ -271,10 +304,22 @@ object TtsSetup {
      * through the `finally`. The `any()` modality lets the callback update the Settings dialog's status
      * labels while that (modal) dialog is still open.
      */
-    private inline fun withDone(noinline onDone: (() -> Unit)?, block: () -> Unit) {
+    /**
+     * Run [block], then hand [onDone] to the EDT — and leave [console] in a finished state whatever path was
+     * taken. The console verdict is a `finally` for the same reason `onDone` is: every one of these tasks has
+     * early `return`s, and a console still saying "Working…" an hour after the task ended is a worse lie
+     * than no console at all. [InstallConsoleDialog.finish] is idempotent, so a path that stated its own
+     * verdict keeps it.
+     */
+    private inline fun withDone(
+        noinline onDone: (() -> Unit)?,
+        console: InstallConsoleDialog? = null,
+        block: () -> Unit,
+    ) {
         try {
             block()
         } finally {
+            console?.finishQuietly()
             if (onDone != null) ApplicationManager.getApplication().invokeLater(onDone, ModalityState.any())
         }
     }

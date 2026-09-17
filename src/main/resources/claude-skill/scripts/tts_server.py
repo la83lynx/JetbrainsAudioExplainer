@@ -201,6 +201,12 @@ def _can_import(module):
         return False
 
 
+# A run of code-ish Latin text inside otherwise-CJK narration: an identifier, a type, an API name.
+# Dotted paths are one run so `Volatile.Read` stays a phrase; the dot becomes a space before English
+# phonemization, which is what makes it "volatile read" rather than "volatile dot read".
+_LATIN_RUN = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*")
+
+
 def _misaki_lang_ready(code):
     """Whether the misaki backend for a CJK language is importable. `code` is 'ja' or 'zh'.
     Base kokoro-onnx does NOT install misaki; ja/zh need the extra `misaki[ja]` / `misaki[zh]` packs."""
@@ -248,19 +254,73 @@ class KokoroEngine:
         from kokoro_onnx import Kokoro  # noqa: import here so --synthetic needs no deps
 
         self.kokoro = Kokoro(model_path, voices_path)
+        self._jag2p = None
+
+    def _ja_g2p(self):
+        """misaki's Japanese grapheme-to-phoneme, built once. Kanji need a dictionary, not rules."""
+        if self._jag2p is None:
+            from misaki import ja  # noqa: import here so non-ja runs never pay for fugashi/unidic
+
+            self._jag2p = ja.JAG2P()
+        return self._jag2p
+
+    def _phonemize_ja(self, sentence):
+        """Japanese phonemes for [sentence], with embedded Latin identifiers read as English.
+
+        **Why this exists, and why it is not kokoro-onnx's job.** kokoro-onnx phonemizes *every*
+        language through espeak-ng — it never imports misaki. espeak's `ja` voice has kana rules but no
+        kanji dictionary, so on a real Japanese sentence it switches language per character run and
+        *announces the switch*: 109 characters of narration came back as 943 phonemes reading
+        "Chinese letter … Japanese letter …" aloud, in the Kokoro voice, for the length of the sentence.
+        misaki is Kokoro-82M's own G2P and its inventory is inside the model's 114-symbol vocabulary
+        (verified against `DEFAULT_VOCAB`: every symbol it emits for this text is in there).
+
+        What misaki does *not* do is pronounce `Volatile.Read` — it passes Latin through untouched, and
+        those letters would be spoken as if they were phonemes. So the sentence is cut into runs: code
+        goes to espeak as English, everything else to misaki, and the two phoneme strings are joined.
+        Non-vocabulary leftovers (`<`, `>`, `_` from generics and field names) are dropped at the end
+        rather than fed to the model.
+        """
+        g2p, pieces, pos = self._ja_g2p(), [], 0
+        for m in _LATIN_RUN.finditer(sentence):
+            if m.start() > pos:
+                pieces.append(self._misaki_ja(g2p, sentence[pos:m.start()]))
+            pieces.append(self.kokoro.tokenizer.phonemize(m.group().replace(".", " "), "en-us"))
+            pos = m.end()
+        if pos < len(sentence):
+            pieces.append(self._misaki_ja(g2p, sentence[pos:]))
+        vocab = self.kokoro.tokenizer.vocab
+        joined = " ".join(p for p in (piece.strip() for piece in pieces) if p)
+        return "".join(ch for ch in joined if ch in vocab)
+
+    @staticmethod
+    def _misaki_ja(g2p, chunk):
+        """misaki returns (phonemes, tokens) in some releases and a bare string in others."""
+        if not chunk.strip():
+            return ""
+        out = g2p(chunk)
+        return out[0] if isinstance(out, tuple) else out
 
     def synth(self, text, voice, speed, lang=None, tune=None):
         import numpy as np
 
         # Explicit request `lang` wins; otherwise derive from the voice prefix (normally authoritative).
         lang = lang or lang_for_voice(voice)
-        # CJK languages route through misaki inside kokoro-onnx; fail clean if the pack is absent.
-        if lang == "ja" and not _misaki_lang_ready("ja"):
+        # Japanese is the one language kokoro-onnx cannot phonemize (see `_phonemize_ja`), so we do it
+        # and hand the model finished phonemes. Chinese is *not* in the same boat: espeak's `cmn` voice
+        # has a Han dictionary and is what produced the Chinese narration that was judged good, so it
+        # keeps the ordinary path and misaki[zh] is not required for it.
+        use_misaki_ja = lang == "ja"
+        if use_misaki_ja and not _misaki_lang_ready("ja"):
             raise RuntimeError("Japanese needs 'misaki[ja]' — install it from Settings → Audio engines → Kokoro")
-        if lang == "cmn" and not _misaki_lang_ready("zh"):
-            raise RuntimeError("Chinese needs 'misaki[zh]' — install it from Settings → Audio engines → Kokoro")
         for sentence in split_sentences(text):
-            samples, sr = self.kokoro.create(sentence, voice=voice, speed=float(speed), lang=lang)
+            if use_misaki_ja:
+                phonemes = self._phonemize_ja(sentence)
+                samples, sr = self.kokoro.create(
+                    phonemes, voice=voice, speed=float(speed), is_phonemes=True
+                )
+            else:
+                samples, sr = self.kokoro.create(sentence, voice=voice, speed=float(speed), lang=lang)
             pcm = np.asarray(samples, dtype="<f4").tobytes()
             yield pcm, int(sr), sentence
 

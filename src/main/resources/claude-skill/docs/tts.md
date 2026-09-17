@@ -111,11 +111,14 @@ Kokoro-82M's full trained set (8 languages / 9 accents):
 | `zh` | Chinese (Mandarin) | `zf_` / `zm_` | zf_xiaobei, zf_xiaoni, zf_xiaoxiao, zf_xiaoyi, zm_yunjian, zm_yunxi, zm_yunxia, zm_yunyang |
 
 US vs UK English is one *text* language (`en`) with two voice groups — the accent is a voice choice.
-**Japanese and Chinese need extra pip packs** (`misaki[ja]` / `misaki[zh]`); install them from
-**Settings → Tools → Audio Explainer → Audio engines → Kokoro → "Add / reinstall Japanese & Chinese
-voices"**. Until installed the server
-returns a clean "needs misaki" error for those and `--check` omits them from `languagesReady`. The other
-languages need no extra deps beyond the base install.
+**Japanese needs an extra pip pack** (`misaki[ja]`), installed from **Settings → Tools → Audio Explainer →
+Audio engines → Kokoro → "Add / reinstall Japanese & Chinese voices"**; until it is there the server returns
+a clean "needs misaki" error and `--check` omits `ja` from `languagesReady`. It is a hard requirement
+because the server phonemizes Japanese **itself**: `kokoro-onnx` hands every language to espeak-ng, whose
+`ja` voice has no kanji dictionary and reads kanji aloud as *"Chinese letter"*, so `ja` goes through misaki
+(Kokoro's own G2P) with Latin identifiers phonemized as English and the result passed as phonemes.
+**Chinese does not need `misaki[zh]`** — espeak's `cmn` voice has a Han dictionary and handles it — though
+the button installs both. No other language needs anything beyond the base install.
 
 **Robotic tier (espeak) voices.** The robotic "voice" is a language code plus a variant — `de+ae_f`
 (female) or `de+ae_m` (male). `ae_f`/`ae_m` are **custom variants the server installs** into espeak's

@@ -53,6 +53,12 @@ import javax.swing.text.NumberFormatter
  * [AudioExplainerSettings]; on apply it also re-styles the live walkthrough (if one is showing) so a
  * change is visible immediately.
  *
+ * The page is five `collapsibleGroup`s **in the order of the job** — *Audio engines* (set up once),
+ * *Language & narration* (chosen per walkthrough), *Appearance*, *Code tree*, *Executables (advanced)* —
+ * and the sections you rarely reopen start collapsed. Collapsing is presentation only: the DSL builds
+ * every row whatever its section's state, so bindings, `onReset`/`onApply`/`onIsModified` and the status
+ * labels [refreshEngineStatusLabels] writes into all work while a section is folded.
+ *
  * Spinners/checkboxes bind to the settings state via the Kotlin UI DSL. The two [ColorPanel]s have no
  * DSL binding helper, so they are wired manually through the cell lifecycle hooks
  * (`onReset`/`onApply`/`onIsModified`). The final row's `onApply` runs after every other cell's write,
@@ -103,6 +109,9 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
             val tts = TtsService.getInstance()
             runCatching { tts.status(refresh = false) }
             runCatching { tts.sapiVoices(refresh = false) }
+            // vswhere, once per session — so the compiler line under Kokoro is answered rather than
+            // "not checked yet" the first time anyone opens this page.
+            runCatching { tts.msvcBuildTools(refresh = false) }
             // Warm the installed-font list here too, so building the panel doesn't enumerate fonts on the EDT.
             runCatching { proseFonts() }
             ApplicationManager.getApplication().invokeLater({ refreshEngineStatusLabels() }, ModalityState.any())
@@ -164,11 +173,311 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     private var espeakStatusLabel: JBLabel? = null
     private var sapiStatusLabel: JBLabel? = null
     private var piperStatusLabel: JBLabel? = null
+    private var cppStatusLabel: JBLabel? = null
 
     override fun createPanel(): DialogPanel = panel {
-        // **First, because the leader is the headline setting.** A walkthrough is a tree of code now, and
-        // this group is the shape of that tree; everything below it decorates lines *inside* one node.
-        group("Code tree") {
+        // **Section order is the order of the job.** What you set up once is at the top, then what you
+        // choose per walkthrough, then how it all looks; the advanced escape hatches are last. Every
+        // section collapses, and the ones you rarely reopen start collapsed, so the page opens as a
+        // readable table of contents instead of one long scroll.
+
+        // **Setup first.** Per-engine status, provisioning and engine-specific info/links (Phase L7
+        // cleanup), one sub-group per synthesizer tier. Replaces the old modal "Set up TTS" chooser.
+        // Only Kokoro — the primary tier — is open by default; the other three are opt-in.
+        collapsibleGroup("Audio engines") {
+            collapsibleGroup("Kokoro — neural (local, primary)") {
+                row {
+                    kokoroStatusLabel = JBLabel(kokoroStatusText(TtsService.getInstance().cachedStatusOrNull()))
+                    cell(kokoroStatusLabel!!)
+                }
+                row("Model directory:") {
+                    textField().bindText({ state.kokoroModelDir }, { state.kokoroModelDir = it.trim() })
+                        .comment("Blank = default (~/.cache/audio-explainer).")
+                }
+                row {
+                    button("Install / reinstall Kokoro…") {
+                        TtsSetup.install(anyOpenProject()) { refreshEngineStatusLabels() }
+                    }
+                    button("Add / reinstall Japanese & Chinese voices…") {
+                        TtsSetup.installLanguagePacks(anyOpenProject()) { refreshEngineStatusLabels() }
+                    }
+                }.rowComment("Kokoro voice model ≈ 340 MB. Japanese & Chinese need the extra misaki packs (large download). Both run in the background with a console window showing the installer's output; the status above updates when they finish.")
+
+                // The Japanese pack's hidden prerequisite, surfaced *before* the four-minute attempt that
+                // would otherwise end in a pip traceback. Windows-only: the failure is an MSVC one, and
+                // elsewhere a toolchain is the norm.
+                if (SystemInfo.isWindows) {
+                    row {
+                        cppStatusLabel = JBLabel(cppStatusText())
+                        cell(cppStatusLabel!!)
+                    }
+                    row {
+                        button("Get Microsoft C++ Build Tools…") { BrowserUtil.browse(BUILD_TOOLS_URL) }
+                        button("Re-check compiler") { recheckCpp() }
+                    }.rowComment(
+                        "Needed for <b>Japanese</b> only, and only sometimes: <code>misaki[ja]</code> pulls " +
+                            "<b>mojimoji</b>, a C extension, and when PyPI has no prebuilt wheel for your " +
+                            "Python version (it has none for CPython 3.13) pip compiles it here. " +
+                            "<b>Chinese needs nothing</b> — every <code>misaki[zh]</code> dependency is pure " +
+                            "Python. The download is free; pick the <i>Desktop development with C++</i> " +
+                            "workload — or add it to a Visual Studio you already have. A Python version " +
+                            "with a mojimoji wheel is the other way past.",
+                    )
+                }
+            }.apply { expanded = true }
+
+            collapsibleGroup("espeak — robotic (bundled, synthesized lower quality)") {
+                row {
+                    espeakStatusLabel = JBLabel(espeakStatusText())
+                    cell(espeakStatusLabel!!)
+                }.rowComment("Ships with kokoro-onnx — no download. Robotic but intelligible; the fallback for the ~100 languages Kokoro can't voice, and offered on every language as “Robotic (F/M)”.")
+                row {
+                    comment("Tune the robotic voices from the sidebar — the inline Pitch / Liveliness / Word-gap sliders and the Advanced… editor, per RoboSynth LoQ (F/M) variant (shared across languages).")
+                }
+            }.apply { expanded = false }
+
+            collapsibleGroup("Windows SAPI — system voices${if (SystemInfo.isWindows) "" else " (Windows only)"}") {
+                if (SystemInfo.isWindows) {
+                    row {
+                        sapiStatusLabel = JBLabel(sapiStatusText())
+                        cell(sapiStatusLabel!!)
+                    }
+                    row {
+                        button("Rescan Windows voices") { recheckSapi() }
+                    }.rowComment("Discovered via System.Speech and offered per voice (ids sapi:<lang>:<name>). Culture → walkthrough language, so SAPI voices can add languages Kokoro/espeak never listed.")
+                    row {
+                        cell(ActionLink("Get NaturalVoiceSAPIAdapter (GitHub)", ActionListener { BrowserUtil.browse(ADAPTER_URL) }))
+                    }.rowComment(
+                        "Optional third-party SAPI5 provider (you install it — we don't bundle it). It re-exposes the Windows " +
+                            "“natural” voices and, with its Edge online voices enabled, neural Azure voices for ~140 locales. " +
+                            "Those are online: each sentence is sent to Microsoft and needs internet; the classic/offline voices don't.",
+                    )
+                } else {
+                    row {
+                        comment("Windows only — not available on this OS. macOS/Linux narrate with Kokoro + espeak.")
+                    }
+                }
+            }.apply { expanded = false }
+
+            collapsibleGroup("Piper — offline neural") {
+                row {
+                    piperStatusLabel = JBLabel(piperStatusText())
+                    cell(piperStatusLabel!!)
+                }.rowComment(
+                    "Offline neural voices (VITS, via piper-tts) for the ~40 languages Kokoro can't voice — " +
+                        "higher quality than the robotic espeak tier, no online calls, cross-platform. Each " +
+                        "voice is a per-voice model download (~20–75 MB), stored under the Kokoro model directory (…/piper).",
+                )
+                row {
+                    button("Install Piper (pip)") {
+                        TtsSetup.installPiper(anyOpenProject()) { refreshEngineStatusLabels() }
+                    }
+                    button("Manage voices…") {
+                        PiperVoiceManagerDialog(anyOpenProject()).show()
+                        refreshEngineStatusLabels()
+                    }
+                }.rowComment("Install the package once, then browse the full catalog (~170 voices / ~50 languages) to download or remove voices. Downloads run in the background; the status above updates when they finish.")
+            }.apply { expanded = false }
+
+            row {
+                button("Re-check engines") { recheckAll() }
+            }.rowComment("Re-probes the Kokoro prerequisites and rescans Windows voices (background), then refreshes the status above.")
+        }.apply { expanded = true }
+
+        // **Then what a walkthrough is made of.** The language governs the prose *and* the narration, so
+        // it leads and the audio switch, voice and speed read as consequences of it — which is also why
+        // the voice combo is rebuilt from the language selected two rows above it.
+        collapsibleGroup("Language & narration") {
+            row("Explanation language:") {
+                comboBox(languageCodes())
+                    .bindItem({ state.explanationLanguage }, { state.explanationLanguage = it ?: Languages.DEFAULT_CODE })
+                    .applyToComponent {
+                        renderer = SimpleListCellRenderer.create("") { languageLabel(it) }
+                        // Live-filter the voice combo to this language (Phase L7 cleanup), like the sidebar.
+                        addActionListener {
+                            if (this@HighlightSettingsConfigurable::voiceCombo.isInitialized) {
+                                rebuildVoiceCombo(selectedItem as? String)
+                            }
+                        }
+                    }
+            }.rowComment("Language for NEW ‘Explain This’ generations. A loaded walkthrough keeps its own language. Each entry lists the voice tiers it offers; Japanese & Chinese need extra TTS packs (see Audio engines above).")
+            row {
+                // The old "Engine" combo only ever meant on/off (the synthesizer tier is per-voice), so it's
+                // just a checkbox now. `ttsEngine` still stores kokoro/off under the hood for back-compat and
+                // the "Turn off audio" setup action.
+                checkBox("Enable narration (audio)")
+                    .bindSelected({ state.ttsEngine != ENGINE_OFF },
+                        { state.ttsEngine = if (it) ENGINE_KOKORO else ENGINE_OFF })
+            }.rowComment("Off = the walkthrough shows silently. The synthesizer tier (Kokoro neural · espeak robotic · Windows SAPI) is chosen per voice below.")
+            row("Voice:") {
+                // Items are rebuilt to the selected explanation language (see [rebuildVoiceCombo]); managed
+                // manually (onReset/onApply/onIsModified) rather than bound, since the model is dynamic.
+                voiceCombo = comboBox(emptyList<String>())
+                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { voiceLabel(it) } }
+                    .onReset {
+                        rebuildVoiceCombo(state.explanationLanguage)
+                        voiceCombo.selectedItem = validVoiceFor(state.explanationLanguage, state.ttsVoice)
+                    }
+                    .onApply { (voiceCombo.selectedItem as? String)?.let { state.ttsVoice = it } }
+                    .onIsModified { (voiceCombo.selectedItem as? String) != state.ttsVoice }
+                    .component
+            }.rowComment("Voices for the explanation language above — updates when you change it. A loaded walkthrough narrates with a voice matching its own language.")
+            row("Speed (%):") {
+                clampedSpinner(25..400).bindIntValue(state::ttsSpeedPercent)
+            }.rowComment("100 = normal. The sidebar's speed buttons write here too.")
+        }.apply { expanded = true }
+
+        // **Then how it looks.** One umbrella so the whole appearance block folds away in a click, and
+        // the accent leads it because every other colour in here is derived from that one swatch.
+        collapsibleGroup("Appearance") {
+            collapsibleGroup("Accent colour & non-active lines") {
+                row("Accent colour:") {
+                    cell(accentPanel)
+                        .onReset { accentPanel.selectedColor = parseColor(state.accentColor) }
+                        .onApply { accentPanel.selectedColor?.let { state.accentColor = toHex(it) } }
+                        .onIsModified { toHex(accentPanel.selectedColor ?: return@onIsModified false) != state.accentColor }
+                }.rowComment("The one colour every other cue here is derived from: the overview mark, the gap gutter bar, the non-active tint, and the relationship-arrow palette.")
+                row {
+                    tintCheck = checkBox("Tint non-active highlight lines")
+                        .bindSelected(state::nonActiveTint).component
+                }.rowComment("Gives non-active highlights their own cue so they don't rely on the gutter bar alone.")
+                row("Tint strength (%):") {
+                    tintSpinner = clampedSpinner(0..100).bindIntValue(state::nonActiveTintPercent).component
+                }
+            }.apply { expanded = true }
+
+            collapsibleGroup("Active line") {
+                row("Glow colour:") {
+                    cell(glowPanel)
+                        .onReset { glowPanel.selectedColor = parseColor(state.activeGlowColor) }
+                        .onApply { glowPanel.selectedColor?.let { state.activeGlowColor = toHex(it) } }
+                        .onIsModified { toHex(glowPanel.selectedColor ?: return@onIsModified false) != state.activeGlowColor }
+                }
+                row("Glow strength (%):") {
+                    glowSpinner = clampedSpinner(0..100).bindIntValue(state::activeGlowPercent).component
+                }.rowComment("Whole-line background glow behind the active highlight.")
+                row {
+                    overviewCheck = checkBox("Show accent mark in the overview ruler")
+                        .bindSelected(state::overviewRulerMark).component
+                }
+            }.apply { expanded = false }
+
+            collapsibleGroup("Gap (context) lines") {
+                row {
+                    gapCheck = checkBox("Show accent gutter bar").bindSelected(state::gapGutter).component
+                }
+                row("Gutter bar width (px):") {
+                    gapWidthSpinner = clampedSpinner(1..8).bindIntValue(state::gapGutterWidth).component
+                }
+            }.apply { expanded = false }
+
+            collapsibleGroup("Dimming (segment spotlight)") {
+                row("Outside-segment brightness (%):") {
+                    outsideSpinner = clampedSpinner(0..100).bindIntValue(state::outsideDimPercent).component
+                }.rowComment("Lower = more dimmed. Lines outside the current segment.")
+                row("Within-segment brightness (%):") {
+                    withinSpinner = clampedSpinner(0..100).bindIntValue(state::withinDimPercent).component
+                }.rowComment("Non-active and context lines inside the segment. Keep clearly brighter than the outside value.")
+            }.apply { expanded = false }
+
+            collapsibleGroup("Callouts") {
+                row("Frame style:") {
+                    frameCombo = comboBox(FRAME_IDS)
+                        .bindItem(
+                            { state.calloutFrame },
+                            { state.calloutFrame = it ?: AudioExplainerSettings.CALLOUT_FRAME_BAR },
+                        )
+                        .applyToComponent { renderer = SimpleListCellRenderer.create("") { frameLabel(it) } }
+                        .component
+                }.rowComment("All five place the same text. None is the lightest thing to put over code; Outline keeps an edge without filling the line; Comment block disguises the aside as a <code>//</code> comment in the scheme's own comment colour.")
+                row("Description font:") {
+                    proseFontCombo = comboBox(proseFonts())
+                        .bindItem(
+                            { state.calloutProseFont },
+                            { state.calloutProseFont = it ?: "" },
+                        )
+                        .applyToComponent {
+                            renderer = SimpleListCellRenderer.create("") { proseFontLabel(it) }
+                            // Fires on a pick *and* on every reset (`setSelectedItem` always fires), so the sample
+                            // below never shows a family the combo isn't on.
+                            addActionListener { refreshProseFontPreview() }
+                        }
+                        .component
+                }.rowComment("The prose aside and the relation pointer lines. The worked example always stays on the editor's code font — an example is code. Size follows “Text size” below.")
+                row("") {
+                    cell(proseFontPreview)
+                }.rowComment("Sample at the editor's italic face in the chosen family, at the size below.")
+                row("Tint strength (%):") {
+                    calloutTintSpinner = clampedSpinner(0..100).bindIntValue(state::calloutTintPercent).component
+                }.rowComment("How far the box's background is pulled toward the accent colour.")
+                row("Opacity (%):") {
+                    calloutOpacitySpinner = clampedSpinner(0..100).bindIntValue(state::calloutOpacityPercent).component
+                }.rowComment("100 is a solid box. Lower it to let code — or a relationship arrow with nowhere else to run — read through the callout. Only the fill fades: at 0 the text, bar and outline all still draw.")
+                row("Corner radius (px):") {
+                    calloutRadiusSpinner = clampedSpinner(0..16).bindIntValue(state::calloutCornerRadius).component
+                }.rowComment("0 squares the box off.")
+                row("Accent bar width (px):") {
+                    calloutBarSpinner = clampedSpinner(1..10).bindIntValue(state::calloutBarWidth).component
+                }.rowComment("Only the Bar frame style draws one.")
+                row("Text size (% of editor font):") {
+                    calloutScaleSpinner = clampedSpinner(60..160).bindIntValue(state::calloutTextScalePercent).component
+                    // This size is half of what the description sample above is showing.
+                    calloutScaleSpinner.addChangeListener { refreshProseFontPreview() }
+                }.rowComment("The wrap follows the size, so a larger box fits fewer words per line — the per-paragraph line caps don't move.")
+                row {
+                    calloutBelowCheck = checkBox("Dock the callout below the active lines")
+                        .bindSelected(state::calloutBelow).component
+                }.rowComment("Default is above, which matches reading order: the aside, then the code it describes.")
+                row {
+                    leaderCheck = checkBox("Draw a leader to the annotated line")
+                        .bindSelected(state::calloutLeader).component
+                }.rowComment("A speech-bubble tail off the box's near edge, a quarter of the way along it, pointing the way the box is docked. Takes the box's own tint where the frame paints one; every style but Bar also outlines it. Costs a few px of editor height per step.")
+                // Both fields the sample depends on exist by now. Reset fires the combo listener anyway, so this
+                // only matters for the instant between building the panel and the platform's first reset.
+                refreshProseFontPreview()
+            }.apply { expanded = false }
+
+            collapsibleGroup("Relationship arrows") {
+                row("Link colours:") {
+                    cell(arrowSlotRow)
+                        .onReset { arrowSlotPanels.forEachIndexed { i, p -> p.selectedColor = slotColor(i) } }
+                        .onApply {
+                            state.arrowSlotColors = MutableList(LinkArt.slots()) { i ->
+                                arrowSlotPanels[i].selectedColor?.let { toHex(it) } ?: ""
+                            }
+                        }
+                        .onIsModified {
+                            arrowSlotPanels.indices.any { i ->
+                                (arrowSlotPanels[i].selectedColor?.let { toHex(it) } ?: "") != storedSlot(i)
+                            }
+                        }
+                }
+                    .rowComment(
+                        "One colour per link on a step, in the order they are drawn. An empty swatch keeps that " +
+                            "link's derived colour — the first is the accent and the rest are spread around the " +
+                            "wheel from it, which is the palette the defaults ship with. “Clear” puts them all " +
+                            "back to derived.",
+                    )
+                row("Thickness (tenths of a px):") {
+                    arrowThicknessSpinner = clampedSpinner(8..40).bindIntValue(state::arrowThicknessTenths).component
+                }.rowComment("10 is the 1 px line links ship with; 40 draws a bold diagram line. Past about 25, several links leaving the same row can start to intersect — hovering still tells them apart, and the range is left open on purpose.")
+                row("Arrowhead size (px):") {
+                    arrowHeadSpinner = clampedSpinner(4..16).bindIntValue(state::arrowHeadSize).component
+                }
+                row {
+                    arrowSquareCheck = checkBox("Square the elbow corners")
+                        .bindSelected(state::arrowSquareElbow).component
+                }
+                row {
+                    arrowLabelsCheck = checkBox("Show the relationship note beside the arrow")
+                        .bindSelected(state::arrowLabels).component
+                }.rowComment("Off leaves that text to the callout box and the portal's tooltip, which carry it anyway.")
+            }.apply { expanded = false }
+        }.apply { expanded = true }
+
+        // The shape of the tree itself — structure rather than theme, which is why it is its own section
+        // and not an Appearance sub-group: everything above decorates lines *inside* one node.
+        collapsibleGroup("Code tree") {
             row("Nesting leader:") {
                 treeLeaderCombo = comboBox(TREE_LEADERS)
                     .bindItem(
@@ -276,278 +585,20 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 "On by default: capping the outermost node puts a second scrollbar inside the first. Nested " +
                     "hosts are always sized to their excerpt plus whatever is embedded in them.",
             )
-        }.rowComment(
-            "Three things about the tree are <b>not</b> here, and each was decided rather than left out: the " +
-                "caption band is chosen by a node's role (outermost, or a different file from its parent), the " +
-                "invoking token is always boxed because every leader starts at its corners, and nested frames " +
-                "are never indented — the nested gutter is the boundary.",
-        )
-
-        group("Segment spotlight") {
-            row("Outside-segment brightness (%):") {
-                outsideSpinner = clampedSpinner(0..100).bindIntValue(state::outsideDimPercent).component
-            }.rowComment("Lower = more dimmed. Lines outside the current segment.")
-            row("Within-segment brightness (%):") {
-                withinSpinner = clampedSpinner(0..100).bindIntValue(state::withinDimPercent).component
-            }.rowComment("Non-active and context lines inside the segment. Keep clearly brighter than the outside value.")
-        }
-
-        group("Active line") {
-            row("Glow colour:") {
-                cell(glowPanel)
-                    .onReset { glowPanel.selectedColor = parseColor(state.activeGlowColor) }
-                    .onApply { glowPanel.selectedColor?.let { state.activeGlowColor = toHex(it) } }
-                    .onIsModified { toHex(glowPanel.selectedColor ?: return@onIsModified false) != state.activeGlowColor }
-            }
-            row("Glow strength (%):") {
-                glowSpinner = clampedSpinner(0..100).bindIntValue(state::activeGlowPercent).component
-            }.rowComment("Whole-line background glow behind the active highlight.")
+            // Was the group's own rowComment; a rowComment on a collapsible header keeps showing while
+            // the section is folded, so the note lives inside the fold it belongs to.
             row {
-                overviewCheck = checkBox("Show accent mark in the overview ruler")
-                    .bindSelected(state::overviewRulerMark).component
-            }
-        }
-
-        group("Accent & non-active highlights") {
-            row("Accent colour:") {
-                cell(accentPanel)
-                    .onReset { accentPanel.selectedColor = parseColor(state.accentColor) }
-                    .onApply { accentPanel.selectedColor?.let { state.accentColor = toHex(it) } }
-                    .onIsModified { toHex(accentPanel.selectedColor ?: return@onIsModified false) != state.accentColor }
-            }.rowComment("Used for the overview mark, the gap gutter bar, and the non-active tint.")
-            row {
-                tintCheck = checkBox("Tint non-active highlight lines")
-                    .bindSelected(state::nonActiveTint).component
-            }.rowComment("Gives non-active highlights their own cue so they don't rely on the gutter bar alone.")
-            row("Tint strength (%):") {
-                tintSpinner = clampedSpinner(0..100).bindIntValue(state::nonActiveTintPercent).component
-            }
-        }
-
-        group("Gap (context) lines") {
-            row {
-                gapCheck = checkBox("Show accent gutter bar").bindSelected(state::gapGutter).component
-            }
-            row("Gutter bar width (px):") {
-                gapWidthSpinner = clampedSpinner(1..8).bindIntValue(state::gapGutterWidth).component
-            }
-        }
-
-        group("Callout appearance") {
-            row("Frame style:") {
-                frameCombo = comboBox(FRAME_IDS)
-                    .bindItem(
-                        { state.calloutFrame },
-                        { state.calloutFrame = it ?: AudioExplainerSettings.CALLOUT_FRAME_BAR },
-                    )
-                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { frameLabel(it) } }
-                    .component
-            }.rowComment("All five place the same text. None is the lightest thing to put over code; Outline keeps an edge without filling the line; Comment block disguises the aside as a <code>//</code> comment in the scheme's own comment colour.")
-            row("Description font:") {
-                proseFontCombo = comboBox(proseFonts())
-                    .bindItem(
-                        { state.calloutProseFont },
-                        { state.calloutProseFont = it ?: "" },
-                    )
-                    .applyToComponent {
-                        renderer = SimpleListCellRenderer.create("") { proseFontLabel(it) }
-                        // Fires on a pick *and* on every reset (`setSelectedItem` always fires), so the sample
-                        // below never shows a family the combo isn't on.
-                        addActionListener { refreshProseFontPreview() }
-                    }
-                    .component
-            }.rowComment("The prose aside and the relation pointer lines. The worked example always stays on the editor's code font — an example is code. Size follows “Text size” below.")
-            row("") {
-                cell(proseFontPreview)
-            }.rowComment("Sample at the editor's italic face in the chosen family, at the size below.")
-            row("Tint strength (%):") {
-                calloutTintSpinner = clampedSpinner(0..100).bindIntValue(state::calloutTintPercent).component
-            }.rowComment("How far the box's background is pulled toward the accent colour.")
-            row("Opacity (%):") {
-                calloutOpacitySpinner = clampedSpinner(0..100).bindIntValue(state::calloutOpacityPercent).component
-            }.rowComment("100 is a solid box. Lower it to let code — or a relationship arrow with nowhere else to run — read through the callout. Only the fill fades: at 0 the text, bar and outline all still draw.")
-            row("Corner radius (px):") {
-                calloutRadiusSpinner = clampedSpinner(0..16).bindIntValue(state::calloutCornerRadius).component
-            }.rowComment("0 squares the box off.")
-            row("Accent bar width (px):") {
-                calloutBarSpinner = clampedSpinner(1..10).bindIntValue(state::calloutBarWidth).component
-            }.rowComment("Only the Bar frame style draws one.")
-            row("Text size (% of editor font):") {
-                calloutScaleSpinner = clampedSpinner(60..160).bindIntValue(state::calloutTextScalePercent).component
-                // This size is half of what the description sample above is showing.
-                calloutScaleSpinner.addChangeListener { refreshProseFontPreview() }
-            }.rowComment("The wrap follows the size, so a larger box fits fewer words per line — the per-paragraph line caps don't move.")
-            row {
-                calloutBelowCheck = checkBox("Dock the callout below the active lines")
-                    .bindSelected(state::calloutBelow).component
-            }.rowComment("Default is above, which matches reading order: the aside, then the code it describes.")
-            row {
-                leaderCheck = checkBox("Draw a leader to the annotated line")
-                    .bindSelected(state::calloutLeader).component
-            }.rowComment("A speech-bubble tail off the box's near edge, a quarter of the way along it, pointing the way the box is docked. Takes the box's own tint where the frame paints one; every style but Bar also outlines it. Costs a few px of editor height per step.")
-            // Both fields the sample depends on exist by now. Reset fires the combo listener anyway, so this
-            // only matters for the instant between building the panel and the platform's first reset.
-            refreshProseFontPreview()
-        }
-
-        group("Relationship arrows") {
-            row("Link colours:") {
-                cell(arrowSlotRow)
-                    .onReset { arrowSlotPanels.forEachIndexed { i, p -> p.selectedColor = slotColor(i) } }
-                    .onApply {
-                        state.arrowSlotColors = MutableList(LinkArt.slots()) { i ->
-                            arrowSlotPanels[i].selectedColor?.let { toHex(it) } ?: ""
-                        }
-                    }
-                    .onIsModified {
-                        arrowSlotPanels.indices.any { i ->
-                            (arrowSlotPanels[i].selectedColor?.let { toHex(it) } ?: "") != storedSlot(i)
-                        }
-                    }
-            }
-                .rowComment(
-                    "One colour per link on a step, in the order they are drawn. An empty swatch keeps that " +
-                        "link's derived colour — the first is the accent and the rest are spread around the " +
-                        "wheel from it, which is the palette the defaults ship with. “Clear” puts them all " +
-                        "back to derived.",
+                comment(
+                    "Three things about the tree are <b>not</b> here, and each was decided rather than " +
+                        "left out: the caption band is chosen by a node's role (outermost, or a different " +
+                        "file from its parent), the invoking token is always boxed because every leader " +
+                        "starts at its corners, and nested frames are never indented — the nested gutter " +
+                        "is the boundary.",
                 )
-            row("Thickness (tenths of a px):") {
-                arrowThicknessSpinner = clampedSpinner(8..40).bindIntValue(state::arrowThicknessTenths).component
-            }.rowComment("10 is the 1 px line links ship with; 40 draws a bold diagram line. Past about 25, several links leaving the same row can start to intersect — hovering still tells them apart, and the range is left open on purpose.")
-            row("Arrowhead size (px):") {
-                arrowHeadSpinner = clampedSpinner(4..16).bindIntValue(state::arrowHeadSize).component
             }
-            row {
-                arrowSquareCheck = checkBox("Square the elbow corners")
-                    .bindSelected(state::arrowSquareElbow).component
-            }
-            row {
-                arrowLabelsCheck = checkBox("Show the relationship note beside the arrow")
-                    .bindSelected(state::arrowLabels).component
-            }.rowComment("Off leaves that text to the callout box and the portal's tooltip, which carry it anyway.")
-        }
+        }.apply { expanded = false }
 
-        group("Narration (audio)") {
-            row {
-                // The old "Engine" combo only ever meant on/off (the synthesizer tier is per-voice), so it's
-                // just a checkbox now. `ttsEngine` still stores kokoro/off under the hood for back-compat and
-                // the "Turn off audio" setup action.
-                checkBox("Enable narration (audio)")
-                    .bindSelected({ state.ttsEngine != ENGINE_OFF },
-                        { state.ttsEngine = if (it) ENGINE_KOKORO else ENGINE_OFF })
-            }.rowComment("Off = the walkthrough shows silently. The synthesizer tier (Kokoro neural · espeak robotic · Windows SAPI) is chosen per voice below.")
-            row("Explanation language:") {
-                comboBox(languageCodes())
-                    .bindItem({ state.explanationLanguage }, { state.explanationLanguage = it ?: Languages.DEFAULT_CODE })
-                    .applyToComponent {
-                        renderer = SimpleListCellRenderer.create("") { languageLabel(it) }
-                        // Live-filter the voice combo to this language (Phase L7 cleanup), like the sidebar.
-                        addActionListener {
-                            if (this@HighlightSettingsConfigurable::voiceCombo.isInitialized) {
-                                rebuildVoiceCombo(selectedItem as? String)
-                            }
-                        }
-                    }
-            }.rowComment("Language for NEW ‘Explain This’ generations. A loaded walkthrough keeps its own language. Each entry lists the voice tiers it offers; Japanese & Chinese need extra TTS packs (see Audio engines below).")
-            row("Voice:") {
-                // Items are rebuilt to the selected explanation language (see [rebuildVoiceCombo]); managed
-                // manually (onReset/onApply/onIsModified) rather than bound, since the model is dynamic.
-                voiceCombo = comboBox(emptyList<String>())
-                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { voiceLabel(it) } }
-                    .onReset {
-                        rebuildVoiceCombo(state.explanationLanguage)
-                        voiceCombo.selectedItem = validVoiceFor(state.explanationLanguage, state.ttsVoice)
-                    }
-                    .onApply { (voiceCombo.selectedItem as? String)?.let { state.ttsVoice = it } }
-                    .onIsModified { (voiceCombo.selectedItem as? String) != state.ttsVoice }
-                    .component
-            }.rowComment("Voices for the explanation language above — updates when you change it. A loaded walkthrough narrates with a voice matching its own language.")
-            row("Speed (%):") {
-                clampedSpinner(25..400).bindIntValue(state::ttsSpeedPercent)
-            }.rowComment("100 = normal. The sidebar's speed buttons write here too.")
-        }
-
-        // Per-engine section (Phase L7 cleanup) — status, provisioning, and engine-specific info/links,
-        // one collapsible sub-group per synthesizer tier. Replaces the old modal "Set up TTS" chooser.
-        group("Audio engines") {
-            group("Kokoro — neural (local, primary)") {
-                row {
-                    kokoroStatusLabel = JBLabel(kokoroStatusText(TtsService.getInstance().cachedStatusOrNull()))
-                    cell(kokoroStatusLabel!!)
-                }
-                row("Model directory:") {
-                    textField().bindText({ state.kokoroModelDir }, { state.kokoroModelDir = it.trim() })
-                        .comment("Blank = default (~/.cache/audio-explainer).")
-                }
-                row {
-                    button("Install / reinstall Kokoro…") {
-                        TtsSetup.install(anyOpenProject()) { refreshEngineStatusLabels() }
-                    }
-                    button("Add / reinstall Japanese & Chinese voices…") {
-                        TtsSetup.installLanguagePacks(anyOpenProject()) { refreshEngineStatusLabels() }
-                    }
-                }.rowComment("Kokoro voice model ≈ 340 MB. Japanese & Chinese need the extra misaki packs (large download). Both run in the background; the status above updates when they finish.")
-            }
-
-            group("espeak — robotic (bundled, synthesized lower quality)") {
-                row {
-                    espeakStatusLabel = JBLabel(espeakStatusText())
-                    cell(espeakStatusLabel!!)
-                }.rowComment("Ships with kokoro-onnx — no download. Robotic but intelligible; the fallback for the ~100 languages Kokoro can't voice, and offered on every language as “Robotic (F/M)”.")
-                row {
-                    comment("Tune the robotic voices from the sidebar — the inline Pitch / Liveliness / Word-gap sliders and the Advanced… editor, per RoboSynth LoQ (F/M) variant (shared across languages).")
-                }
-            }
-
-            group("Windows SAPI — system voices${if (SystemInfo.isWindows) "" else " (Windows only)"}") {
-                if (SystemInfo.isWindows) {
-                    row {
-                        sapiStatusLabel = JBLabel(sapiStatusText())
-                        cell(sapiStatusLabel!!)
-                    }
-                    row {
-                        button("Rescan Windows voices") { recheckSapi() }
-                    }.rowComment("Discovered via System.Speech and offered per voice (ids sapi:<lang>:<name>). Culture → walkthrough language, so SAPI voices can add languages Kokoro/espeak never listed.")
-                    row {
-                        cell(ActionLink("Get NaturalVoiceSAPIAdapter (GitHub)", ActionListener { BrowserUtil.browse(ADAPTER_URL) }))
-                    }.rowComment(
-                        "Optional third-party SAPI5 provider (you install it — we don't bundle it). It re-exposes the Windows " +
-                            "“natural” voices and, with its Edge online voices enabled, neural Azure voices for ~140 locales. " +
-                            "Those are online: each sentence is sent to Microsoft and needs internet; the classic/offline voices don't.",
-                    )
-                } else {
-                    row {
-                        comment("Windows only — not available on this OS. macOS/Linux narrate with Kokoro + espeak.")
-                    }
-                }
-            }
-
-            group("Piper — offline neural") {
-                row {
-                    piperStatusLabel = JBLabel(piperStatusText())
-                    cell(piperStatusLabel!!)
-                }.rowComment(
-                    "Offline neural voices (VITS, via piper-tts) for the ~40 languages Kokoro can't voice — " +
-                        "higher quality than the robotic espeak tier, no online calls, cross-platform. Each " +
-                        "voice is a per-voice model download (~20–75 MB), stored under the Kokoro model directory (…/piper).",
-                )
-                row {
-                    button("Install Piper (pip)") {
-                        TtsSetup.installPiper(anyOpenProject()) { refreshEngineStatusLabels() }
-                    }
-                    button("Manage voices…") {
-                        PiperVoiceManagerDialog(anyOpenProject()).show()
-                        refreshEngineStatusLabels()
-                    }
-                }.rowComment("Install the package once, then browse the full catalog (~170 voices / ~50 languages) to download or remove voices. Downloads run in the background; the status above updates when they finish.")
-            }
-
-            row {
-                button("Re-check engines") { recheckAll() }
-            }.rowComment("Re-probes the Kokoro prerequisites and rescans Windows voices (background), then refreshes the status above.")
-        }
-
-        group("Executables (advanced)") {
+        collapsibleGroup("Executables (advanced)") {
             row("Claude CLI path:") {
                 textField().bindText({ state.claudeExecutablePath }, { state.claudeExecutablePath = it.trim() })
                     .comment("Blank = auto-detect (PATH + common install dirs). Set if the IDE can't find it.")
@@ -556,7 +607,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 textField().bindText({ state.pythonExecutablePath }, { state.pythonExecutablePath = it.trim() })
                     .comment("Blank = auto-detect. Used to launch the Kokoro TTS server.")
             }
-        }
+        }.apply { expanded = false }
 
         row {
             button("Reset to defaults") {
@@ -692,6 +743,41 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         espeakStatusLabel?.text = espeakStatusText()
         sapiStatusLabel?.text = sapiStatusText()
         piperStatusLabel?.text = piperStatusText()
+        cppStatusLabel?.text = cppStatusText()
+    }
+
+    /**
+     * The compiler line under the Kokoro group, and what it says depends on whether it *matters*: a machine
+     * with `misaki[ja]` already importable has nothing left to compile, and saying "no build tools" there
+     * would be a warning about a problem that cannot happen.
+     *
+     * Reads the cache only ([TtsService.cachedMsvcBuildTools]) — the panel is built on the EDT and vswhere is
+     * a subprocess. The init block's warm-up and "Re-check compiler" are what fill it.
+     */
+    private fun cppStatusText(): String {
+        val tts = TtsService.getInstance()
+        if (tts.cachedStatusOrNull()?.misakiJa == true) return "Japanese pack is installed — no compiler needed."
+        return when (tts.cachedMsvcBuildTools()) {
+            // Found — but if only the `-all` query saw it, say so. The installer's "incomplete" flag comes
+            // and goes during an update, and pip has been seen building against an instance wearing it, so
+            // this is a footnote on a working toolchain, not a reason to send anyone shopping.
+            true -> tts.flaggedIncompleteMsvcInstall()?.let { path ->
+                "<html>C++ build tools found at <code>${path.replace("&", "&amp;")}</code> — the Visual " +
+                    "Studio Installer currently flags that instance <b>incomplete</b>. Builds usually " +
+                    "still find it; <b>Repair</b> it there if a compile fails.</html>"
+            } ?: "C++ build tools found ✓ — a source-only dependency can be compiled."
+            false -> "<html>No C++ build tools found — <b>Japanese</b> may fail to install without them.</html>"
+            null -> "Not checked yet — click “Re-check compiler”."
+        }
+    }
+
+    /** Re-probe the MSVC toolchain off the EDT (vswhere is a subprocess), then refresh the line. */
+    private fun recheckCpp() {
+        cppStatusLabel?.text = "Checking…"
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching { TtsService.getInstance().msvcBuildTools(refresh = true) }
+            ApplicationManager.getApplication().invokeLater({ refreshEngineStatusLabels() }, ModalityState.any())
+        }
     }
 
     /** "Re-check engines": re-probe Kokoro prerequisites + rescan SAPI voices off the EDT, then refresh. */
@@ -770,6 +856,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     companion object {
         /** NaturalVoiceSAPIAdapter — the third-party SAPI5 provider the Windows-SAPI section links to (L7). */
         private const val ADAPTER_URL = "https://github.com/gexgd0419/NaturalVoiceSAPIAdapter"
+        private const val BUILD_TOOLS_URL = "https://visualstudio.microsoft.com/visual-cpp-build-tools/"
 
         private const val DISPLAY_NAME = "Audio Explainer"
 

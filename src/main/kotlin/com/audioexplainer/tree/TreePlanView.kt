@@ -762,7 +762,7 @@ class TreePlanView(
                 // A fileless target means "this frame's own file"; with no line there is no row to draw on.
                 val farPath = req.target.file?.trim()?.takeIf { it.isNotEmpty() } ?: nearFile
                 if (req.target.line <= 0) continue
-                val farFrame = frameOwning(farPath) ?: continue
+                val farFrame = frameOwning(farPath, req.target.line, prefer = frameId) ?: continue
                 val farIdx = nodeIndexOf[farFrame] ?: continue
                 val farLine = req.target.line - 1
                 // Both halves on one row of one node would be two chips saying the same thing.
@@ -988,15 +988,36 @@ class TreePlanView(
         "$frame:$line:${end.token?.trim().orEmpty()}@${end.occurrence}"
 
     /**
-     * The frame in the **mounted scene** whose file is [path], or null.
+     * The frame in the **mounted scene** that shows [path] at 1-based [line], or null.
      *
-     * Shared by [revealEndpoint] and [paintLinkPairs] deliberately: "which node owns this file" has to give
-     * the same answer to the chip that draws a link and to the click that follows it, or a portal could be
-     * drawn pointing at one node and land in another.
+     * Shared by [revealEndpoint] and [paintLinkPairs] deliberately: "which node owns this endpoint" has to
+     * give the same answer to the chip that draws a link and to the click that follows it, or a portal could
+     * be drawn pointing at one node and land in another.
+     *
+     * **The line is half the key, and leaving it out was the defect.** A path alone identifies a *file*, and
+     * a file is routinely cut into several frames — two classes in one `.cs`, a caller and its callee. This
+     * took the first frame on the path whatever line was asked for, so every far end in the second window
+     * routed to the first node. The consequences compounded: [paintLinkPairs] saw `farIdx != nodeIdx` and
+     * downgraded a perfectly local relation to [LinkJoin.PORTAL], then planted the far half on a row that
+     * node does not display — a portal with no reachable other end, and a click that scrolled to nothing.
+     * The near frame wins a tie ([prefer]) because a link whose ends are both in the reporting node is a
+     * line, not a portal, and because overlapping windows would otherwise decide by mount order.
+     *
+     * Falls back to the first frame on the path when no window holds the line: an endpoint naming a line the
+     * scene folds away is still better aimed at that file's node than dropped.
      */
-    private fun frameOwning(path: String): Int? = nodeIndexOf.keys.firstOrNull { id ->
-        plan.frame(id)?.let { SpotlightRenderer.sameFile(path, it.file) } == true
+    private fun frameOwning(path: String, line: Int = 0, prefer: Int? = null): Int? {
+        val onFile = nodeIndexOf.keys.filter { id ->
+            plan.frame(id)?.let { SpotlightRenderer.sameFile(path, it.file) } == true
+        }
+        if (onFile.size <= 1 || line <= 0) return onFile.firstOrNull()
+        if (prefer != null && prefer in onFile && showsLine(prefer, line)) return prefer
+        return onFile.firstOrNull { showsLine(it, line) } ?: onFile.first()
     }
+
+    /** True when [frameId]'s kept window actually displays 1-based [line] — the row a link half needs.
+     *  [com.audioexplainer.ResolvedFrame.shows] is the rule; `PlanLoader` asks it of the same endpoints. */
+    private fun showsLine(frameId: Int, line: Int): Boolean = plan.frame(frameId)?.shows(line) == true
 
     /**
      * **Follow a relation to another node in this tree** — the cross-frame link, and what makes a portal
@@ -1029,7 +1050,7 @@ class TreePlanView(
         // It only reaches here at all when the renderer could not resolve it as an arrow, so there is
         // nothing better to do with it than say so.
         val path = ep.file?.trim()?.takeIf { it.isNotEmpty() } ?: return false
-        val frameId = frameOwning(path) ?: return false
+        val frameId = frameOwning(path, ep.line) ?: return false
         val node = nodeIndexOf[frameId]?.let { nest.nodes.getOrNull(it) } ?: return false
         // **The row the link names, not the step's own band**, and that distinction is the reported defect:
         // `revealNode` scrolls to whatever the current step is looking at and re-centres it on the way, so

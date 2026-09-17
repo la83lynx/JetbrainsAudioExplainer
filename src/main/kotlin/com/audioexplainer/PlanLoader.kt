@@ -59,6 +59,17 @@ class ResolvedFrame(
     /** The lines this frame shows — every kept range, ordered. */
     fun keptLines(): Int = keep.sumOf { it.lines().count() }
 
+    /**
+     * **True when this frame's window actually displays 1-based [line]** — the row a link half, a reveal or
+     * an endpoint check needs to land on.
+     *
+     * One derivation, because three callers ask it: [checkRelations] (is this endpoint on a fold
+     * placeholder?), `TreePlanView.frameOwning` (which of several frames over one file owns this line?) and
+     * the reveal behind a portal click. It is the predicate that makes "which frame owns this file" a
+     * question about a *line* rather than a path — see `frameOwning` for what answering it path-only cost.
+     */
+    fun shows(line: Int): Boolean = keep.any { line in it.lines() }
+
     /** Whether the renderer will try to embed this frame in its parent at a call site. */
     fun nests(): Boolean = parentId != null && frame.callLine > 0
 }
@@ -633,7 +644,7 @@ object PlanLoader {
                     }
                     if (ep.line <= 0) continue
                     val owner = ownerOf(ep, f, frames) ?: continue
-                    if (owner.keep.any { ep.line in it.lines() }) continue
+                    if (owner.shows(ep.line)) continue
                     issues += PlanIssue(
                         IssueLevel.WARN, "relation.endpoint-not-kept",
                         "$where puts its `$end` on line ${ep.line} of frame ${owner.id}, which frame " +
@@ -676,15 +687,25 @@ object PlanLoader {
     }
 
     /**
-     * The frame an endpoint's line should be read against: the one whose file it names, or [own] when it names
-     * none — a fileless endpoint means "this frame's own file".
+     * The frame an endpoint's line should be read against: the one whose file it names **and whose window
+     * holds its line**, or [own] when it names no file — a fileless endpoint means "this frame's own file".
+     *
+     * **The line is part of the key**, because one file is routinely cut into several frames — two classes in
+     * one `.cs`, a caller and its callee. Matching on the path alone took the first frame on that path
+     * whatever line was asked for, so an endpoint in the *second* window was measured against the *first*
+     * window's `keep` and reported as landing on a fold placeholder when it is plainly visible. `own` wins a
+     * tie for the same reason it is the fileless default: the frame that declared the relation is the one the
+     * author was looking at. [ResolvedFrame.shows] is the predicate, shared with the tree.
      *
      * Null when a real path matches no frame, which is **not** a defect: a plan may legitimately point at code
      * it never made a frame for, and that end becomes a callout line rather than a drawn one.
      */
     private fun ownerOf(ep: Endpoint, own: ResolvedFrame, frames: List<ResolvedFrame>): ResolvedFrame? {
         val path = ep.file?.trim()?.takeIf { it.isNotEmpty() } ?: return own
-        return frames.firstOrNull { sameFilePath(path, it.file) }
+        val onFile = frames.filter { sameFilePath(path, it.file) }
+        if (onFile.size <= 1 || ep.line <= 0) return onFile.firstOrNull()
+        if (onFile.any { it.id == own.id } && own.shows(ep.line)) return own
+        return onFile.firstOrNull { it.shows(ep.line) } ?: onFile.first()
     }
 
     // ── Steps ──
