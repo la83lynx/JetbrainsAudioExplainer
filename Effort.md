@@ -53,17 +53,19 @@ both. That is the current, invisible behaviour we are replacing with a visible o
 `AudioExplainerSettings.State`:
 
 ```kotlin
-/** claude --effort. Blank = leave the CLI's own default alone (the pre-setting behaviour). */
-@JvmField var explainEffort: String = ""              // "", low, medium, high, xhigh, max
+/** claude --effort. "" = inherit the CLI's own default; see below for why that is NOT the default. */
+@JvmField var explainEffort: String = EFFORT_MEDIUM   // "", low, medium, high, xhigh, max
 /** claude --model alias. Blank = the user's configured default. */
 @JvmField var explainModel: String = ""               // "", sonnet, opus, fable
 /** How much walkthrough to ask for. See buildPrompt. */
 @JvmField var explainDepth: String = DEPTH_STANDARD   // brief | standard | deep
 ```
 
-Blank-means-inherit matters: a user who has already tuned `~/.claude/settings.json` should not have
-the plugin silently override it, and a fresh install should behave exactly as it does today until
-the user touches the control.
+Blank-means-inherit stays *reachable* for `explainModel`, where the user's own choice is usually the
+right one. `explainEffort` is the exception and ships as `medium`: inheriting is precisely the
+present bug, and "a fresh install behaves exactly as it does today" is not a virtue when today means
+four minutes. This is the one place the plugin deliberately overrides a setting the user made
+elsewhere, so the release note has to say so in one line.
 
 ## Depth → prompt
 
@@ -107,9 +109,10 @@ costs correctness. Do not repeat that sentence on the other two rows.
 ## Verification
 
 A probe in the `probes/` style: build the args and the prompt for each of the 3 × 6 × 4 combinations
-and assert (a) blank settings reproduce today's argv and today's prompt **byte for byte**, (b) every
-non-blank effort/model adds exactly one flag pair, (c) Brief's prompt contains no `relations` /
-`parent` / `scene` ask and Deep's does. No network, no IDE — it is string building.
+and assert (a) **Standard depth reproduces today's prompt byte for byte**, (b) blank effort/model add
+no flags and every non-blank one adds exactly one flag pair, (c) Brief's prompt contains no
+`relations` / `parent` / `scene` ask and Deep's does. No network, no IDE — it is string building.
 
-The byte-for-byte assertion in (a) is the one that matters: it is what proves an upgrade changes
-nothing for a user who never opens the new group.
+(a) is the one that matters: the prompt is the part an upgrade could silently change for everyone, so
+it must be provably identical for a user who never opens the new group. The argv deliberately is not
+identical — it gains `--effort medium`, which is the fix.
