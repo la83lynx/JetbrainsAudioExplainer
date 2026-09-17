@@ -418,6 +418,10 @@ class ExplainerServer {
 
     private fun sendJson(ex: HttpExchange, code: Int, body: JsonElement) {
         val bytes = body.toString().toByteArray(StandardCharsets.UTF_8)
+        // Say the charset. A client left to guess uses the HTTP default (ISO-8859-1), and the
+        // reply quotes the plan's own text back in `issues` — which in a non-English
+        // walkthrough is entirely non-ASCII.
+        ex.responseHeaders.set("Content-Type", "application/json; charset=utf-8")
         ex.sendResponseHeaders(code, bytes.size.toLong())
         ex.responseBody.use { it.write(bytes) }
     }

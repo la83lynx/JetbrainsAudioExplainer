@@ -133,3 +133,20 @@ run was believed.
 `fixtures/`, so when the acceptance plans and the C# fixture came out before release they had nothing left to
 assert. Every surviving probe builds its own inputs, which is why they outlived the fixtures — an instrument
 that depends on a corpus dies with the corpus.
+
+## `encoding_probe.py` — does the POST helper deliver the plan's bytes?
+
+`python probes/encoding_probe.py`
+
+Sends a plan carrying an em dash, an arrow and a line of Japanese through `scripts/explainer.ps1`
+(on both PowerShell hosts) and through `curl --data-binary`, to a listener that reports the bytes it
+received, and compares them to the file on disk.
+
+It exists because the helper used to corrupt exactly those characters and print nothing: a UTF-8 plan
+round-tripped through a single-byte code page, turning an em dash (`E2 80 94`) into `E2 3F 22` — and
+that `0x22` is a double quote landing inside a JSON string, so the document broke rather than the
+word. `ExplainerServer` decodes with `String(bytes, UTF_8)`, which substitutes rather than throws, so
+nothing upstream reported it either.
+
+Takes over `~/.claude-explainer-{port,token}` while it runs and restores them, so do not run it
+against a live sandbox.

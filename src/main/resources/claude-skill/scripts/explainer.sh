@@ -38,7 +38,7 @@ case "$1" in
         curl -s -X POST "$BASE/api/message" \
             -H 'Content-Type: application/json' \
             -H "$AUTH_HEADER" \
-            -d @"$2"
+            --data-binary @"$2"
         ;;
     send)
         if [ -z "$2" ]; then

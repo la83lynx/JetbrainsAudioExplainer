@@ -38,9 +38,27 @@ $Token = (Get-Content -Raw $TokenFile).Trim()
 $Base = "http://127.0.0.1:$Port"
 $Headers = @{ Authorization = "Bearer $Token" }
 
+# Read a response as UTF-8 regardless of what the server declared. Without this the reply is decoded
+# with the HTTP default (ISO-8859-1), which mangles any non-ASCII text the plugin sends back in
+# `issues`.
+function Read-Utf8Response($Response) {
+    $stream = $Response.RawContentStream
+    if ($stream) {
+        $stream.Position = 0
+        return [System.Text.Encoding]::UTF8.GetString($stream.ToArray())
+    }
+    return $Response.Content
+}
+
 # Invoke and return the raw response body, printing the error body on a non-2xx (mirrors `curl -s`,
 # which never throws). Avoids -SkipHttpErrorCheck so this also runs on Windows PowerShell 5.1.
-function Invoke-Api([string]$Method, [string]$Path, [string]$Body, [int]$TimeoutSec = 100) {
+#
+# $Body is BYTES, never a string. PowerShell encodes a string body with the HTTP default charset
+# (ISO-8859-1) when the content type does not name one, so a UTF-8 plan round-trips through a
+# single-byte code page on the way out: an em dash (E2 80 94) leaves as E2 3F 22, and that 0x22 is a
+# double quote landing inside a JSON string, which breaks the document rather than just the word.
+# Every character of a non-English walkthrough goes through this path.
+function Invoke-Api([string]$Method, [string]$Path, $Body, [int]$TimeoutSec = 100) {
     try {
         $params = @{
             Method          = $Method
@@ -49,17 +67,26 @@ function Invoke-Api([string]$Method, [string]$Path, [string]$Body, [int]$Timeout
             UseBasicParsing = $true
             TimeoutSec      = $TimeoutSec
         }
-        if ($PSBoundParameters.ContainsKey('Body') -and $Body) {
-            $params['ContentType'] = 'application/json'
-            $params['Body'] = $Body
+        if ($null -ne $Body -and $Body.Length -gt 0) {
+            # `[byte[]]$bytes` is load-bearing, and so is assigning inside the branches rather than
+            # from an `if` expression: a script block that returns an array writes it to the output
+            # stream one element at a time, so `$x = if (..) { $bytes }` collects it back as
+            # [object[]]. Invoke-WebRequest then has no byte array to send and stringifies the
+            # collection instead, putting "123 34 116 ..." on the wire. Declaring the type converts
+            # it back whatever the pipeline did.
+            [byte[]]$bytes = $null
+            if ($Body -is [string]) { $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body) }
+            else { $bytes = [byte[]]$Body }
+            $params['ContentType'] = 'application/json; charset=utf-8'
+            $params['Body'] = $bytes
         }
-        return (Invoke-WebRequest @params).Content
+        return (Read-Utf8Response (Invoke-WebRequest @params))
     }
     catch {
         $resp = $_.Exception.Response
         if ($resp -and $resp.GetResponseStream) {
             try {
-                $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+                $reader = New-Object System.IO.StreamReader($resp.GetResponseStream(), [System.Text.Encoding]::UTF8)
                 return $reader.ReadToEnd()
             }
             catch { }
@@ -71,7 +98,7 @@ function Invoke-Api([string]$Method, [string]$Path, [string]$Body, [int]$Timeout
 switch ($Command) {
     'plan' {
         if (-not $Arg) { [Console]::Error.WriteLine('Usage: explainer.ps1 plan <json_file>'); exit 1 }
-        Invoke-Api 'Post' '/api/message' (Get-Content -Raw $Arg)
+        Invoke-Api 'Post' '/api/message' ([System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $Arg).ProviderPath))
     }
     'send' {
         if (-not $Arg) { [Console]::Error.WriteLine("Usage: explainer.ps1 send '<json>'"); exit 1 }
