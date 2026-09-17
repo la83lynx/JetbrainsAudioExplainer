@@ -188,8 +188,11 @@ internal object LeaderArt {
      * so. It follows the reader's accent setting rather than being a literal yellow — a control that ignored the
      * one colour they set would be the odd one out.
      */
-    fun drawCollapseHint(g2: Graphics2D, r: Rectangle) {
-        g2.color = SpotlightRenderer.accentColor()
+    fun drawCollapseHint(g2: Graphics2D, r: Rectangle) = drawCollapseHint(g2, r, SpotlightRenderer.accentColor())
+
+    /** [drawCollapseHint] in a given accent — see [leaderColor]'s overload. */
+    fun drawCollapseHint(g2: Graphics2D, r: Rectangle, accent: Color) {
+        g2.color = accent
         g2.fill(
             GeneralPath().apply {
                 moveTo(r.x.toFloat(), (r.y + r.height).toFloat())
@@ -220,8 +223,15 @@ internal object LeaderArt {
      * The leader's colour: constraint 4's settings accent, muted toward the border, and muted further when the
      * expansion is folded away.
      */
-    fun leaderColor(collapsed: Boolean = false): Color {
-        val base = leaderBase()
+    fun leaderColor(collapsed: Boolean = false): Color = leaderColor(collapsed, SpotlightRenderer.accentColor())
+
+    /**
+     * The same rule against a **given** accent — for the settings preview, which has to paint the swatch the
+     * reader is holding rather than the one they last saved. Nothing else differs; the no-arg form above is this
+     * one asked with the persisted accent, so the two cannot drift.
+     */
+    fun leaderColor(collapsed: Boolean, accent: Color): Color {
+        val base = leaderBase(accent)
         return if (collapsed) SpotlightRenderer.blendToward(base, JBColor.border(), COLLAPSED_MIX) else base
     }
 
@@ -234,8 +244,10 @@ internal object LeaderArt {
      * colour seam mid-stroke rather than as two similar lines. [CodeNodeView] therefore derives its border colour
      * from here instead of keeping its own 0.75 mix — one derivation, not two numbers that happen to be close.
      */
-    fun leaderBase(): Color =
-        SpotlightRenderer.blendToward(SpotlightRenderer.accentColor(), JBColor.border(), LEADER_MIX)
+    fun leaderBase(): Color = leaderBase(SpotlightRenderer.accentColor())
+
+    /** [leaderBase] against a given accent — see [leaderColor]'s overload for why there is one. */
+    fun leaderBase(accent: Color): Color = SpotlightRenderer.blendToward(accent, JBColor.border(), LEADER_MIX)
 
     // ── which drawing owns which edge (constraint 16) ──
 
@@ -549,113 +561,134 @@ internal object LeaderArt {
             try {
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
                 g2.color = color
-                g2.stroke = BOX
-                if (closed) {
-                    g2.drawRoundRect(x, box.y, w, h, ARC, ARC)
-                } else {
-                    // Left, top, right — and the side walls run **down to** the bottom-edge row the leader starts
-                    // on, so the two meet by construction rather than by agreement.
-                    val p = GeneralPath()
-                    val fx = x.toFloat()
-                    val fy = box.y.toFloat()
-                    val fw = w.toFloat()
-                    val fh = h.toFloat()
-                    val arc = minOf(ARC.toFloat(), fw / 2f, fh / 2f)
-                    p.moveTo(fx, fy + fh)
-                    p.lineTo(fx, fy + arc)
-                    p.quadTo(fx, fy, fx + arc, fy)
-                    p.lineTo(fx + fw - arc, fy)
-                    p.quadTo(fx + fw, fy, fx + fw, fy + arc)
-                    p.lineTo(fx + fw, fy + fh)
-                    g2.draw(p)
-                }
+                drawTokenBox(g2, x, box.y, w, h, closed)
                 chevronRect(box, chevron, collapsed)?.let {
-                    drawChevron(g2, it, chevron, editor.colorsScheme.defaultBackground)
+                    drawChevron(g2, it, chevron, collapsed, editor.colorsScheme.defaultBackground)
                 }
             } finally {
                 g2.dispose()
             }
         }
+    }
 
-        /**
-         * The affordance, in whichever of the three shapes the mode names.
-         *
-         * **Weight is no longer a variable here** — G1c⁗ kept the double stroke and scrapped the single and the circled
-         * ring, so every chevron this draws is two glyphs. What varies is the *axis*, and it varies in one place: `dx`
-         * and `dy` are the step between the pair and the opening's direction, so the horizontal and vertical shapes are
-         * the same four lines of path with two numbers swapped rather than two shapes to keep in agreement.
-         *
-         * Both pairs are **centred as a group**, so switching axis or state does not move the target the reader is
-         * aiming at.
-         */
-        private fun drawChevron(g2: Graphics2D, r: Rectangle, chevron: ChevronStyle, background: Color) {
-            if (chevron == ChevronStyle.BOTTOM_BORDER) {
-                drawBottomBorder(g2, r, background)
-                return
-            }
-            g2.stroke = CHEVRON
-            // Sized off the row height rather than fixed, because the row is `lineHeight` and follows the font
-            // (constraint 9's shape as a font).
-            val half = (r.height * CHEVRON_SCALE / 2f).coerceAtMost(r.width / 2.5f)
-            val vertical = chevron == ChevronStyle.VERTICAL
-            // Folded points *away* — right for the horizontal pair, down for the vertical one — and both reverse once
-            // the nesting is open, so the glyph always names the action rather than the state.
-            val dir = if (collapsed) 1f else -1f
-            val cx0 = r.x + r.width / 2f
-            val cy0 = r.y + r.height / 2f
-            for (i in 0 until 2) {
-                val step = (i - 0.5f) * CHEVRON_DOUBLE_STEP
-                val cx = if (vertical) cx0 else cx0 + step
-                val cy = if (vertical) cy0 + step * dir else cy0
-                g2.draw(GeneralPath().apply {
-                    if (vertical) {
-                        moveTo(cx - half, cy - dir * half / 2f)
-                        lineTo(cx, cy + dir * half / 2f)
-                        lineTo(cx + half, cy - dir * half / 2f)
-                    } else {
-                        moveTo(cx - dir * half / 2f, cy - half)
-                        lineTo(cx + dir * half / 2f, cy)
-                        lineTo(cx - dir * half / 2f, cy + half)
-                    }
-                })
-            }
+    /**
+     * **The token box itself** — a rounded rect when the leader leaves it closed, three sides when the leader
+     * takes the fourth (constraint 16). Lifted out of [TokenBoxRenderer] so the settings preview draws the reader's
+     * box rather than a second one that looks like it; the renderer is now this function plus a [boxRect] call.
+     *
+     * The closed branch is still `drawRoundRect` and not the path: the two produce subtly different corners at
+     * [ARC], and the shipped picture is the one `drawRoundRect` makes.
+     */
+    fun drawTokenBox(g2: Graphics2D, x: Int, y: Int, w: Int, h: Int, closed: Boolean) {
+        g2.stroke = BOX
+        if (closed) {
+            g2.drawRoundRect(x, y, w, h, ARC, ARC)
+            return
         }
+        // Left, top, right — and the side walls run **down to** the bottom-edge row the leader starts
+        // on, so the two meet by construction rather than by agreement.
+        val p = GeneralPath()
+        val fx = x.toFloat()
+        val fy = y.toFloat()
+        val fw = w.toFloat()
+        val fh = h.toFloat()
+        val arc = minOf(ARC.toFloat(), fw / 2f, fh / 2f)
+        p.moveTo(fx, fy + fh)
+        p.lineTo(fx, fy + arc)
+        p.quadTo(fx, fy, fx + arc, fy)
+        p.lineTo(fx + fw - arc, fy)
+        p.quadTo(fx + fw, fy, fx + fw, fy + arc)
+        p.lineTo(fx + fw, fy + fh)
+        g2.draw(p)
+    }
 
-        /**
-         * [ChevronStyle.BOTTOM_BORDER]: the box's bottom edge thickened into a clickable band, with a small filled
-         * triangle pointing down out of it.
-         *
-         * Drawn as a thick line **inside** the box's own outline rather than centred on it, so the band cannot spill into
-         * the row of code below — the box is an inflated token rect, and the line under it belongs to the next statement.
-         *
-         * **The triangle is knocked out of the band in the editor's own background colour, not drawn on top of it.** Drawn
-         * in the accent colour it would be invisible — same paint on same paint — and drawn as a stroked outline it would
-         * be a chevron inside a box, which is the rejected edge-button all over again. A notch cut through a 5 px band is
-         * the only mark that stays legible at *"tiny"*, and it makes the band read as a thing that opens downward.
-         */
-        private fun drawBottomBorder(g2: Graphics2D, r: Rectangle, background: Color) {
-            val cy = r.y + r.height / 2f
-            g2.stroke = BOX_BOTTOM
-            g2.draw(
-                GeneralPath().apply {
-                    moveTo(r.x.toFloat(), cy)
-                    lineTo((r.x + r.width).toFloat(), cy)
-                },
-            )
-            val w = BOTTOM_TRIANGLE_W.toFloat()
-            val h = BOX_BOTTOM_THICK.toFloat()
-            val cx = r.x + r.width / 2f
-            val top = cy - h / 2f
-            g2.color = background
-            g2.fill(
-                GeneralPath().apply {
-                    moveTo(cx - w / 2f, top)
-                    lineTo(cx + w / 2f, top)
-                    lineTo(cx, top + h)
-                    closePath()
-                },
-            )
+    /**
+     * The affordance, in whichever of the three shapes the mode names.
+     *
+     * **Weight is no longer a variable here** — G1c⁗ kept the double stroke and scrapped the single and the circled
+     * ring, so every chevron this draws is two glyphs. What varies is the *axis*, and it varies in one place: `dx`
+     * and `dy` are the step between the pair and the opening's direction, so the horizontal and vertical shapes are
+     * the same four lines of path with two numbers swapped rather than two shapes to keep in agreement.
+     *
+     * Both pairs are **centred as a group**, so switching axis or state does not move the target the reader is
+     * aiming at.
+     *
+     * Hoisted out of [TokenBoxRenderer] with [collapsed] as a parameter rather than as enclosing state, so the
+     * settings preview draws the reader's affordance instead of a lookalike. The renderer passes its own field.
+     */
+    fun drawChevron(
+        g2: Graphics2D,
+        r: Rectangle,
+        chevron: ChevronStyle,
+        collapsed: Boolean,
+        background: Color,
+    ) {
+        if (chevron == ChevronStyle.BOTTOM_BORDER) {
+            drawBottomBorder(g2, r, background)
+            return
         }
+        g2.stroke = CHEVRON
+        // Sized off the row height rather than fixed, because the row is `lineHeight` and follows the font
+        // (constraint 9's shape as a font).
+        val half = (r.height * CHEVRON_SCALE / 2f).coerceAtMost(r.width / 2.5f)
+        val vertical = chevron == ChevronStyle.VERTICAL
+        // Folded points *away* — right for the horizontal pair, down for the vertical one — and both reverse once
+        // the nesting is open, so the glyph always names the action rather than the state.
+        val dir = if (collapsed) 1f else -1f
+        val cx0 = r.x + r.width / 2f
+        val cy0 = r.y + r.height / 2f
+        for (i in 0 until 2) {
+            val step = (i - 0.5f) * CHEVRON_DOUBLE_STEP
+            val cx = if (vertical) cx0 else cx0 + step
+            val cy = if (vertical) cy0 + step * dir else cy0
+            g2.draw(GeneralPath().apply {
+                if (vertical) {
+                    moveTo(cx - half, cy - dir * half / 2f)
+                    lineTo(cx, cy + dir * half / 2f)
+                    lineTo(cx + half, cy - dir * half / 2f)
+                } else {
+                    moveTo(cx - dir * half / 2f, cy - half)
+                    lineTo(cx + dir * half / 2f, cy)
+                    lineTo(cx - dir * half / 2f, cy + half)
+                }
+            })
+        }
+    }
+
+    /**
+     * [ChevronStyle.BOTTOM_BORDER]: the box's bottom edge thickened into a clickable band, with a small filled
+     * triangle pointing down out of it.
+     *
+     * Drawn as a thick line **inside** the box's own outline rather than centred on it, so the band cannot spill into
+     * the row of code below — the box is an inflated token rect, and the line under it belongs to the next statement.
+     *
+     * **The triangle is knocked out of the band in the editor's own background colour, not drawn on top of it.** Drawn
+     * in the accent colour it would be invisible — same paint on same paint — and drawn as a stroked outline it would
+     * be a chevron inside a box, which is the rejected edge-button all over again. A notch cut through a 5 px band is
+     * the only mark that stays legible at *"tiny"*, and it makes the band read as a thing that opens downward.
+     */
+    private fun drawBottomBorder(g2: Graphics2D, r: Rectangle, background: Color) {
+        val cy = r.y + r.height / 2f
+        g2.stroke = BOX_BOTTOM
+        g2.draw(
+            GeneralPath().apply {
+                moveTo(r.x.toFloat(), cy)
+                lineTo((r.x + r.width).toFloat(), cy)
+            },
+        )
+        val w = BOTTOM_TRIANGLE_W.toFloat()
+        val h = BOX_BOTTOM_THICK.toFloat()
+        val cx = r.x + r.width / 2f
+        val top = cy - h / 2f
+        g2.color = background
+        g2.fill(
+            GeneralPath().apply {
+                moveTo(cx - w / 2f, top)
+                lineTo(cx + w / 2f, top)
+                lineTo(cx, top + h)
+                closePath()
+            },
+        )
     }
 
     /**

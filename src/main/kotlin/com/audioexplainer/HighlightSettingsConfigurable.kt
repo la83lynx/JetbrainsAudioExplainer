@@ -6,6 +6,7 @@ import com.audioexplainer.tree.NodeDeemphasis
 import com.audioexplainer.tree.NodeElision
 import com.audioexplainer.tree.NodePath
 import com.audioexplainer.tree.StepFold
+import com.audioexplainer.tree.TreePreview
 import com.audioexplainer.tree.TreeStyle
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationManager
@@ -132,13 +133,6 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     private lateinit var proseFontCombo: ComboBox<String>
     private lateinit var leaderCheck: JBCheckBox
 
-    /**
-     * Live sample of the description font, kept in sync with the family combo *and* the text-size spinner —
-     * the two settings that decide the face the callout actually draws prose in. Its own colour is the
-     * dialog's, not the callout's: over a settings background the softened body colour reads as disabled
-     * text, and the thing being previewed here is the font.
-     */
-    private val proseFontPreview = JBLabel(PROSE_PREVIEW_TEXT)
     private lateinit var calloutRadiusSpinner: JBIntSpinner
     private lateinit var calloutBarSpinner: JBIntSpinner
     private lateinit var calloutScaleSpinner: JBIntSpinner
@@ -161,6 +155,22 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     private lateinit var treeMaxHeightSpinner: JBIntSpinner
     private lateinit var treeGrowCheck: JBCheckBox
     private lateinit var treeGrowHostsCheck: JBCheckBox
+
+    /**
+     * **The still frame above the Code-tree controls** — five of that section's dropdowns choose a *shape*,
+     * and a shape is the thing prose is worst at. It draws with the production geometry rather than a
+     * lookalike (see [TreePreview]); this page's job is only to keep it fed with what the combos currently
+     * say, which [refreshTreePreview] does on every pick.
+     */
+    private val treePreview = TreePreview()
+
+    /**
+     * **The still frame above the Appearance controls.** One frame for the whole section, because its
+     * settings are not independent — the accent feeds the gutter bar, the non-active tint, the callout's hue
+     * and the arrow palette, and the two dim percentages only mean anything next to each other and the glow.
+     * See [AppearancePreview]; [refreshAppearancePreview] keeps it fed.
+     */
+    private val appearancePreview = AppearancePreview()
 
     /** The narration voice combo (Phase L7 cleanup) — its items are rebuilt to match the currently-selected
      *  explanation language, so it always shows only voices valid for that language. */
@@ -201,7 +211,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                     button("Add / reinstall Japanese & Chinese voices…") {
                         TtsSetup.installLanguagePacks(anyOpenProject()) { refreshEngineStatusLabels() }
                     }
-                }.rowComment("Kokoro voice model ≈ 340 MB. Japanese & Chinese need the extra misaki packs (large download). Both run in the background with a console window showing the installer's output; the status above updates when they finish.")
+                }.rowComment("Voice model ≈ 340 MB; the Japanese & Chinese packs are a second, larger download. Both run in the background, with a console showing the installer's output.")
 
                 // The Japanese pack's hidden prerequisite, surfaced *before* the four-minute attempt that
                 // would otherwise end in a pip traceback. Windows-only: the failure is an MSVC one, and
@@ -215,13 +225,11 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                         button("Get Microsoft C++ Build Tools…") { BrowserUtil.browse(BUILD_TOOLS_URL) }
                         button("Re-check compiler") { recheckCpp() }
                     }.rowComment(
-                        "Needed for <b>Japanese</b> only, and only sometimes: <code>misaki[ja]</code> pulls " +
-                            "<b>mojimoji</b>, a C extension, and when PyPI has no prebuilt wheel for your " +
-                            "Python version (it has none for CPython 3.13) pip compiles it here. " +
-                            "<b>Chinese needs nothing</b> — every <code>misaki[zh]</code> dependency is pure " +
-                            "Python. The download is free; pick the <i>Desktop development with C++</i> " +
-                            "workload — or add it to a Visual Studio you already have. A Python version " +
-                            "with a mojimoji wheel is the other way past.",
+                        "<b>Japanese only</b>, and only sometimes: <code>misaki[ja]</code> pulls " +
+                            "<b>mojimoji</b>, a C extension with no CPython 3.13 wheel, so pip compiles it " +
+                            "here. Chinese needs nothing. The download is free — pick the <i>Desktop " +
+                            "development with C++</i> workload; a Python version that has a mojimoji wheel " +
+                            "is the other way past.",
                     )
                 }
             }.apply { expanded = true }
@@ -230,10 +238,11 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 row {
                     espeakStatusLabel = JBLabel(espeakStatusText())
                     cell(espeakStatusLabel!!)
-                }.rowComment("Ships with kokoro-onnx — no download. Robotic but intelligible; the fallback for the ~100 languages Kokoro can't voice, and offered on every language as “Robotic (F/M)”.")
-                row {
-                    comment("Tune the robotic voices from the sidebar — the inline Pitch / Liveliness / Word-gap sliders and the Advanced… editor, per RoboSynth LoQ (F/M) variant (shared across languages).")
-                }
+                }.rowComment(
+                    "Ships with kokoro-onnx — no download. Robotic but intelligible; the fallback for the " +
+                        "~100 languages Kokoro can't voice, offered everywhere as “Robotic (F/M)”. Pitch, " +
+                        "liveliness and word-gap are tuned from the sidebar, per variant.",
+                )
             }.apply { expanded = false }
 
             collapsibleGroup("Windows SAPI — system voices${if (SystemInfo.isWindows) "" else " (Windows only)"}") {
@@ -244,13 +253,13 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                     }
                     row {
                         button("Rescan Windows voices") { recheckSapi() }
-                    }.rowComment("Discovered via System.Speech and offered per voice (ids sapi:<lang>:<name>). Culture → walkthrough language, so SAPI voices can add languages Kokoro/espeak never listed.")
+                    }.rowComment("Discovered via System.Speech and offered per voice. Their culture maps to a walkthrough language, so they can add languages Kokoro and espeak never listed.")
                     row {
                         cell(ActionLink("Get NaturalVoiceSAPIAdapter (GitHub)", ActionListener { BrowserUtil.browse(ADAPTER_URL) }))
                     }.rowComment(
-                        "Optional third-party SAPI5 provider (you install it — we don't bundle it). It re-exposes the Windows " +
-                            "“natural” voices and, with its Edge online voices enabled, neural Azure voices for ~140 locales. " +
-                            "Those are online: each sentence is sent to Microsoft and needs internet; the classic/offline voices don't.",
+                        "Optional third-party SAPI5 provider — you install it, we don't bundle it. Adds the " +
+                            "Windows “natural” voices and, with its Edge voices enabled, neural Azure voices " +
+                            "for ~140 locales. Those are <b>online</b>: every sentence is sent to Microsoft.",
                     )
                 } else {
                     row {
@@ -264,9 +273,9 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                     piperStatusLabel = JBLabel(piperStatusText())
                     cell(piperStatusLabel!!)
                 }.rowComment(
-                    "Offline neural voices (VITS, via piper-tts) for the ~40 languages Kokoro can't voice — " +
-                        "higher quality than the robotic espeak tier, no online calls, cross-platform. Each " +
-                        "voice is a per-voice model download (~20–75 MB), stored under the Kokoro model directory (…/piper).",
+                    "Offline neural voices for the ~40 languages Kokoro can't voice — better than the " +
+                        "robotic tier, and no online calls. Each voice is a ~20–75 MB download, kept under " +
+                        "the Kokoro model directory.",
                 )
                 row {
                     button("Install Piper (pip)") {
@@ -276,7 +285,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                         PiperVoiceManagerDialog(anyOpenProject()).show()
                         refreshEngineStatusLabels()
                     }
-                }.rowComment("Install the package once, then browse the full catalog (~170 voices / ~50 languages) to download or remove voices. Downloads run in the background; the status above updates when they finish.")
+                }.rowComment("Install the package once, then browse the catalog (~170 voices / ~50 languages) to download or remove voices.")
             }.apply { expanded = false }
 
             row {
@@ -300,7 +309,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                             }
                         }
                     }
-            }.rowComment("Language for NEW ‘Explain This’ generations. A loaded walkthrough keeps its own language. Each entry lists the voice tiers it offers; Japanese & Chinese need extra TTS packs (see Audio engines above).")
+            }.rowComment("Language for NEW ‘Explain This’ generations — a loaded walkthrough keeps its own. Each entry lists the voice tiers it offers; Japanese & Chinese need extra packs (Audio engines, above).")
             row {
                 // The old "Engine" combo only ever meant on/off (the synthesizer tier is per-voice), so it's
                 // just a checkbox now. `ttsEngine` still stores kokoro/off under the hood for back-compat and
@@ -308,7 +317,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 checkBox("Enable narration (audio)")
                     .bindSelected({ state.ttsEngine != ENGINE_OFF },
                         { state.ttsEngine = if (it) ENGINE_KOKORO else ENGINE_OFF })
-            }.rowComment("Off = the walkthrough shows silently. The synthesizer tier (Kokoro neural · espeak robotic · Windows SAPI) is chosen per voice below.")
+            }.rowComment("Off = the walkthrough shows silently. The synthesizer tier (Kokoro · espeak · Windows SAPI · Piper) is chosen per voice below.")
             row("Voice:") {
                 // Items are rebuilt to the selected explanation language (see [rebuildVoiceCombo]); managed
                 // manually (onReset/onApply/onIsModified) rather than bound, since the model is dynamic.
@@ -321,7 +330,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                     .onApply { (voiceCombo.selectedItem as? String)?.let { state.ttsVoice = it } }
                     .onIsModified { (voiceCombo.selectedItem as? String) != state.ttsVoice }
                     .component
-            }.rowComment("Voices for the explanation language above — updates when you change it. A loaded walkthrough narrates with a voice matching its own language.")
+            }.rowComment("Filtered to the language above, and refilled when you change it.")
             row("Speed (%):") {
                 clampedSpinner(25..400).bindIntValue(state::ttsSpeedPercent)
             }.rowComment("100 = normal. The sidebar's speed buttons write here too.")
@@ -330,8 +339,17 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         // **Then how it looks.** One umbrella so the whole appearance block folds away in a click, and
         // the accent leads it because every other colour in here is derived from that one swatch.
         collapsibleGroup("Appearance") {
+            row {
+                cell(appearancePreview)
+            }.rowComment(
+                "One narrated step — a callout, a context line, the active line and a non-active one, with a " +
+                    "relation running to the right. Every control below redraws it.",
+            )
             collapsibleGroup("Accent colour & non-active lines") {
                 row("Accent colour:") {
+                    // The code tree's outline, caption band and collapse hint are all derived from this, so
+                    // its still frame two sections down has to be told when the swatch moves.
+                    accentPanel.addActionListener { refreshTreePreview() }
                     cell(accentPanel)
                         .onReset { accentPanel.selectedColor = parseColor(state.accentColor) }
                         .onApply { accentPanel.selectedColor?.let { state.accentColor = toHex(it) } }
@@ -355,7 +373,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 }
                 row("Glow strength (%):") {
                     glowSpinner = clampedSpinner(0..100).bindIntValue(state::activeGlowPercent).component
-                }.rowComment("Whole-line background glow behind the active highlight.")
+                }
                 row {
                     overviewCheck = checkBox("Show accent mark in the overview ruler")
                         .bindSelected(state::overviewRulerMark).component
@@ -374,10 +392,10 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
             collapsibleGroup("Dimming (segment spotlight)") {
                 row("Outside-segment brightness (%):") {
                     outsideSpinner = clampedSpinner(0..100).bindIntValue(state::outsideDimPercent).component
-                }.rowComment("Lower = more dimmed. Lines outside the current segment.")
+                }.rowComment("Lower = more dimmed.")
                 row("Within-segment brightness (%):") {
                     withinSpinner = clampedSpinner(0..100).bindIntValue(state::withinDimPercent).component
-                }.rowComment("Non-active and context lines inside the segment. Keep clearly brighter than the outside value.")
+                }.rowComment("Keep this clearly brighter than the outside value.")
             }.apply { expanded = false }
 
             collapsibleGroup("Callouts") {
@@ -389,40 +407,30 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                         )
                         .applyToComponent { renderer = SimpleListCellRenderer.create("") { frameLabel(it) } }
                         .component
-                }.rowComment("All five place the same text. None is the lightest thing to put over code; Outline keeps an edge without filling the line; Comment block disguises the aside as a <code>//</code> comment in the scheme's own comment colour.")
+                }.rowComment("All five place the same text — only the decoration changes.")
                 row("Description font:") {
                     proseFontCombo = comboBox(proseFonts())
                         .bindItem(
                             { state.calloutProseFont },
                             { state.calloutProseFont = it ?: "" },
                         )
-                        .applyToComponent {
-                            renderer = SimpleListCellRenderer.create("") { proseFontLabel(it) }
-                            // Fires on a pick *and* on every reset (`setSelectedItem` always fires), so the sample
-                            // below never shows a family the combo isn't on.
-                            addActionListener { refreshProseFontPreview() }
-                        }
+                        .applyToComponent { renderer = SimpleListCellRenderer.create("") { proseFontLabel(it) } }
                         .component
-                }.rowComment("The prose aside and the relation pointer lines. The worked example always stays on the editor's code font — an example is code. Size follows “Text size” below.")
-                row("") {
-                    cell(proseFontPreview)
-                }.rowComment("Sample at the editor's italic face in the chosen family, at the size below.")
+                }.rowComment("The prose aside and the relation pointer lines. A worked example stays on the editor's code font — an example is code.")
                 row("Tint strength (%):") {
                     calloutTintSpinner = clampedSpinner(0..100).bindIntValue(state::calloutTintPercent).component
                 }.rowComment("How far the box's background is pulled toward the accent colour.")
                 row("Opacity (%):") {
                     calloutOpacitySpinner = clampedSpinner(0..100).bindIntValue(state::calloutOpacityPercent).component
-                }.rowComment("100 is a solid box. Lower it to let code — or a relationship arrow with nowhere else to run — read through the callout. Only the fill fades: at 0 the text, bar and outline all still draw.")
+                }.rowComment("Lets code, or an arrow with nowhere else to run, read through the box. Only the <i>fill</i> fades — at 0 the text, bar and outline all still draw.")
                 row("Corner radius (px):") {
                     calloutRadiusSpinner = clampedSpinner(0..16).bindIntValue(state::calloutCornerRadius).component
-                }.rowComment("0 squares the box off.")
+                }
                 row("Accent bar width (px):") {
                     calloutBarSpinner = clampedSpinner(1..10).bindIntValue(state::calloutBarWidth).component
                 }.rowComment("Only the Bar frame style draws one.")
                 row("Text size (% of editor font):") {
                     calloutScaleSpinner = clampedSpinner(60..160).bindIntValue(state::calloutTextScalePercent).component
-                    // This size is half of what the description sample above is showing.
-                    calloutScaleSpinner.addChangeListener { refreshProseFontPreview() }
                 }.rowComment("The wrap follows the size, so a larger box fits fewer words per line — the per-paragraph line caps don't move.")
                 row {
                     calloutBelowCheck = checkBox("Dock the callout below the active lines")
@@ -431,10 +439,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 row {
                     leaderCheck = checkBox("Draw a leader to the annotated line")
                         .bindSelected(state::calloutLeader).component
-                }.rowComment("A speech-bubble tail off the box's near edge, a quarter of the way along it, pointing the way the box is docked. Takes the box's own tint where the frame paints one; every style but Bar also outlines it. Costs a few px of editor height per step.")
-                // Both fields the sample depends on exist by now. Reset fires the combo listener anyway, so this
-                // only matters for the instant between building the panel and the platform's first reset.
-                refreshProseFontPreview()
+                }.rowComment("A speech-bubble tail off the box's near edge, pointing the way it is docked. Costs a few px of editor height per step.")
             }.apply { expanded = false }
 
             collapsibleGroup("Relationship arrows") {
@@ -453,14 +458,13 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                         }
                 }
                     .rowComment(
-                        "One colour per link on a step, in the order they are drawn. An empty swatch keeps that " +
-                            "link's derived colour — the first is the accent and the rest are spread around the " +
-                            "wheel from it, which is the palette the defaults ship with. “Clear” puts them all " +
-                            "back to derived.",
+                        "One colour per link on a step, in draw order. An empty swatch keeps that link's " +
+                            "derived colour — the first is the accent, the rest spread around the wheel from " +
+                            "it. “Clear” puts them all back to derived.",
                     )
                 row("Thickness (tenths of a px):") {
                     arrowThicknessSpinner = clampedSpinner(8..40).bindIntValue(state::arrowThicknessTenths).component
-                }.rowComment("10 is the 1 px line links ship with; 40 draws a bold diagram line. Past about 25, several links leaving the same row can start to intersect — hovering still tells them apart, and the range is left open on purpose.")
+                }.rowComment("10 is the 1 px line links ship with. Past about 25, several links leaving one row can start to intersect — hovering still tells them apart, so the range is left open.")
                 row("Arrowhead size (px):") {
                     arrowHeadSpinner = clampedSpinner(4..16).bindIntValue(state::arrowHeadSize).component
                 }
@@ -478,19 +482,29 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         // The shape of the tree itself — structure rather than theme, which is why it is its own section
         // and not an Appearance sub-group: everything above decorates lines *inside* one node.
         collapsibleGroup("Code tree") {
+            row {
+                cell(treePreview)
+            }.rowComment(
+                "One nested call, redrawn as you change the five shape settings below. The outer node is the " +
+                    "active one and the frame inside it is not, so de-emphasis has somewhere to show.",
+            )
             row("Nesting leader:") {
                 treeLeaderCombo = comboBox(TREE_LEADERS)
                     .bindItem(
                         { state.treeLeader },
                         { state.treeLeader = it ?: AudioExplainerSettings.DEF_TREE_LEADER },
                     )
-                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { treeLeaderLabel(it) } }
+                    .applyToComponent {
+                        renderer = SimpleListCellRenderer.create("") { treeLeaderLabel(it) }
+                        // Fires on a pick *and* on every reset, so the frame can never show a mode the
+                        // combo is not on — which is also what makes "Reset to defaults" redraw it.
+                        addActionListener { refreshTreePreview() }
+                    }
                     .component
             }.rowComment(
-                "How a nested frame joins the call that opens it. The three are one outline in three shapes — " +
-                    "in Diagonals and Brace the leader <i>is</i> the edge the box and the frame each give up, " +
-                    "which is why there is no “none”. Brace clears a caption band that a diagonal cuts across; " +
-                    "Arrow keeps both outlines closed and points from one to the other.",
+                "One outline in three shapes. Diagonals and Brace take the edge the box and the frame each " +
+                    "give up, which is why there is no “none”; Brace also clears a caption band a diagonal " +
+                    "cuts across.",
             )
             row("Collapse control:") {
                 treeChevronCombo = comboBox(TREE_CHEVRONS)
@@ -498,15 +512,18 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                         { state.treeChevron },
                         { state.treeChevron = it ?: AudioExplainerSettings.DEF_TREE_CHEVRON },
                     )
-                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { treeChevronLabel(it) } }
+                    .applyToComponent {
+                        renderer = SimpleListCellRenderer.create("") { treeChevronLabel(it) }
+                        // Fires on a pick *and* on every reset, so the frame can never show a mode the
+                        // combo is not on — which is also what makes "Reset to defaults" redraw it.
+                        addActionListener { refreshTreePreview() }
+                    }
                     .component
             }.rowComment(
-                "The affordance beside the invoking token that folds a nested frame away and back. The " +
-                    "<b>bottom edge</b> is the default and is the only one that costs the token no width — it " +
-                    "shows while a frame is folded away, and folding one back is the strip above its header — " +
-                    "an open frame's box has no bottom edge to thicken, so the strip carries a small accent " +
-                    "triangle under the invoking token to say so. <b>None</b> leaves no control at " +
-                    "all — the whole box still toggles on a click, so it hides the hint rather than the gesture.",
+                "<b>Bottom edge</b> is the default and the only one that costs the token no width: it marks " +
+                    "the box while a frame is folded away, and while one is open it becomes the accent " +
+                    "triangle in the strip. <b>None</b> hides the hint, not the gesture — the box still " +
+                    "toggles on a click.",
             )
             row("Fold nodes a step does not use:") {
                 treeStepFoldCombo = comboBox(TREE_STEP_FOLDS)
@@ -517,11 +534,10 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                     .applyToComponent { renderer = SimpleListCellRenderer.create("") { treeStepFoldLabel(it) } }
                     .component
             }.rowComment(
-                "A nested frame the current step is not talking about is spending height on code the " +
-                    "narration is not about. <b>Always</b> folds those away as each step starts; " +
-                    "<b>Only when the scene is over the line budget</b> is what shipped before, and it left a " +
-                    "small walkthrough fully expanded throughout. A frame is never folded while the step is " +
-                    "inside it or inside anything within it, and stepping back into a folded one opens it.",
+                "A frame the current step is not talking about spends height on code the narration is not " +
+                    "about. <b>Always</b> folds those as each step starts; <b>Only when over the line " +
+                    "budget</b> is what shipped before. Never while the step is inside it, and stepping back " +
+                    "into a folded one opens it. No still frame here — it is a behaviour over time.",
             )
             row("File path in captions:") {
                 treePathCombo = comboBox(TREE_PATHS)
@@ -529,10 +545,15 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                         { state.treePath },
                         { state.treePath = it ?: AudioExplainerSettings.DEF_TREE_PATH },
                     )
-                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { treePathLabel(it) } }
+                    .applyToComponent {
+                        renderer = SimpleListCellRenderer.create("") { treePathLabel(it) }
+                        // Fires on a pick *and* on every reset, so the frame can never show a mode the
+                        // combo is not on — which is also what makes "Reset to defaults" redraw it.
+                        addActionListener { refreshTreePreview() }
+                    }
                     .component
             }.rowComment(
-                "Only nodes that carry a caption show one: a frame nested in its caller's own file has no " +
+                "Only nodes that carry a caption show one — a frame nested in its caller's own file has no " +
                     "header band to put a path in.",
             )
             row("Push non-active nodes back with:") {
@@ -541,12 +562,16 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                         { state.treeDeemphasis },
                         { state.treeDeemphasis = it ?: AudioExplainerSettings.DEF_TREE_DEEMPHASIS },
                     )
-                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { treeDeemphasisLabel(it) } }
+                    .applyToComponent {
+                        renderer = SimpleListCellRenderer.create("") { treeDeemphasisLabel(it) }
+                        // Fires on a pick *and* on every reset, so the frame can never show a mode the
+                        // combo is not on — which is also what makes "Reset to defaults" redraw it.
+                        addActionListener { refreshTreePreview() }
+                    }
                     .component
             }.rowComment(
-                "Every option is a background. Nothing here dims the <i>text</i>: a foreground dim flattens " +
-                    "each dimmed row to one grey and takes the syntax colouring with it, which is the one " +
-                    "thing a real editor per node exists to keep.",
+                "Every option is a background. Nothing here dims the <i>text</i> — a foreground dim takes the " +
+                    "syntax colouring with it, which is the one thing a real editor per node exists to keep.",
             )
             row("Hidden lines:") {
                 treeElisionCombo = comboBox(TREE_ELISIONS)
@@ -554,30 +579,35 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                         { state.treeElision },
                         { state.treeElision = it ?: AudioExplainerSettings.DEF_TREE_ELISION },
                     )
-                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { treeElisionLabel(it) } }
+                    .applyToComponent {
+                        renderer = SimpleListCellRenderer.create("") { treeElisionLabel(it) }
+                        // Fires on a pick *and* on every reset, so the frame can never show a mode the
+                        // combo is not on — which is also what makes "Reset to defaults" redraw it.
+                        addActionListener { refreshTreePreview() }
+                    }
                     .component
             }.rowComment(
                 "A node shows the lines the walkthrough asked for and folds the rest away. <b>Openable</b> " +
-                    "lets you click a run open (and hovering it shows the hidden code); <b>Sealed</b> draws a " +
-                    "tidier “⋯ N lines ⋯” rule that cannot be opened — the platform's own limitation, not a " +
-                    "choice about tidiness.",
+                    "clicks open, and hovering it shows the hidden code; <b>Sealed</b> cannot be opened — " +
+                    "the platform's limitation, not a choice about tidiness.",
             )
             row("Node height limit (px):") {
                 treeMaxHeightSpinner = clampedSpinner(TreeStyle.MIN_MAX_HEIGHT..TreeStyle.MAX_MAX_HEIGHT, step = 20)
                     .bindIntValue(state::treeMaxHeight).component
             }.rowComment(
-                "A ceiling, not a size: a node is the smaller of its own excerpt, its content and this — so a " +
-                    "six-line member gets six lines, and only a long one is capped and scrolls to the code " +
-                    "being talked about.",
+                "A ceiling, not a size: a node is the smaller of its excerpt, its content and this — so a " +
+                    "six-line member gets six lines, and only a long one is capped and scrolls.",
             )
             row {
                 treeGrowCheck = checkBox("Let every node grow to its full content")
                     .bindSelected(state::treeGrowNodes).component
             }.rowComment(
-                "Ignores the limit above. A node that is exactly as tall as its content has nothing to scroll, " +
-                    "so a step can no longer bring its own lines into view inside that node — the page scrolls " +
-                    "instead.",
+                "Ignores the limit above. A node as tall as its content has nothing to scroll, so a step can " +
+                    "no longer bring its lines into view inside it — the page scrolls instead.",
             )
+            // Every combo the refresh reads exists by now; reset fires the listeners anyway, so this only
+            // matters for the instant between building the panel and the platform's first reset.
+            refreshTreePreview()
             row {
                 treeGrowHostsCheck = checkBox("Grow the outermost node when it hosts a nested frame")
                     .bindSelected(state::treeGrowHosts).component
@@ -650,11 +680,18 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 treeMaxHeightSpinner.value = AudioExplainerSettings.DEF_TREE_MAX_HEIGHT
                 treeGrowCheck.isSelected = false
                 treeGrowHostsCheck.isSelected = true
+                // `ColorPanel.setSelectedColor` notifies nobody, so the two frames are told by hand rather
+                // than left showing the palette this button just replaced.
+                refreshAppearancePreview()
+                refreshTreePreview()
             }
                 // Runs after every binding/colour write above (cells apply in creation order), so the
                 // live re-render sees the just-applied values.
                 .onApply { refreshLiveWalkthrough() }
         }.rowComment("Applies to the fields above; save with OK/Apply.")
+
+        // Last, because it subscribes to every control on the page and then draws once.
+        wireAppearancePreview()
     }
 
     /** [slot]'s stored override as a colour, or null when it is blank — see [arrowSlotPanels]. */
@@ -674,23 +711,102 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     private fun storedSlot(slot: Int): String = slotColor(slot)?.let { toHex(it) } ?: ""
 
     /**
-     * Re-face [proseFontPreview] from the current combo family and text size, by the same rule
-     * `CalloutRenderer.font` applies to a prose block: the editor's italic face, in the named family if one
-     * is named, scaled by the text-size percentage. An unavailable family falls back inside `Font` here just
-     * as it does there, so a family that won't render is visible in the sample rather than only in the editor.
+     * Redraw the Code-tree still frame from the **live combos**, not from [state].
+     *
+     * The Kotlin UI DSL only writes `state` on apply, so a preview that read the settings would be one OK
+     * behind every pick. The values are handed to [TreeStyle] as a throwaway `State` so the preview resolves
+     * a persisted string to an enum through the one function the renderer uses; nothing here parses a mode
+     * name itself.
+     *
+     * Guarded on the last of the five combos: each one's listener fires while the panel is still being built,
+     * when the combos below it do not exist yet.
      */
-    private fun refreshProseFontPreview() {
-        val base = EditorColorsManager.getInstance().globalScheme.getFont(EditorFontType.ITALIC)
-        val family = (proseFontCombo.selectedItem as? String)?.trim().orEmpty()
-        val named = if (family.isEmpty()) base else Font(family, base.style, base.size)
-        // The size spinner is built after this row, so before it exists the persisted value is the truth.
-        val scale = if (this::calloutScaleSpinner.isInitialized) {
-            calloutScaleSpinner.number
-        } else {
-            state.calloutTextScalePercent
+    private fun refreshTreePreview() {
+        if (!this::treeElisionCombo.isInitialized) return
+        val picked = AudioExplainerSettings.State().apply {
+            treeLeader = treeLeaderCombo.selectedItem as? String ?: state.treeLeader
+            treeChevron = treeChevronCombo.selectedItem as? String ?: state.treeChevron
+            treePath = treePathCombo.selectedItem as? String ?: state.treePath
+            treeDeemphasis = treeDeemphasisCombo.selectedItem as? String ?: state.treeDeemphasis
+            treeElision = treeElisionCombo.selectedItem as? String ?: state.treeElision
         }
-        proseFontPreview.font = if (scale == 100) named else named.deriveFont(named.size2D * scale / 100f)
+        treePreview.show(
+            TreeStyle.nest(picked),
+            TreeStyle.node(picked),
+            accentPanel.selectedColor ?: parseColor(state.accentColor),
+        )
     }
+
+    /**
+     * Redraw the Appearance still frame from the **live controls**, not from [state].
+     *
+     * Same rule as [refreshTreePreview] and for the same reason: the DSL writes `state` on apply, so a frame
+     * fed from the settings would be one OK behind every spinner. The pending values are assembled into a
+     * throwaway `State` and handed to [SpotlightRenderer.palette] — the renderer's own colour derivation —
+     * so nothing here re-blends a tint or re-clamps a percentage.
+     */
+    private fun refreshAppearancePreview() {
+        if (!this::arrowLabelsCheck.isInitialized) return
+        appearancePreview.show(
+            AudioExplainerSettings.State().apply {
+                accentColor = toHex(accentPanel.selectedColor ?: parseColor(state.accentColor))
+                activeGlowColor = toHex(glowPanel.selectedColor ?: parseColor(state.activeGlowColor))
+                outsideDimPercent = outsideSpinner.number
+                withinDimPercent = withinSpinner.number
+                activeGlowPercent = glowSpinner.number
+                overviewRulerMark = overviewCheck.isSelected
+                nonActiveTint = tintCheck.isSelected
+                nonActiveTintPercent = tintSpinner.number
+                gapGutter = gapCheck.isSelected
+                gapGutterWidth = gapWidthSpinner.number
+                calloutFrame = frameCombo.selectedItem as? String ?: state.calloutFrame
+                calloutProseFont = (proseFontCombo.selectedItem as? String).orEmpty()
+                calloutTintPercent = calloutTintSpinner.number
+                calloutOpacityPercent = calloutOpacitySpinner.number
+                calloutCornerRadius = calloutRadiusSpinner.number
+                calloutBarWidth = calloutBarSpinner.number
+                calloutTextScalePercent = calloutScaleSpinner.number
+                calloutBelow = calloutBelowCheck.isSelected
+                calloutLeader = leaderCheck.isSelected
+                arrowThicknessTenths = arrowThicknessSpinner.number
+                arrowHeadSize = arrowHeadSpinner.number
+                arrowSquareElbow = arrowSquareCheck.isSelected
+                arrowLabels = arrowLabelsCheck.isSelected
+                arrowSlotColors = MutableList(LinkArt.slots()) { i ->
+                    arrowSlotPanels[i].selectedColor?.let { toHex(it) } ?: ""
+                }
+            },
+        )
+    }
+
+    /**
+     * Subscribe the Appearance frame to every control that feeds it, **in one place and after the panel is
+     * built**.
+     *
+     * Two dozen controls across six sub-groups reach this one picture, and hanging a listener off each at its
+     * own row is two dozen chances to forget one — a forgotten one is a control that silently does nothing
+     * in the preview, which is worse than having no preview. `probes/AppearanceBench.java` asserts that every
+     * value of every control changes the frame; this list is what that assertion is really checking.
+     *
+     * Checkboxes are wired through `addItemListener` and not `addActionListener`: `setSelected` fires the
+     * former and not the latter, and "Reset to defaults" sets them rather than clicking them.
+     */
+    private fun wireAppearancePreview() {
+        val refresh = { refreshAppearancePreview() }
+        (listOf(accentPanel, glowPanel) + arrowSlotPanels).forEach { it.addActionListener { refresh() } }
+        listOf(
+            outsideSpinner, withinSpinner, glowSpinner, tintSpinner, gapWidthSpinner,
+            calloutTintSpinner, calloutOpacitySpinner, calloutRadiusSpinner, calloutBarSpinner,
+            calloutScaleSpinner, arrowThicknessSpinner, arrowHeadSpinner,
+        ).forEach { it.addChangeListener { refresh() } }
+        listOf(
+            overviewCheck, tintCheck, gapCheck, calloutBelowCheck, leaderCheck,
+            arrowSquareCheck, arrowLabelsCheck,
+        ).forEach { it.addItemListener { refresh() } }
+        listOf(frameCombo, proseFontCombo).forEach { it.addActionListener { refresh() } }
+        refresh()
+    }
+
 
     /**
      * Re-style the currently-showing walkthrough (if any) with the new settings.
@@ -1002,12 +1118,6 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         private fun proseFontLabel(family: String?): String =
             if (family.isNullOrEmpty()) "Editor font (default)" else family
 
-        /**
-         * The description-font sample. A real sentence rather than a pangram or "AaBbCc": what is being judged
-         * is whether a callout-length aside is comfortable to read at a glance beside code, and letterforms
-         * alone don't answer that.
-         */
-        private const val PROSE_PREVIEW_TEXT = "The aside about this line reads like this."
 
         private fun parseColor(hex: String): Color = try {
             Color(hex.trim().removePrefix("#").toInt(16))

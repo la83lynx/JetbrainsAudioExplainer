@@ -17,6 +17,7 @@ import com.intellij.openapi.editor.Inlay
 import com.intellij.openapi.editor.InlayModel
 import com.intellij.openapi.editor.colors.EditorColorsListener
 import com.intellij.openapi.editor.colors.EditorColorsManager
+import com.intellij.openapi.editor.colors.EditorColorsScheme
 import com.intellij.openapi.editor.colors.EditorFontType
 import com.intellij.openapi.editor.event.VisibleAreaEvent
 import com.intellij.openapi.editor.event.VisibleAreaListener
@@ -545,7 +546,7 @@ class CodeNodeView(
      * Rider's default scheme and the tinted node read as an error band.
      */
     private fun deemphasisTint(): Color =
-        SpotlightRenderer.blendToward(SpotlightRenderer.accentColor(), editor.colorsScheme.defaultBackground, DEEMPHASIS_MIX)
+        deemphasisTint(SpotlightRenderer.accentColor(), editor.colorsScheme.defaultBackground)
 
     // ── Geometry: size to content, with a cap ──
 
@@ -1357,13 +1358,7 @@ class CodeNodeView(
                     font = titleFont()
                     foreground = titleColor()
                     isOpaque = true
-                    background = if (isActive) {
-                        SpotlightRenderer.blendToward(
-                            SpotlightRenderer.accentColor(), JBColor.PanelBackground, HEADER_ACCENT_MIX,
-                        )
-                    } else {
-                        JBColor.PanelBackground
-                    }
+                    background = headerBandColor(isActive, SpotlightRenderer.accentColor())
                     border = BorderFactory.createEmptyBorder(STRIP_PAD, STRIP_PAD + 2, STRIP_PAD, STRIP_PAD)
                 }
                 headerStrip = strip
@@ -1391,25 +1386,17 @@ class CodeNodeView(
      */
     private fun activeBorderColor(): Color = LeaderArt.leaderBase()
 
-    private fun titleFont(): Font = editor.colorsScheme.getFont(EditorFontType.PLAIN)
-        .deriveFont(Font.BOLD, (editor.colorsScheme.editorFontSize - 1).coerceAtLeast(9).toFloat())
+    private fun titleFont(): Font = titleFont(editor.colorsScheme)
 
-    private fun titleColor(): Color = if (isActive) activeBorderColor() else JBColor.GRAY
+    private fun titleColor(): Color = titleColor(isActive, SpotlightRenderer.accentColor())
 
     /**
      * The node's label. Three forms because 1c has to look at them: the full path is unambiguous and
      * enormous, the basename is short and ambiguous exactly in the case the same-file fixture exists to test,
      * and the project-relative path is the compromise nobody has photographed yet.
      */
-    private fun displayPath(): String {
-        val suffix = spec.title.takeIf { it.isNotBlank() }?.let { "  ·  $it" } ?: ""
-        val path = when (style.path) {
-            NodePath.FULL -> spec.file.path
-            NodePath.BASENAME -> spec.file.name
-            NodePath.PROJECT_RELATIVE -> projectRelativePath() ?: spec.file.name
-        }
-        return path + suffix
-    }
+    private fun displayPath(): String =
+        captionText(style.path, spec.file.path, projectRelativePath(), spec.file.name, spec.title)
 
     private fun projectRelativePath(): String? {
         val base = project.basePath?.let { LocalFileSystem.getInstance().findFileByPath(it) } ?: return null
@@ -1617,9 +1604,57 @@ class CodeNodeView(
         private const val DEEMPHASIS_MIX = 0.10
 
         private const val HEADER_ACCENT_MIX = 0.18
-        private const val STRIP_PAD = 3
+        internal const val STRIP_PAD = 3
 
-        private fun placeholderFor(elidedLines: Int): String = "  ⋯  $elidedLines lines  ⋯  "
+        internal fun placeholderFor(elidedLines: Int): String = "  ⋯  $elidedLines lines  ⋯  "
+
+        // ── The four style rules, in the form something without an Editor can ask them ──
+        //
+        // Each is the *only* statement of its rule: the instance methods above are one-line calls into these,
+        // and `TreePreview` calls the same five. A settings preview that restated any of them would be the
+        // deleted `spikes/` again — a second derivation that agrees until one of the two is edited.
+
+        /**
+         * The non-active node's wash: the accent pulled most of the way to the given background.
+         *
+         * The accent is a parameter and not [SpotlightRenderer.accentColor] because the preview paints the
+         * swatch the reader is holding, which the settings have not saved yet.
+         */
+        internal fun deemphasisTint(accent: Color, background: Color): Color =
+            SpotlightRenderer.blendToward(accent, background, DEEMPHASIS_MIX)
+
+        /** The caption band's own background — accent-tinted while the node is the active one. */
+        internal fun headerBandColor(active: Boolean, accent: Color): Color =
+            if (active) SpotlightRenderer.blendToward(accent, JBColor.PanelBackground, HEADER_ACCENT_MIX)
+            else JBColor.PanelBackground
+
+        /** The caption's face: the scheme's code font, bold, one point down, floored at 9. */
+        internal fun titleFont(scheme: EditorColorsScheme): Font = scheme.getFont(EditorFontType.PLAIN)
+            .deriveFont(Font.BOLD, (scheme.editorFontSize - 1).coerceAtLeast(9).toFloat())
+
+        /** The caption's ink — the shared outline colour on the active node, grey elsewhere. */
+        internal fun titleColor(active: Boolean, accent: Color): Color =
+            if (active) LeaderArt.leaderBase(accent) else JBColor.GRAY
+
+        /**
+         * **The [NodePath] rule**, with the three strings supplied rather than resolved: only
+         * `PROJECT_RELATIVE` needs a [Project], and that is the one thing a settings preview cannot have.
+         * Passing all three keeps the `when` here, where the node reads it.
+         */
+        internal fun captionText(
+            path: NodePath,
+            full: String,
+            projectRelative: String?,
+            name: String,
+            title: String,
+        ): String {
+            val suffix = title.takeIf { it.isNotBlank() }?.let { "  ·  $it" } ?: ""
+            return when (path) {
+                NodePath.FULL -> full
+                NodePath.BASENAME -> name
+                NodePath.PROJECT_RELATIVE -> projectRelative ?: name
+            } + suffix
+        }
     }
 }
 
@@ -1805,7 +1840,7 @@ data class CodeNodeStyle(
  */
 class ElidedLinesRenderer(private val elidedLines: Int) : CustomFoldRegionRenderer {
 
-    private fun label() = "⋯  $elidedLines lines  ⋯"
+    private fun label() = labelFor(elidedLines)
 
     private fun font(editor: Editor): Font = editor.colorsScheme.getFont(EditorFontType.ITALIC)
 
@@ -1824,36 +1859,56 @@ class ElidedLinesRenderer(private val elidedLines: Int) : CustomFoldRegionRender
         textAttributes: TextAttributes,
     ) {
         val editor = region.editor
-        val g2 = g.create() as Graphics2D
-        try {
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
-            g2.font = font(editor)
-            val fm = g2.fontMetrics
-            val text = label()
-            val x = targetRegion.x.toInt() + PAD
-            val baseline = targetRegion.y.toInt() + (targetRegion.height.toInt() + fm.ascent - fm.descent) / 2
-            val midY = (targetRegion.y + targetRegion.height / 2).roundToInt()
-            val w = fm.stringWidth(text)
-            val fg = editor.colorsScheme.defaultForeground
-            val accent = SpotlightRenderer.accentColor()
-
-            g2.color = SpotlightRenderer.blendToward(accent, fg, RULE_MIX)
-            g2.stroke = BasicStroke(1f)
-            g2.drawLine(x - PAD, midY, x - 2, midY)
-            g2.drawLine(x + w + 2, midY, x + w + PAD + RULE_TAIL, midY)
-
-            g2.color = SpotlightRenderer.blendToward(accent, fg, TEXT_MIX)
-            g2.drawString(text, x, baseline)
-        } finally {
-            g2.dispose()
-        }
+        paintSealed(
+            g, targetRegion, font(editor), editor.colorsScheme.defaultForeground,
+            SpotlightRenderer.accentColor(), elidedLines,
+        )
     }
 
-    private companion object {
+    internal companion object {
         const val PAD = 8
         const val RULE_TAIL = 40
         const val RULE_MIX = 0.55
         const val TEXT_MIX = 0.35
+
+        /** The sealed row's text — [CodeNodeView.placeholderFor] is the openable one's, and they differ. */
+        internal fun labelFor(elidedLines: Int): String = "⋯  $elidedLines lines  ⋯"
+
+        /**
+         * **The sealed elision row**, drawn from a rectangle, a font and two colours rather than from a
+         * [CustomFoldRegion] — so `TreePreview` draws the row the reader will actually get. The renderer above
+         * is now this call plus the scheme lookups only a live editor can do.
+         */
+        internal fun paintSealed(
+            g: Graphics2D,
+            targetRegion: Rectangle2D,
+            font: Font,
+            fg: Color,
+            accent: Color,
+            elidedLines: Int,
+        ) {
+            val g2 = g.create() as Graphics2D
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
+                g2.font = font
+                val fm = g2.fontMetrics
+                val text = labelFor(elidedLines)
+                val x = targetRegion.x.toInt() + PAD
+                val baseline = targetRegion.y.toInt() + (targetRegion.height.toInt() + fm.ascent - fm.descent) / 2
+                val midY = (targetRegion.y + targetRegion.height / 2).roundToInt()
+                val w = fm.stringWidth(text)
+
+                g2.color = SpotlightRenderer.blendToward(accent, fg, RULE_MIX)
+                g2.stroke = BasicStroke(1f)
+                g2.drawLine(x - PAD, midY, x - 2, midY)
+                g2.drawLine(x + w + 2, midY, x + w + PAD + RULE_TAIL, midY)
+
+                g2.color = SpotlightRenderer.blendToward(accent, fg, TEXT_MIX)
+                g2.drawString(text, x, baseline)
+            } finally {
+                g2.dispose()
+            }
+        }
     }
 }

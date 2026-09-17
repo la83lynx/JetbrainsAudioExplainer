@@ -2263,7 +2263,7 @@ class SpotlightRenderer(
      * mid-session light/dark switch is honoured); accent/glow are the user's absolute colours from
      * [AudioExplainerSettings]. Recomputed on every render, so a settings change is picked up.
      */
-    private class Palette(
+    internal class Palette(
         val dim: TextAttributes,
         val segmentDim: TextAttributes,
         val gap: TextAttributes,
@@ -2287,85 +2287,18 @@ class SpotlightRenderer(
         val activeBg: Color,
     )
 
-    private fun colors(role: FrameRole = FrameRole.PRIMARY): Palette {
-        // Read the scheme the editor ACTUALLY renders with, not the global one. The two can disagree
-        // (per-editor scheme, presentation mode, a light editor scheme under a dark UI theme, timing),
-        // and blending our glow/tint against the wrong background is what makes a dark editor wash out
-        // to white. `editor.colorsScheme` is always the colours this editor paints, and both accessors are
-        // `@NotNull` — there was a global-scheme fallback here, which the compiler pointed out could never
-        // run.
-        val scheme = editor.colorsScheme
-        val fg = scheme.defaultForeground
-        val bg = scheme.defaultBackground
-        val st = AudioExplainerSettings.getInstance().state
+    /**
+     * Read the scheme the editor ACTUALLY renders with, not the global one. The two can disagree
+     * (per-editor scheme, presentation mode, a light editor scheme under a dark UI theme, timing), and
+     * blending our glow/tint against the wrong background is what makes a dark editor wash out to white.
+     * `editor.colorsScheme` is always the colours this editor paints, and both accessors are `@NotNull` —
+     * there was a global-scheme fallback here, which the compiler pointed out could never run.
+     *
+     * The *rule* is [palette]; this supplies the two things only a live editor knows.
+     */
+    private fun colors(role: FrameRole = FrameRole.PRIMARY): Palette =
+        palette(editor.colorsScheme, AudioExplainerSettings.getInstance().state, role)
 
-        val dimFg = blend(fg, bg, st.outsideDimPercent / 100.0)
-        val segDimFg = blend(fg, bg, st.withinDimPercent / 100.0)
-        val accent = parseColor(st.accentColor)
-        // **The helper tier.** A helper frame's glow is the primary's pulled most of the way back to the
-        // editor's own background: still visibly lit, unmistakably not the subject. Applied to the *glow
-        // percentage* rather than to the finished colour so it composes with the user's own setting instead
-        // of overriding it — a reader who turns the glow down keeps the ratio between the two tiers.
-        val glowPercent = when (role) {
-            FrameRole.PRIMARY -> st.activeGlowPercent / 100.0
-            FrameRole.HELPER -> st.activeGlowPercent / 100.0 * HELPER_GLOW_MIX
-        }
-        val activeBg = blend(parseColor(st.activeGlowColor), bg, glowPercent)
-
-        val dim = TextAttributes().apply { foregroundColor = dimFg }
-        // Non-active highlight lines: dimmed foreground PLUS an own faint accent-tinted background,
-        // so they no longer read identically to gap lines (which carry only the gutter bar).
-        val segmentDim = TextAttributes().apply {
-            foregroundColor = segDimFg
-            if (st.nonActiveTint) backgroundColor = blend(accent, bg, st.nonActiveTintPercent / 100.0)
-        }
-        val gap = TextAttributes().apply { foregroundColor = segDimFg }
-        val active = TextAttributes().apply {
-            backgroundColor = activeBg
-            if (st.overviewRulerMark) errorStripeColor = accent
-        }
-        // Callout box: accent-tinted panel with softened body text, both derived from THIS editor's scheme
-        // so the box tracks a light/dark switch like every other layer here.
-        // Opacity is applied on top of the tint, not instead of it: the tint decides the box's *hue*, the
-        // alpha decides how much of what it covers (a clamped arrow leg, a long line of code) still reads
-        // through it. At 100 the colour is opaque, i.e. exactly the box as it was before the setting existed.
-        // A Helper callout is tinted in the same softened key as its glow, for the same reason: one box per
-        // step is what read well, so the second box must be legible without competing.
-        val calloutTint = when (role) {
-            FrameRole.PRIMARY -> st.calloutTintPercent / 100.0
-            FrameRole.HELPER -> st.calloutTintPercent / 100.0 * HELPER_GLOW_MIX
-        }
-        val calloutBg = blend(accent, bg, calloutTint).let {
-            if (st.calloutOpacityPercent >= 100) it else Color(it.red, it.green, it.blue, alpha255(st.calloutOpacityPercent))
-        }
-        val calloutFg = blend(fg, bg, CALLOUT_TEXT_BRIGHTNESS)
-        val calloutStyle = CalloutStyle(
-            FrameStyle.of(st.calloutFrame),
-            st.calloutCornerRadius.coerceAtLeast(0),
-            st.calloutBarWidth.coerceAtLeast(0),
-            st.calloutTextScalePercent.coerceIn(MIN_TEXT_SCALE, MAX_TEXT_SCALE),
-            st.calloutProseFont.trim(),
-            st.calloutLeader,
-            st.calloutBelow,
-            commentFg(scheme, calloutFg),
-        )
-        // **A label follows slot 0**, not the slot it belongs to: only one label is on screen at a time, it
-        // is the hovered link's, and the hover already brightens that link's own ink to say which. Tying the
-        // words to five different colours would repaint the same sentence differently on each hover for no
-        // extra fact. A POINTER block belongs to the callout box and stays on the accent regardless.
-        val arrowStyle = ArrowStyle(
-            accent,
-            slotColors(st.arrowSlotColors),
-            blend(LinkArt.color(accent, 0), fg, POINTER_TEXT_ACCENT),
-            LinkArt.metrics(st.arrowThicknessTenths, st.arrowHeadSize, st.arrowSquareElbow),
-            st.arrowLabels,
-        )
-        return Palette(
-            dim, segmentDim, gap, active, accent, st.gapGutter, st.gapGutterWidth,
-            calloutBg, calloutFg, fg, blend(accent, fg, POINTER_TEXT_ACCENT),
-            calloutStyle, st.calloutBelow, arrowStyle, activeBg,
-        )
-    }
 
     // ── Decoration renderers ──
 
@@ -2378,16 +2311,17 @@ class SpotlightRenderer(
      * metrics contract and one measure/paint path — see MoreUI.md §4.3 B4, where a second renderer was wrongly
      * expected to be needed for anything but prose.
      */
-    private enum class BlockStyle { PROSE, CODE, POINTER }
+    internal enum class BlockStyle { PROSE, CODE, POINTER }
 
     /**
      * How the callout box is decorated around its text. Anything unrecognised in the persisted setting reads
      * as [BAR] — a stale or hand-edited value should cost the *decoration*, not the callout.
      */
-    private enum class FrameStyle {
+    internal enum class FrameStyle {
         BAR, OUTLINE, SOLID, NONE, COMMENT;
 
         companion object {
+
             fun of(id: String): FrameStyle = when (id) {
                 AudioExplainerSettings.CALLOUT_FRAME_OUTLINE -> OUTLINE
                 AudioExplainerSettings.CALLOUT_FRAME_SOLID -> SOLID
@@ -2399,7 +2333,7 @@ class SpotlightRenderer(
     }
 
     /** The callout box's look, resolved from settings once per render. */
-    private class CalloutStyle(
+    internal class CalloutStyle(
         val frame: FrameStyle,
         val arc: Int,
         val barWidth: Int,
@@ -2430,7 +2364,7 @@ class SpotlightRenderer(
      * elbow rows moved a number into `audioExplainer.xml` and stopped there. [metrics] is that wiring — see
      * [LinkMetrics], which explains why the numbers are handed to `LinkArt` rather than read by it.
      */
-    private class ArrowStyle(
+    internal class ArrowStyle(
         /** Base for the derived hue rotation: the accent, exactly as `LinkArt.color` has always taken it. */
         val accent: Color,
         /** Per-slot overrides in slot order; a null entry (or a missing one) means *derive from [accent]*. */
@@ -2473,20 +2407,7 @@ class SpotlightRenderer(
     ) : EditorCustomElementRenderer {
 
         /** The accent bar's width where one is drawn, and 0 where it isn't — it also offsets the text. */
-        private val barW: Int = if (style.frame == FrameStyle.BAR) style.barWidth else 0
-
-        /** Frames that paint a panel behind the text, i.e. the ones with a background for the leader to share. */
-        private val panelFrame: Boolean =
-            style.frame != FrameStyle.NONE && style.frame != FrameStyle.COMMENT
-
-        /**
-         * Frames whose leader draws its own border. Bar is the exception: its box already carries an accent
-         * edge, and a stroked tail hanging off it would read as a second, competing one. Everywhere else the
-         * tail has to define itself — either because the box is stroked too (Outline) and an unstroked tail
-         * looks unfinished beside it, or because there is no box at all (None, Comment) and an unstroked tail
-         * is a shape with nothing to say where it came from.
-         */
-        private val leaderBorder: Boolean = style.frame != FrameStyle.BAR
+        private val barW: Int = barWidth(style)
 
         private var cachedWidth = -1
 
@@ -2513,19 +2434,8 @@ class SpotlightRenderer(
          * Everything measures through [metrics], which derives from this, so a family or scale change moves
          * the wrap, the reserved height and the painted text together.
          */
-        private fun font(editor: Editor, block: CalloutBlock): Font {
-            val base = editor.colorsScheme.getFont(
-                if (block.style == BlockStyle.PROSE) EditorFontType.ITALIC else EditorFontType.PLAIN,
-            )
-            // An unknown family falls back to a platform default inside `Font` — the right cost for a stale
-            // or hand-edited setting: the family, not the callout.
-            val named = style.proseFont
-                .takeIf { it.isNotEmpty() && block.style != BlockStyle.CODE }
-                ?.let { Font(it, base.style, base.size) }
-                ?: base
-            val scale = style.textScalePercent
-            return if (scale == 100) named else named.deriveFont(named.size2D * scale / 100f)
-        }
+        private fun font(editor: Editor, block: CalloutBlock): Font =
+            calloutFont(editor.colorsScheme, block.style, style.proseFont, style.textScalePercent)
 
         private fun metrics(editor: Editor, block: CalloutBlock): FontMetrics =
             editor.contentComponent.getFontMetrics(font(editor, block))
@@ -2659,41 +2569,16 @@ class SpotlightRenderer(
             val y = targetRegion.y + MARGIN_Y + if (style.below) leaderLen() + extraSpace else 0
             val w = barW + 2 * PAD_X + textW
             val h = textHeight(editor, shown) + 2 * PAD_Y
-            val arc = style.arc
 
             val g2 = g.create() as Graphics2D
             try {
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
                 g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
-                // Decoration only — every style below wraps and paints the same text in the same place.
-                when (style.frame) {
-                    FrameStyle.BAR -> {
-                        g2.color = bg
-                        g2.fillRoundRect(x, y, w, h, arc, arc)
-                        g2.color = accent
-                        g2.fillRect(x, y, barW, h) // left accent bar, echoing the gap gutter cue
-                    }
-                    FrameStyle.OUTLINE -> {
-                        g2.color = bg
-                        g2.fillRoundRect(x, y, w, h, arc, arc)
-                        g2.color = accent
-                        // -1: drawRoundRect's stroke is inclusive of the far edge, so the full width would
-                        // land one pixel outside the fill it is supposed to trace.
-                        g2.drawRoundRect(x, y, w - 1, h - 1, arc, arc)
-                    }
-                    FrameStyle.SOLID -> {
-                        g2.color = bg
-                        g2.fillRoundRect(x, y, w, h, arc, arc)
-                    }
-                    // Text straight onto the code background. The padding still applies, so switching styles
-                    // moves the decoration and never the text. COMMENT is NONE plus the `//` prefix that
-                    // [prefix] has already charged to the wrap, and the scheme's comment colour.
-                    FrameStyle.NONE, FrameStyle.COMMENT -> {}
-                }
+                paintCalloutFrame(g2, x, y, w, h, style, accent, bg)
 
                 // After the frame, never before: the leader's mouth has to be able to erase the box's own
                 // edge across it.
-                if (style.leader) drawLeader(g2, x, y, w, h)
+                if (style.leader) drawCalloutLeader(g2, x, y, w, h, style, accent, bg)
 
                 var top = y + PAD_Y
                 var drawn = 0
@@ -2743,8 +2628,118 @@ class SpotlightRenderer(
          *   Below full opacity the erase is translucent too, so it thins that edge rather than removing it —
          *   the same bargain the box's own fill makes with the code it covers.
          */
-        private fun drawLeader(g2: Graphics2D, x: Int, y: Int, w: Int, h: Int) {
-            val len = leaderLen()
+    }
+
+    companion object {
+
+        /**
+         * **The face a callout block is drawn in** — the scheme's italic for prose, its plain face otherwise,
+         * re-familied to the reader's choice unless the block is code, then scaled.
+         *
+         * Shared rather than restated because the settings page had already grown its own copy for the
+         * description sample, and a sample drawn by a *second* transcription of this rule is a sample that
+         * can be wrong about the thing it exists to show. Both callers now ask here.
+         */
+        internal fun calloutFont(
+            scheme: EditorColorsScheme,
+            block: BlockStyle,
+            proseFont: String,
+            scalePercent: Int,
+        ): Font {
+            val base = scheme.getFont(
+                if (block == BlockStyle.PROSE) EditorFontType.ITALIC else EditorFontType.PLAIN,
+            )
+            // An unknown family falls back to a platform default inside `Font` — the right cost for a stale
+            // or hand-edited setting: the family, not the callout.
+            val named = proseFont
+                .takeIf { it.isNotEmpty() && block != BlockStyle.CODE }
+                ?.let { Font(it, base.style, base.size) }
+                ?: base
+            return if (scalePercent == 100) named else named.deriveFont(named.size2D * scalePercent / 100f)
+        }
+
+        // ── The callout's decoration, in the form a settings preview can ask for ────────────────────
+        //
+        // `Frame style`, `Tint strength`, `Opacity`, `Corner radius`, `Accent bar width` and `Draw a
+        // leader` are six controls whose whole visible effect is in the two painters below. They were
+        // inside `CalloutRenderer`, reachable only with an `Inlay`; a settings sample would have had to
+        // restate them, which is the drift `parseColor` and the prose-font rule already show the cost of.
+        // Both were pure before the move — `g2`, ints, the style and two colours — so this is a move.
+
+        /** The accent bar's width — zero for every frame but [FrameStyle.BAR], the only one that has one. */
+        internal fun barWidth(style: CalloutStyle): Int =
+            if (style.frame == FrameStyle.BAR) style.barWidth else 0
+
+        /** Frames that paint a panel behind the text, i.e. the ones with a background for the leader to share. */
+        internal fun panelFrame(style: CalloutStyle): Boolean =
+            style.frame != FrameStyle.NONE && style.frame != FrameStyle.COMMENT
+
+        /**
+         * Frames whose leader draws its own border. Bar is the exception: its box already carries an accent
+         * edge, and a stroked tail hanging off it would read as a second, competing one. Everywhere else the
+         * tail has to define itself — either because the box is stroked too (Outline) and an unstroked tail
+         * looks unfinished beside it, or because there is no box at all (None, Comment) and an unstroked tail
+         * is a shape with nothing to say where it came from.
+         */
+        internal fun leaderBorder(style: CalloutStyle): Boolean = style.frame != FrameStyle.BAR
+
+        /**
+         * **The callout's box, minus its text.** The tint and the alpha arrive already baked into [bg] by
+         * [palette] — which is exactly why opacity fades the fill and leaves the bar, the outline and the
+         * text alone.
+         */
+        internal fun paintCalloutFrame(
+            g2: Graphics2D,
+            x: Int,
+            y: Int,
+            w: Int,
+            h: Int,
+            style: CalloutStyle,
+            accent: Color,
+            bg: Color,
+        ) {
+            val arc = style.arc
+            // Decoration only — every style below wraps and paints the same text in the same place.
+            when (style.frame) {
+                FrameStyle.BAR -> {
+                    g2.color = bg
+                    g2.fillRoundRect(x, y, w, h, arc, arc)
+                    g2.color = accent
+                    g2.fillRect(x, y, barWidth(style), h) // left accent bar, echoing the gap gutter cue
+                }
+                FrameStyle.OUTLINE -> {
+                    g2.color = bg
+                    g2.fillRoundRect(x, y, w, h, arc, arc)
+                    g2.color = accent
+                    // -1: drawRoundRect's stroke is inclusive of the far edge, so the full width would
+                    // land one pixel outside the fill it is supposed to trace.
+                    g2.drawRoundRect(x, y, w - 1, h - 1, arc, arc)
+                }
+                FrameStyle.SOLID -> {
+                    g2.color = bg
+                    g2.fillRoundRect(x, y, w, h, arc, arc)
+                }
+                // Text straight onto the code background. The padding still applies, so switching styles
+                // moves the decoration and never the text. COMMENT is NONE plus the `//` prefix the wrap
+                // has already been charged for, and the scheme's comment colour.
+                FrameStyle.NONE, FrameStyle.COMMENT -> {}
+            }
+        }
+
+        /** **The speech-bubble tail** — skewed, not isosceles, and drawn after the frame so its mouth can erase it. */
+        internal fun drawCalloutLeader(
+            g2: Graphics2D,
+            x: Int,
+            y: Int,
+            w: Int,
+            h: Int,
+            style: CalloutStyle,
+            accent: Color,
+            bg: Color,
+        ) {
+            val barW = barWidth(style)
+            val panel = panelFrame(style)
+            val len = if (style.leader) LEADER_LEN else 0
             // Never wider than the box's text area, and never hanging past either end of it: a one-word
             // callout would otherwise sprout its tail outside the box it belongs to.
             val wide = minOf(LEADER_W, w - barW)
@@ -2755,7 +2750,7 @@ class SpotlightRenderer(
             val baseY = if (style.below) y else y + h - 1
             val apexY = if (style.below) baseY - len else baseY + len
 
-            if (panelFrame) {
+            if (panel) {
                 g2.color = bg
                 val tri = GeneralPath()
                 tri.moveTo(left.toFloat(), baseY.toFloat())
@@ -2764,7 +2759,7 @@ class SpotlightRenderer(
                 tri.closePath()
                 g2.fill(tri)
             }
-            if (!leaderBorder) return
+            if (!leaderBorder(style)) return
             g2.stroke = BasicStroke(LEADER_STROKE)
             g2.color = if (style.frame == FrameStyle.COMMENT) style.commentFg else accent
             // Open path: the free edges only. Closing it here is what would draw the mouth shut.
@@ -2773,7 +2768,7 @@ class SpotlightRenderer(
             edges.lineTo(left.toFloat(), apexY.toFloat())
             edges.lineTo(right.toFloat(), baseY.toFloat())
             g2.draw(edges)
-            if (panelFrame) {
+            if (panel) {
                 // One row — [baseY] *is* the frame's own edge row in both dock directions, which is why it was
                 // chosen — inset a pixel at each end so the two strokes above keep their own corners, and a
                 // fillRect rather than a drawLine because drawLine's endpoint is inclusive and would take the
@@ -2786,9 +2781,93 @@ class SpotlightRenderer(
                 g2.fillRect(left + 1, baseY, wide - 2, 1)
             }
         }
-    }
 
-    companion object {
+        /**
+         * **Every colour this plugin draws with, from a scheme and a settings state** — one derivation, asked by
+         * the renderer with the editor's own scheme and by the settings page's live preview with the global one
+         * and an *unsaved* state.
+         *
+         * The state is a parameter rather than a service read for the preview's sake: the Kotlin UI DSL writes
+         * `AudioExplainerSettings` only on apply, so a preview that read the service would be one OK behind
+         * every spinner. Passing it keeps the blends, the clamps and the tint-then-alpha order in one place
+         * instead of growing a second, nearly-identical copy on the settings page — which is what had already
+         * happened to `parseColor` and to the prose-font rule.
+         */
+        internal fun palette(
+            scheme: EditorColorsScheme,
+            st: AudioExplainerSettings.State,
+            role: FrameRole = FrameRole.PRIMARY,
+        ): Palette {
+            val fg = scheme.defaultForeground
+            val bg = scheme.defaultBackground
+
+            val dimFg = blend(fg, bg, st.outsideDimPercent / 100.0)
+            val segDimFg = blend(fg, bg, st.withinDimPercent / 100.0)
+            val accent = parseColor(st.accentColor)
+            // **The helper tier.** A helper frame's glow is the primary's pulled most of the way back to the
+            // editor's own background: still visibly lit, unmistakably not the subject. Applied to the *glow
+            // percentage* rather than to the finished colour so it composes with the user's own setting instead
+            // of overriding it — a reader who turns the glow down keeps the ratio between the two tiers.
+            val glowPercent = when (role) {
+                FrameRole.PRIMARY -> st.activeGlowPercent / 100.0
+                FrameRole.HELPER -> st.activeGlowPercent / 100.0 * HELPER_GLOW_MIX
+            }
+            val activeBg = blend(parseColor(st.activeGlowColor), bg, glowPercent)
+
+            val dim = TextAttributes().apply { foregroundColor = dimFg }
+            // Non-active highlight lines: dimmed foreground PLUS an own faint accent-tinted background,
+            // so they no longer read identically to gap lines (which carry only the gutter bar).
+            val segmentDim = TextAttributes().apply {
+                foregroundColor = segDimFg
+                if (st.nonActiveTint) backgroundColor = blend(accent, bg, st.nonActiveTintPercent / 100.0)
+            }
+            val gap = TextAttributes().apply { foregroundColor = segDimFg }
+            val active = TextAttributes().apply {
+                backgroundColor = activeBg
+                if (st.overviewRulerMark) errorStripeColor = accent
+            }
+            // Callout box: accent-tinted panel with softened body text, both derived from THIS editor's scheme
+            // so the box tracks a light/dark switch like every other layer here.
+            // Opacity is applied on top of the tint, not instead of it: the tint decides the box's *hue*, the
+            // alpha decides how much of what it covers (a clamped arrow leg, a long line of code) still reads
+            // through it. At 100 the colour is opaque, i.e. exactly the box as it was before the setting existed.
+            // A Helper callout is tinted in the same softened key as its glow, for the same reason: one box per
+            // step is what read well, so the second box must be legible without competing.
+            val calloutTint = when (role) {
+                FrameRole.PRIMARY -> st.calloutTintPercent / 100.0
+                FrameRole.HELPER -> st.calloutTintPercent / 100.0 * HELPER_GLOW_MIX
+            }
+            val calloutBg = blend(accent, bg, calloutTint).let {
+                if (st.calloutOpacityPercent >= 100) it else Color(it.red, it.green, it.blue, alpha255(st.calloutOpacityPercent))
+            }
+            val calloutFg = blend(fg, bg, CALLOUT_TEXT_BRIGHTNESS)
+            val calloutStyle = CalloutStyle(
+                FrameStyle.of(st.calloutFrame),
+                st.calloutCornerRadius.coerceAtLeast(0),
+                st.calloutBarWidth.coerceAtLeast(0),
+                st.calloutTextScalePercent.coerceIn(MIN_TEXT_SCALE, MAX_TEXT_SCALE),
+                st.calloutProseFont.trim(),
+                st.calloutLeader,
+                st.calloutBelow,
+                commentFg(scheme, calloutFg),
+            )
+            // **A label follows slot 0**, not the slot it belongs to: only one label is on screen at a time, it
+            // is the hovered link's, and the hover already brightens that link's own ink to say which. Tying the
+            // words to five different colours would repaint the same sentence differently on each hover for no
+            // extra fact. A POINTER block belongs to the callout box and stays on the accent regardless.
+            val arrowStyle = ArrowStyle(
+                accent,
+                slotColors(st.arrowSlotColors),
+                blend(LinkArt.color(accent, 0), fg, POINTER_TEXT_ACCENT),
+                LinkArt.metrics(st.arrowThicknessTenths, st.arrowHeadSize, st.arrowSquareElbow),
+                st.arrowLabels,
+            )
+            return Palette(
+                dim, segmentDim, gap, active, accent, st.gapGutter, st.gapGutterWidth,
+                calloutBg, calloutFg, fg, blend(accent, fg, POINTER_TEXT_ACCENT),
+                calloutStyle, st.calloutBelow, arrowStyle, activeBg,
+            )
+        }
         /** Above syntax/semantic highlighting (so the dim foreground wins) but below the selection layer. */
         private val LAYER = HighlighterLayer.SELECTION - 1
 
@@ -3117,11 +3196,19 @@ class SpotlightRenderer(
         /** Gutter analogue of the gap layer's dotted gold left border; colour/width come from settings. */
         private fun gutterRenderer(color: Color, width: Int): LineMarkerRenderer =
             object : LineMarkerRenderer {
-                override fun paint(editor: Editor, g: Graphics, r: Rectangle) {
-                    g.color = color
-                    g.fillRect(r.x, r.y, width.coerceAtLeast(1), r.height)
-                }
+                override fun paint(editor: Editor, g: Graphics, r: Rectangle) = paintGapGutter(g, r, color, width)
             }
+
+        /**
+         * **The gap line's gutter bar.** Two lines, but they are the *only* two: the width is deliberately
+         * unscaled (the editor font already scales with the IDE) and the `coerceAtLeast(1)` is what keeps a
+         * zero from silently turning the cue off. A settings sample that retyped either would be a sample
+         * that could be wrong; the `LineMarkerRenderer` above is now an adapter onto this.
+         */
+        internal fun paintGapGutter(g: Graphics, r: Rectangle, color: Color, width: Int) {
+            g.color = color
+            g.fillRect(r.x, r.y, width.coerceAtLeast(1), r.height)
+        }
 
         /**
          * The colour this editor's scheme paints comments in, for [FrameStyle.COMMENT]. Line comments first,
