@@ -101,17 +101,139 @@ A new collapsible group **"Explanation"**, placed directly under **Audio engines
 **Language & narration** — it is about what gets generated, which precedes how it is spoken.
 
 Three rows: Depth (combo), Effort (combo), Model (combo). Each combo carries `Default` as its first
-item, mapping to the blank string.
+item, mapping to the blank string — except Effort, which ships `medium` for the reason above.
+
+These are the defaults the per-run dialog is seeded from; the diagnostics button lives further down,
+in **Executables (advanced)**.
 
 One `rowComment` under Depth carrying the honest trade — depth is what costs time; effort is what
 costs correctness. Do not repeat that sentence on the other two rows.
 
+## Per-run overrides — "Explain This with…"
+
+Settings hold the defaults. One run in ten wants something else, and going to Settings and back to
+change it is worse than the thing it fixes.
+
+The context menu's `Explain This (Audio)` becomes a group:
+
+```
+Explain This (Audio)          <- unchanged, one click, uses the saved defaults
+Explain This with…            <- opens the dialog below
+```
+
+Keeping the plain entry first and unchanged is the point: the common case must not grow a click.
+
+### The dialog
+
+Modal, shown before anything is spawned, seeded from the saved settings:
+
+| control | |
+|---|---|
+| **Effort** | slider, 5 stops: low / medium / high / xhigh / max. Tick labels, no numbers. |
+| **Additional instructions** | multi-line text area, empty by default, with a drop-down of the last ~8 non-empty entries. |
+| *(optional)* **Depth** | the same combo as Settings. Cut it if the dialog feels crowded — depth also reads as an "additional instruction". |
+
+Under the slider, one line that changes with the stop, because the number means nothing on its own:
+
+> `medium` — about half the time of `xhigh`, same plan shape. Measured: 118s vs 255s.
+
+**Per-run values do not write back to Settings.** A one-off must not silently become the new default;
+that is how a user ends up wondering why every explanation got terse. The instruction *history* is the
+exception and does persist — retyping "use simple terms" every time is the friction this dialog exists
+to remove.
+
+### Where the free text goes in the prompt
+
+Appended as its own trailing block, after the numbered steps:
+
+```
+The user added these instructions for this run. Follow them where they narrow or restyle the
+walkthrough. They do NOT relax the `set_plan` contract: the field names, the line-range rules and
+the POST are fixed regardless of what is asked here.
+<verbatim user text>
+```
+
+That framing is the whole design. "Use simple terms" and "do not use links" must work — both only
+narrow. "Just print it as text" must not, because it breaks the one thing the plugin needs back.
+Without the second sentence the agent has no way to tell those apart, and the failure is silent: a
+run that prints prose to a terminal nobody sees.
+
+The text is the user's own, typed into their own IDE, so this is not a trust boundary — it is a
+blast-radius one.
+
+### Plumbing
+
+`ExplainRequest` gains `effort: String?`, `depth: String?`, `extraInstructions: String?`, all null for
+the plain action. `ClaudeExplainer` resolves each as `request.x ?: state.x`. Nothing else changes: one
+resolution point, and the plain entry keeps taking exactly today's path.
+
+## Diagnostics — "Check permissions and settings"
+
+A button in Settings (bottom of **Executables (advanced)**) that runs read-only checks and shows a
+list of *name → status → remedy*. Every check names its fix or it does not earn a row.
+
+It exists because this round's three defects were all invisible from inside the IDE: a POST helper
+that corrupted its payload and printed nothing, a tool the agent reaches for that the allow-list
+forbids, and an inherited effort setting costing minutes. None would show up in a log the user reads.
+
+### The checks
+
+**Every OS**
+
+| check | fails when |
+|---|---|
+| `claude` on PATH | not found → the error users already hit, but before they right-click |
+| CLI version | below the floor `--effort` needs |
+| Effort in force | `~/.claude/settings.json` `effortLevel` / `modelSettings` disagrees with the plugin's setting — the exact bug this round found |
+| MCP servers loaded | reports the count and that none are on the allow-list; informational, never a failure |
+| Skill installed & current | `~/.claude/skills/audio-explainer` missing or older than the bundled `VERSION` |
+| Loopback server | port/token files exist and `GET /api/health` answers |
+| **POST round-trip** | the marquee check — see below |
+
+**Windows only**
+
+| check | fails when |
+|---|---|
+| PowerShell present | neither `pwsh` nor Windows PowerShell 5.1 resolves |
+| `PowerShell` tool allowed | `ALLOWED_TOOLS` omits it while the docs tell the agent to use it |
+| Execution policy | blocks `-File` even with `-ExecutionPolicy Bypass` |
+
+**Linux / macOS only**
+
+| check | fails when |
+|---|---|
+| `curl` present | `explainer.sh` has no fallback without it |
+| `explainer.sh` executable | the install lost the `+x` bit — a real failure mode of copying from a jar |
+| `$HOME` writable | the port/token files and the plan temp file both land there |
+
+`SystemInfo.isWindows / isLinux / isMac` picks the set. A check that does not apply is **omitted, not
+shown as passing** — a green "PowerShell: n/a" on Linux teaches the reader nothing.
+
+### The round-trip check
+
+Send a small payload containing an em dash, an arrow and one non-Latin line **through the platform's
+real helper** (`explainer.ps1` / `explainer.sh`) to the running server, and have the server echo back
+exactly what it received. Compare bytes.
+
+This is the only check that exercises the path end to end, and it is the one that would have caught
+the encoding bug on day one instead of during a performance investigation.
+
+It needs a side-effect-free message: add `{"type":"ping","echo":"<text>"}` to `ExplainerServer`,
+replying with the echo string verbatim. `set_plan` cannot be used — it would replace whatever
+walkthrough the user currently has loaded, which is a rude thing for a diagnostic to do.
+
 ## Verification
 
 A probe in the `probes/` style: build the args and the prompt for each of the 3 × 6 × 4 combinations
-and assert (a) **Standard depth reproduces today's prompt byte for byte**, (b) blank effort/model add
-no flags and every non-blank one adds exactly one flag pair, (c) Brief's prompt contains no
-`relations` / `parent` / `scene` ask and Deep's does. No network, no IDE — it is string building.
+and assert (a) **Standard depth with no extra instructions reproduces today's prompt byte for byte**,
+(b) blank effort/model add no flags and every non-blank one adds exactly one flag pair, (c) Brief's
+prompt contains no `relations` / `parent` / `scene` ask and Deep's does, (d) a per-run override beats
+the saved setting and absent ones fall back to it, (e) extra instructions appear once, verbatim, after
+the numbered steps, and carry the contract sentence. No network, no IDE — it is string building.
+
+The diagnostics need their own probe: each check must return a status AND a remedy, and the OS filter
+must omit inapplicable checks rather than pass them. The round-trip check is already covered by
+`bench/encoding_probe.py`, which is what proved the fix.
 
 (a) is the one that matters: the prompt is the part an upgrade could silently change for everyone, so
 it must be provably identical for a user who never opens the new group. The argv deliberately is not
