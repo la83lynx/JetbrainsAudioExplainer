@@ -314,13 +314,18 @@ class CodeNestView(
                 // reveal had deliberately moved back to the top of its excerpt — and since a collapse now schedules
                 // these passes, that would happen mid-narration rather than only at build time.
                 n.child.relandIfOwed()
-                if (!n.child.landingSatisfied) unsettled = true
+                // `contentFitsViewport` for the same reason `landsOnExcerpt` guards the host below: a node whose
+                // viewport already holds all of its content never satisfies, because there is nothing for it to
+                // scroll to — counting it here would burn every remaining pass on every build and every collapse.
+                if (!n.child.landingSatisfied && !n.child.contentFitsViewport()) unsettled = true
                 // **And the host, since G1c⁵** — a collapse moves the extent of the node the frame is *in*, so the
                 // node owed a landing is not always the one whose collapse state changed. Guarded on `landsOnExcerpt`
                 // rather than on the latch alone: a root is exempt and never satisfies, so counting it here would keep
                 // `unsettled` true and burn every pass on every collapse for the rest of the session.
                 n.parent.relandIfOwed()
-                if (n.parent.landsOnExcerpt && !n.parent.landingSatisfied) unsettled = true
+                if (n.parent.landsOnExcerpt && !n.parent.landingSatisfied && !n.parent.contentFitsViewport()) {
+                    unsettled = true
+                }
             }
             if (unsettled && attempt + 1 < LANDING_PASSES) scheduleLanding(attempt + 1)
         }

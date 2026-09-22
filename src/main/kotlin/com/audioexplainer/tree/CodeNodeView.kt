@@ -284,6 +284,9 @@ class CodeNodeView(
         editor.scrollingModel.addVisibleAreaListener(
             VisibleAreaListener { e: VisibleAreaEvent ->
                 if (e.oldRectangle?.y != e.newRectangle.y) onGeometryChanged?.invoke()
+                // The *other* half of the same event, and the one nothing was listening for: see
+                // [scheduleFitCheck].
+                if (e.oldRectangle?.height != e.newRectangle.height) scheduleFitCheck()
             },
             listeners,
         )
@@ -554,15 +557,56 @@ class CodeNodeView(
      * The height the folded document actually draws in, which is **not** `lineHeight × lineCount`:
      * `offsetToXY` is the only thing that knows where a folded document draws, and a custom fold region's own
      * height is part of the answer.
+     *
+     * **Plus [trailingBlockHeight], which is the half `offsetToXY` cannot see.** A block inlay pushes the text
+     * *after* it down, so every inlay in the middle of the document is already inside that first term — which
+     * is exactly why this term was absent for nine rounds and only shows up on a host whose call site is the
+     * document's last line. There is no text after it to be pushed, so the frame hangs below a node sized as if
+     * it were not there.
      */
     fun contentHeight(): Int {
         // Not defensive dressing: a listener can fire after teardown, and `offsetToXY` on a released editor
         // throws rather than returning anything. The last published height is the honest answer — the node is
         // gone, so nothing will lay it out again.
         if (disposed || editor.isDisposed) return lastContentHeight.coerceAtLeast(0)
-        val h = editor.offsetToXY(editor.document.textLength).y + editor.lineHeight
+        val h = editor.offsetToXY(editor.document.textLength).y + editor.lineHeight + trailingBlockHeight()
         lastContentHeight = h
         return h
+    }
+
+    /**
+     * The block inlays drawn **below the document's last line** — the ones `offsetToXY` structurally cannot
+     * report, because it answers where *text* is and there is no text below them.
+     *
+     * **Zero for every node that does not have one**, which is nearly all of them, so this adds nothing to any
+     * layout an earlier round judged. It is non-zero in one shape: a host whose `callLine` is the last line of
+     * its file. `CodeNestView.Nesting.attach` anchors the frame at `getLineEndOffset(callLine)` with
+     * `showAbove = false`, and [CodeNestView.Nesting.textFollowsFrame] — "the load-bearing question of the
+     * whole approach", whether the host's text is pushed past the frame — asks about `callLine + 1`, which on
+     * the last line does not exist. It returned false and nothing acted on it; this is what acts on it.
+     *
+     * The same hole swallows a docked callout or a link spacer on the last line, and both are counted here for
+     * the same reason: [effectiveCap] and [excerptTargetHeight] already allow for them, and `content` being the
+     * one term that did not was what made the allowance unreachable.
+     *
+     * A collapsed nesting costs nothing here without a special case: `setCollapsed` hides the child component,
+     * so the inlay resizes itself down to the leader strip and `heightInPixels` follows. A fold over the call
+     * line is excluded outright — the frame is created with `showWhenFolded = false`, so the platform stops
+     * drawing it while its line is elided, and counting it would make the node taller by a frame nobody sees.
+     */
+    fun trailingBlockHeight(): Int {
+        if (disposed || editor.isDisposed) return 0
+        val doc = editor.document
+        val lastLine = (doc.lineCount - 1).coerceAtLeast(0)
+        val start = doc.getLineStartOffset(lastLine)
+        val end = doc.getLineEndOffset(lastLine)
+        var sum = 0
+        for (inlay in editor.inlayModel.getBlockElementsInRange(start, end)) {
+            if (!inlay.isValid || inlay.placement != Inlay.Placement.BELOW_LINE) continue
+            if (editor.foldingModel.getCollapsedRegionAtOffset(inlay.offset) != null) continue
+            sum += inlay.heightInPixels.coerceAtLeast(0)
+        }
+        return sum
     }
 
     /**
@@ -682,6 +726,17 @@ class CodeNodeView(
         if (embeddedHeight == total && embeddedInExcerptHeight == inExcerpt) return
         embeddedHeight = total
         embeddedInExcerptHeight = inExcerpt
+        // The one case `offsetToXY` cannot see, reported when it happens rather than left to be inferred from a
+        // node that looks too short. Logged here because this method already no-ops when nothing moved, so it is
+        // one line per real change and not one per layout pass.
+        val trailing = trailingBlockHeight()
+        if (trailing > 0) {
+            log.info(
+                "${spec.file.name}: ${trailing}px of embedded frame sits below the last line, where `offsetToXY` " +
+                    "cannot see it — content ${contentHeight()}px, published ${publishedHeight()}px " +
+                    "(embedded $total, inExcerpt $inExcerpt, grow=${style.grow}, cap ${effectiveCap()})",
+            )
+        }
         resync(TRIGGER_EMBEDDED)
     }
 
@@ -767,8 +822,41 @@ class CodeNodeView(
      * the whole reason a one-setting fix is available here at all.
      */
     fun setLandingSlack(on: Boolean) {
+        if (landingSlackWanted == on) return
+        landingSlackWanted = on
+        applyLandingSlack()
+    }
+
+    /** What [setLandingSlack] was asked for. What is actually *on* is [applyLandingSlack]'s answer. */
+    private var landingSlackWanted = false
+
+    /**
+     * **The slack is granted only while the node has something to scroll**, and re-asserted from [resync] because
+     * that is not a property of the node, it is a property of its current geometry.
+     *
+     * The page above is the room a landing needs; it is also, for a node whose viewport already holds all of its
+     * content, **room to scroll into that holds nothing**. And it is the platform's own clamp that this switches
+     * off: with the page gone, `content − viewport` is 0 and every scroller — [landOnExcerpt],
+     * [SpotlightRenderer.revealCallout], [showContentBand] — is clamped to the first row without any of them
+     * having to ask. That is how the **root** has always behaved, which is why the root was the one node the
+     * artefact never touched: `setLandingSlack` is never called for it, so its extent was 0 and every scroll
+     * landed at 0.
+     *
+     * Chasing the scrollers one at a time was the alternative, and the sandbox refuted it inside one run: guarding
+     * the landing alone left `revealCallout` doing exactly the same thing two steps later — `content=669
+     * viewportH=669 offset=314`, the callout reveal's own pad of room asked for below a box that was already
+     * flush with the bottom. One lever, at the thing that makes the room, rather than a
+     * guard per caller and a new one owed to every caller added later.
+     *
+     * Guarded on the value because this runs on every resync, and a settings write the platform may answer with a
+     * refresh is not something to issue thousands of times for no change.
+     */
+    private fun applyLandingSlack() {
         if (disposed || editor.isDisposed) return
-        editor.settings.isAdditionalPageAtBottom = on
+        val want = landingSlackWanted && !contentFitsViewport()
+        if (editor.settings.isAdditionalPageAtBottom != want) {
+            editor.settings.isAdditionalPageAtBottom = want
+        }
     }
 
     /**
@@ -823,6 +911,30 @@ class CodeNodeView(
      */
     fun landOnExcerpt() {
         if (!landsOnExcerpt || disposed || editor.isDisposed) return
+        // **There is nothing to land on when the viewport already holds the whole node**, and scrolling one
+        // that does is not a landing but a loss: the excerpt is on screen before anything moves, so the only
+        // thing the scroll can do is push the node's own first rows off the top.
+        //
+        // The case is `grow` — [publishedHeight] returns the content outright, so viewport == content — and
+        // the `min` reaches it too whenever `content` is the smallest of the three. What makes it *visible*
+        // rather than merely pointless is [setLandingSlack]: the page it adds below the last line makes the
+        // offset reachable, and the **gutter cannot follow it there**. `EditorGutterComponentImpl` asks for
+        // `EditorImpl.getPreferredHeight()`, page included, so this is not a platform asymmetry in the size
+        // — it is one in *when the size is applied*. The gutter is the scroll pane's row header, and
+        // `ViewportLayout` clamps a row header's position to `viewSize − extent` of the gutter **as it was
+        // last laid out**; a page that arrives and leaves inside one step's turn never reaches that layout.
+        // Measured on `build-service-plan`'s nested `SizePrefix` with `treeGrowNodes` on, one EDT turn
+        // after the step: `content=874 viewportH=874 offset=471 viewPos=471 rowPos=0 gutH=874 gutPref=1704`
+        // — the clamp was `max(0, 874 − 874)`, so twenty-one rows of text scrolled away from a gutter that
+        // could not move, the `⋯ N lines ⋯` rows read as code against the wrong line numbers, and no
+        // scrollbar existed to get back ([scrolls] is false under `grow`, correctly).
+        //
+        // Tested on the viewport rather than on `style.grow` for two reasons: it covers the `min`'s edition
+        // of the same state, and it leaves the **unlaid-out** pass alone. Before the embedding settles the
+        // viewport is 0, and that pass must still run and still clamp — [relandIfOwed] re-arming it is the
+        // whole of the deferred-landing machinery, and a guard that swallowed it would land every nested node
+        // on line 1.
+        if (contentFitsViewport()) return
         val focus = spec.focusRange() ?: return
         val y = ReadAction.computeBlocking<Int?, RuntimeException> {
             val doc = editor.document
@@ -888,6 +1000,28 @@ class CodeNodeView(
     }
 
     /**
+     * **This node's viewport already holds all of its content**, so there is no excerpt to scroll *to* and the
+     * landing is moot rather than owed. See [landOnExcerpt] for what scrolling one of these did.
+     *
+     * Deliberately **not** a latch. The state is a property of the current geometry and it reverses: turning
+     * `Grow all nodes` back off, or a nesting inside this node expanding, caps the node below its content again and
+     * the landing is owed once more. [landingSatisfied] would have to be un-set by every event that can do that,
+     * which is the bookkeeping [invalidateLanding] already exists to get wrong — so this is asked afresh by each
+     * caller that cares: [applyLandingSlack], which takes the room away; [relandIfOwed], which puts the offset
+     * back; [landOnExcerpt], which must not scroll; [landingState], which must not report it as owed; and
+     * [CodeNestView]'s landing passes, which must not keep retrying on its account.
+     *
+     * `viewport > 0` is what leaves the **unlaid-out** pass alone: before the embedding settles the viewport is 0,
+     * and that pass must still run and still clamp exactly as it did, because [relandIfOwed] re-arming it is the
+     * whole of the deferred-landing machinery.
+     */
+    internal fun contentFitsViewport(): Boolean {
+        if (disposed || editor.isDisposed) return false
+        val viewport = editor.scrollingModel.visibleArea.height
+        return viewport > 0 && contentHeight() <= viewport
+    }
+
+    /**
      * Re-issue the landing if it is still owed — called by [resync] for every extent-changing trigger, and by
      * [CodeNestView]'s landing passes so that both go through **one** definition of "still owed".
      *
@@ -896,12 +1030,49 @@ class CodeNodeView(
      * pushes for the rest of the session.
      */
     internal fun relandIfOwed() {
-        if (landingSatisfied || !landsOnExcerpt || heightOverride != null) return
+        if (!landsOnExcerpt || disposed || editor.isDisposed) return
+        // **Before the latch, and before the drag's exemption**: a node whose viewport holds all of its content
+        // belongs at offset 0 whatever its landing bookkeeping says, because every row it has is already on
+        // screen and any offset at all is scrolled into [setLandingSlack]'s blank page.
+        //
+        // Declining to *issue* the landing is not enough, and the sandbox said so: the first pass runs while the
+        // embedding is still being laid out, where `visibleArea.height` is 0 and the slack gives
+        // `contentPrefH − 0` of extent — so the scroll is neither skipped by a viewport test nor clamped by the
+        // platform. It succeeds, [landOnExcerpt] latches on success, and by the time the viewport is real nothing
+        // asks again. Measured with `treeGrowNodes` on, `memory0` frame 1: `viewportH=0 asked=66 offset=66` on
+        // the mount, still `offset=66` two steps later against `viewportH=594 content=594`.
+        //
+        // It cannot fight a reader's own scroll, because a node in this state has no scrollbar to have scrolled
+        // with: [scrolls] is false exactly when the content fits, so the policy is `VERTICAL_SCROLLBAR_NEVER`
+        // and the wheel does nothing — which is also why the reader could not undo it by hand.
+        if (contentFitsViewport()) {
+            returnToTop()
+            return
+        }
+        if (landingSatisfied || heightOverride != null) return
         if (landingAttempts >= MAX_LANDING_ATTEMPTS) {
             landingSatisfied = true
             return
         }
         landOnExcerpt()
+    }
+
+    /**
+     * Put this node's viewport back at its first row, animation off — the correction half of [relandIfOwed].
+     *
+     * Guarded on the offset rather than issued blind: `scrollVertically` fires a [VisibleAreaListener], which is
+     * [onGeometryChanged], which re-measures the inlay and can come back here. The equality check is what makes
+     * that a no-op on the second turn instead of a cycle.
+     */
+    private fun returnToTop() {
+        if (scrollOffset() == 0) return
+        val sm = editor.scrollingModel
+        sm.disableAnimation()
+        try {
+            sm.scrollVertically(0)
+        } finally {
+            sm.enableAnimation()
+        }
     }
 
     /**
@@ -970,6 +1141,7 @@ class CodeNodeView(
         !landsOnExcerpt -> LandingState.EXEMPT
         revealTookOverLanding -> LandingState.RELEASED_BY_REVEAL
         landingSatisfied -> LandingState.SATISFIED
+        contentFitsViewport() -> LandingState.WHOLLY_VISIBLE
         landingAttempts >= MAX_LANDING_ATTEMPTS -> LandingState.UNREACHABLE
         landingAttempts == 0 -> LandingState.NOT_ISSUED
         else -> LandingState.IN_FLIGHT
@@ -1052,6 +1224,8 @@ class CodeNodeView(
         // the moment the landing is satisfied, which for a node whose viewport was ready on the first pass is
         // immediately. Before the height check rather than after, because a trigger that publishes no new height can
         // still have changed the extent (a fold inside the excerpt is the obvious one).
+        // Before [relandIfOwed], because it decides the extent that a re-issued landing clamps against.
+        applyLandingSlack()
         relandIfOwed()
         // Before the height check, not after: a fold or an inlay moves the lines a connector is anchored to
         // whether or not the node's own outline ends up a different size.
@@ -1081,6 +1255,49 @@ class CodeNodeView(
             resync(TRIGGER_WIDTH)
         }
     }
+
+    /**
+     * **The viewport's own height moved, so every answer measured against it is stale** — and the two that
+     * matter are [applyLandingSlack]'s and [relandIfOwed]'s, both of which are [contentFitsViewport] asked at
+     * a moment.
+     *
+     * The hole this closes is that there was no such moment *after* a layout. [resync]'s triggers are all
+     * **model** events — a fold, an inlay, a font, a drag, a restyle — and each of them fires before the
+     * layout it causes: `contentHeight` is recomputed from the document there and then, while
+     * `visibleArea.height` is still the size the node was laid out at for the **previous** state. Nothing
+     * asked again once the new size existed, so the fit could only ever be judged one layout pass late.
+     *
+     * That is not a rare window. [calloutAllowance] re-sizes the node on **every step advance**, so a step
+     * whose callout is taller than the last one's — a `note` arriving is enough — spends that turn with a
+     * content height already counting the new box against a viewport that does not yet hold it. The node
+     * concludes it must scroll, keeps [setLandingSlack]'s page on that basis, and whatever offset a reveal
+     * then takes inside that page outlives the layout that made it wrong: the reader is left looking at a
+     * node scrolled off its first row with no scrollbar to undo it ([scrolls] is false whenever the content
+     * fits), which is the artefact [landOnExcerpt] describes one cause of. Re-asking here is also why a
+     * reader who toggles any fold repairs it by hand — that goes through [resync], which is the same two
+     * calls against geometry that has by then settled.
+     *
+     * **Deferred and coalesced**, for [scheduleWidthResync]'s reason and one of its own: the event arrives
+     * from `JViewport.reshape`, i.e. from inside the layout pass, and the settled geometry is the whole point
+     * of asking. It cannot re-arm itself — [returnToTop] and [landOnExcerpt] move the viewport's *y*, which
+     * is the branch above, and the slack changes the content component's preferred height rather than the
+     * viewport's.
+     */
+    private fun scheduleFitCheck() {
+        if (disposed || editor.isDisposed || fitCheckPending) return
+        fitCheckPending = true
+        ApplicationManager.getApplication().invokeLater {
+            fitCheckPending = false
+            if (disposed || editor.isDisposed) return@invokeLater
+            // The same two calls [resync] makes, in the same order and for the same reason: the slack decides
+            // the extent that a re-issued landing — or a reveal that has already run — clamps against.
+            applyLandingSlack()
+            relandIfOwed()
+        }
+    }
+
+    /** One deferred fit check per EDT turn, however many resize events the layout storm produced. */
+    private var fitCheckPending = false
 
     /**
      * A colour scheme (theme) change: everything derived from the scheme has to be recomputed, and a height
@@ -1756,6 +1973,14 @@ enum class LandingState {
      * never be issued because nothing is left to trigger it. It is a distinct state for exactly that reason.
      */
     NOT_ISSUED,
+
+    /**
+     * Nothing to land on: the viewport holds the whole node, so the excerpt is on screen at offset 0.
+     *
+     * Distinct from [SATISFIED] because it is not latched and reverses — see [CodeNodeView.contentFitsViewport].
+     * Distinct from [EXEMPT] because this node *does* land on its excerpt; it just has nowhere to go right now.
+     */
+    WHOLLY_VISIBLE,
 
     /** Owed, issued, not there yet, and still under the attempt cap. */
     IN_FLIGHT,
