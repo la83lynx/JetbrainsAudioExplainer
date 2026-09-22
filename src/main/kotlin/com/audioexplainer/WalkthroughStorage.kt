@@ -46,7 +46,14 @@ class WalkthroughStorage(private val workspaceRoot: Path) {
     fun save(plan: Plan, name: String?): String {
         Files.createDirectories(dir)
         val file = dir.resolve("${slugify(name ?: plan.title)}.json")
-        Files.writeString(file, json.encodeToString(plan.copy(frames = toRelativePaths(plan.frames))))
+        // `streaming = false` on the way out, and again on the way in (`Stream.md`): a *saved* walkthrough is
+        // by definition finished, so the field that means "more steps are coming" must not reach disk. A file
+        // that carried it would park playback at its last step forever, waiting for an agent that stopped
+        // running long ago.
+        Files.writeString(
+            file,
+            json.encodeToString(plan.copy(frames = toRelativePaths(plan.frames), streaming = false)),
+        )
         return file.toAbsolutePath().toString()
     }
 
@@ -59,7 +66,7 @@ class WalkthroughStorage(private val workspaceRoot: Path) {
         } catch (_: Exception) {
             return null
         }
-        return data.copy(frames = toAbsolutePaths(data.frames))
+        return data.copy(frames = toAbsolutePaths(data.frames), streaming = false)
     }
 
     /** Delete a saved walkthrough by name. Returns true if a file was removed (false if absent / on error). */

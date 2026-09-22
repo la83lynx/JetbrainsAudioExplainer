@@ -81,7 +81,10 @@ public final class PlanProbe {
     }
 
     static Plan plan(List<Frame> frames, List<Step> steps) {
-        return new Plan("t", "en", frames, steps);
+        // `streaming` is false here and everywhere in this probe: nothing the loader does depends on it
+        // (it is a walkthrough-lifecycle flag, asserted by StreamProbe), so a plan under test is an
+        // ordinary closed one.
+        return new Plan("t", "en", frames, steps, /*streaming*/ false);
     }
 
     /** A root frame carrying relations — the only thing section 14 varies. */
@@ -436,9 +439,12 @@ public final class PlanProbe {
                 Arrays.asList(ctx(17, 17), focus(36, 60)), Collections.<Relation>emptyList());
         Frame saveFar = new Frame(2, fileC, "C.Apply", "", 2, null, 0, null, 1,
                 Collections.singletonList(focus(10, 30)), Collections.<Relation>emptyList());
+        // `streaming = true` on the way in, deliberately: a saved walkthrough is by definition finished, and
+        // the two assertions below are that the flag reaches neither the file nor the loaded plan.
         Plan saved = new Plan("Round trip", "de",
                 Arrays.asList(saveRoot, saveChild, saveFar),
-                Arrays.asList(step(0, ctx(68, 70)), step(1, ctx(36, 38)), step(2, ctx(10, 12))));
+                Arrays.asList(step(0, ctx(68, 70)), step(1, ctx(36, 38)), step(2, ctx(10, 12))),
+                /*streaming*/ true);
 
         WalkthroughStorage store = new WalkthroughStorage(root);
         String savedAt = store.save(saved, "round-trip");
@@ -462,6 +468,11 @@ public final class PlanProbe {
                         && back.getFrames().get(1).getCallLine() == 85
                         && "InvokeOn".equals(back.getFrames().get(1).getCallToken())
                         && back.getFrames().get(1).getCallOccurrence() == 2);
+        // `Stream.md`: a file carrying `streaming` would park playback at its last step forever, waiting for
+        // an agent that stopped running long ago. Saving closes it, and loading closes it again — belt and
+        // braces, because a hand-edited file is the case the save side cannot reach.
+        check("storage: `streaming` never reaches the file", !onDisk.contains("\"streaming\": true"));
+        check("storage: and a loaded plan is closed whatever the file said", !back.getStreaming());
         check("storage: keep ranges survive with their roles",
                 back.getFrames().get(0).getKeep().size() == 2
                         && back.getFrames().get(0).getKeep().get(1).isFocus());

@@ -73,7 +73,9 @@ light up ranges in several frames at once, and it can come back to a frame the n
 
 | Field | Where | Required | Notes |
 |---|---|---|---|
-| `type` | message | yes | Always `"set_plan"` |
+| `type` | message | yes | `"set_plan"`, or `"append_steps"` for a later batch — see **Streaming** |
+| `streaming` | message | no | `true` on a `set_plan` means more steps will follow as `append_steps`. Default `false`, which is the ordinary one-POST plan. See **Streaming** |
+| `final` | message | no | `true` on an `append_steps` closes the plan — no more steps. See **Streaming** |
 | `title` | message | yes | Short label for the whole walkthrough |
 | `language` | message | no, but **send it** | Language code — see **Language** below. The wire type defaults it, so omitting it is legal — but it defaults to **`"en"`**, not to whatever voice the user has configured, and a blank string is read as `"en"` too. So an omitted `language` means *English prose*, whichever language you actually wrote. Send it whenever you know it, and always when it is not English |
 | `frames[]` | message | yes | The code on screen — see **Scenes** and the caps |
@@ -578,3 +580,38 @@ shell quoting corrupts embedded quotes and newlines. See `docs/explain-at-cursor
 
 To change a plan that is already loaded, send a **new `set_plan`**. There are no partial-update messages:
 you are holding the whole plan, and one POST is cheaper than keeping the plugin's copy and yours in step.
+
+## Streaming: start the narration before the plan is finished
+
+The reader waits in silence for the whole plan, then hears all of it. They do not have to. Send the frames
+and your first two or three steps as soon as they exist, and **append the rest as you write them** — the
+walkthrough starts playing while you are still working, and the time they spend waiting stops being the
+time you spend writing.
+
+Set `"streaming": true` on the `set_plan`, then send each further batch as `append_steps`:
+
+```json
+{ "type": "set_plan", "title": "…", "frames": [ … ], "steps": [ …2-3 steps… ], "streaming": true }
+{ "type": "append_steps", "steps": [ …the next few… ] }
+{ "type": "append_steps", "steps": [ …the last few… ], "final": true }
+```
+
+The rules, and they are short:
+
+- **`frames` are not streamed.** Every frame goes in the `set_plan`; `append_steps` carries `steps` and
+  nothing else. The frames are the code on screen, and the plugin builds that once — a frame arriving later
+  would rebuild the view out from under someone who is reading it. Decide your frames first, then narrate.
+- **Append-only, in order.** A step you have sent is being listened to and cannot be changed or re-ordered.
+  There is no way to edit or remove one, and re-POSTing `set_plan` mid-stream replaces the whole walkthrough
+  rather than updating it — which is exactly what you do not want here.
+- **`"final": true` on the last batch.** Send it even when that batch is empty
+  (`{"type":"append_steps","steps":[],"final":true}`) — until it arrives the plugin holds the walkthrough
+  open and waits at the last step. Forgetting it is not fatal (the plugin closes the plan when your process
+  exits) but it leaves the reader waiting for the difference.
+- **Each reply carries only the *new* `issues`** — what the steps in *that* batch broke. Everything already
+  reported stays reported; you will not see it twice.
+- **Same helper, same verb.** `explainer.ps1 plan <file>` / `explainer.sh plan <file>` POSTs whatever
+  message the file holds, so an `append_steps` is sent exactly like a `set_plan`.
+
+Streaming is optional. Omit `streaming` and everything behaves as it always has: one `set_plan`, one
+walkthrough, and the last step is the end.

@@ -23,6 +23,13 @@ data class WalkthroughSnapshot(
     val language: String = Languages.DEFAULT_CODE,
     /** The plan as authored. What gets saved, and what the tree surface renders. */
     val plan: Plan = Plan(),
+    /**
+     * **The plan is still being written** — more steps may arrive (`Stream.md`). False for every plan that
+     * did not ask to stream, and for a streamed one once it is closed, so a reader of this snapshot cannot
+     * tell a finished streamed plan from a plan that never streamed. That is the point: only the end-of-plan
+     * behaviour differs, and only while it is open.
+     */
+    val streaming: Boolean = false,
 )
 
 /**
@@ -45,6 +52,21 @@ interface WalkthroughListener {
 
     /** Plan set or structurally mutated. */
     fun onPlan(state: WalkthroughSnapshot) {}
+
+    /**
+     * **Steps were appended to the plan that is already loaded** (`Stream.md`) — everything a listener held
+     * is still valid, and nothing may be rebuilt.
+     *
+     * It is a separate callback from [onPlan] rather than a cheaper flag on it because of what [onPlan]
+     * *means* to its two listeners: [TreePlanController] closes the tree tab and opens a new one, and the
+     * sidebar hard-resets narration and offers an Undo. Both are right for a plan replacing another and
+     * catastrophic for a plan growing by three steps while the reader is listening to step 2 — the tab would
+     * shut under them mid-sentence. So the default here is **do nothing**, which is the correct behaviour for
+     * every listener that renders frames, and only the two that show the step *list* override it.
+     *
+     * [WalkthroughSnapshot.streaming] says whether more may still arrive; the plan is closed when it is false.
+     */
+    fun onPlanExtended(state: WalkthroughSnapshot) {}
 
     /** Playback status changed. */
     fun onStatus(status: String) {}
@@ -74,6 +96,15 @@ class Walkthrough {
 
     /** [plan] after validation: what is renderable, plus every issue found. Null before the first plan. */
     private var resolved: ResolvedPlan? = null
+
+    /**
+     * **The plan is open: more steps may still be appended** (`Stream.md`). Set from `set_plan`'s own
+     * `streaming` field, cleared by [closePlan].
+     *
+     * It is the one thing that changes what the end of the step list *means*. Everywhere else a streamed
+     * plan is an ordinary plan.
+     */
+    private var open: Boolean = false
 
     /** The sidebar's row model, rebuilt with every plan and never written to. */
     private var outline: Outline = Outline()
@@ -117,12 +148,13 @@ class Walkthrough {
 
     private fun fireStatus(status: String) = listeners.forEach { it.onStatus(status) }
     private fun firePlan(state: WalkthroughSnapshot) = listeners.forEach { it.onPlan(state) }
+    private fun firePlanExtended(state: WalkthroughSnapshot) = listeners.forEach { it.onPlanExtended(state) }
     private fun fireStep(index: Int) = listeners.forEach { it.onStep(index) }
     private fun fireResume() = listeners.forEach { it.onResume() }
 
     @Synchronized
     fun getState(): WalkthroughSnapshot =
-        WalkthroughSnapshot(title, outline, stepIndex, stepCount(), status, language, plan)
+        WalkthroughSnapshot(title, outline, stepIndex, stepCount(), status, language, plan, open)
 
     /** The validated plan, for the surface that renders `frames` directly. Null before the first plan. */
     @Synchronized
@@ -163,6 +195,10 @@ class Walkthrough {
         this.plan = newPlan
         this.resolved = resolvedPlan
         this.outline = PlanOutline.of(resolvedPlan)
+        // **Before the listeners fire**, because a plan that opens with no steps at all is legal while
+        // streaming (frames on screen, narration still being written) and `stepIndex` below reads as -1 for
+        // both that and an authoring mistake. `open` is what tells them apart.
+        this.open = newPlan.streaming
         this.title = newPlan.title
         this.language = newPlan.language.ifBlank { Languages.DEFAULT_CODE }
         this.stepIndex = if (resolvedPlan.steps.isEmpty()) -1 else 0
@@ -173,6 +209,111 @@ class Walkthrough {
         if (stepIndex >= 0) fireStep(stepIndex)
         return resolvedPlan
     }
+
+    /**
+     * **Append [more] steps to the plan already loaded** (`Stream.md`), so narration can start on a partial
+     * plan and carry on as the rest is written. Returns the re-resolved plan, or null when there is no plan
+     * to extend.
+     *
+     * Pass `final = true` on the last batch to close the plan. Closing is idempotent, and it is also done
+     * for us by [closePlan] when the agent's process exits — an agent that dies mid-plan never sends its
+     * `final`, and a narration parked at the open end would wait forever on it.
+     *
+     * **This is not Phase 2 decision 10 coming back.** Those messages edited a segment list that was not the
+     * source of truth; this appends to [plan] itself and re-resolves the whole thing, so the plan stays the
+     * one source of truth and the saved file keeps its shape. It costs a full re-resolution per batch, which
+     * is pure arithmetic over line numbers and cheaper than the one HTTP round trip that delivered it.
+     *
+     * **Every already-narrated step keeps its index**, which is what makes appending safe rather than merely
+     * convenient. [PlanLoader.resolveSteps] is a per-step function of `(step, frames)` with no cross-step
+     * state, and `frames` cannot change here — so re-resolving a longer list reproduces the earlier
+     * `ResolvedStep`s at the same indices, including the dropped ones. A step the reader is listening to
+     * cannot move under them. `StreamProbe` asserts it rather than trusting it.
+     */
+    @Synchronized
+    fun appendSteps(more: List<Step>, final: Boolean = false): ResolvedPlan? {
+        val current = resolved ?: return null
+        val known = current.steps.size
+        if (more.isNotEmpty()) {
+            plan = plan.copy(steps = plan.steps + more)
+            val revalidated = PlanLoader.resolve(plan)
+            resolved = revalidated
+            outline = PlanOutline.of(revalidated)
+        }
+        // **Through the same settle `closePlan` uses, not `open = false`.** Closing has a second half — a
+        // narration parked at the open end has to be told there is no more — and a `final` batch that merely
+        // dropped the flag left playback sitting in `playing` with nothing coming, which is the exact state
+        // this whole mechanism exists to avoid. It runs *after* the append, so a final batch that carries
+        // steps correctly settles nothing: the reader has somewhere left to go.
+        if (final) settleClosed()
+        // **A plan that opened with no steps lands on its first one here**, paused, exactly as `setPlan`
+        // would have done had the steps arrived with it. Without this the position stays -1 and the first
+        // append is invisible: the tree has frames, the outline has rows, and nothing is selected.
+        val landed = stepIndex < 0 && stepCount() > 0
+        if (landed) {
+            stepIndex = 0
+            if (status == STATUS_IDLE) status = STATUS_PAUSED
+        }
+        firePlanExtended(getState())
+        if (landed) {
+            fireStatus(status)
+            fireStep(stepIndex)
+        }
+        return resolved
+    }
+
+    /**
+     * **Close the plan: no more steps are coming** (`Stream.md`). Idempotent, and a no-op on a plan that was
+     * never streaming.
+     *
+     * Called by `append_steps {"final":true}` and — the backstop that actually guarantees it — by
+     * [ClaudeExplainer] when the `claude` process exits, whatever its exit code. The agent saying so is the
+     * fast path; the process ending is the *proof*, because a dead agent cannot append.
+     *
+     * Returns true when this call is what closed it, so the caller can tell a real close from a repeat.
+     */
+    @Synchronized
+    fun closePlan(): Boolean {
+        if (!open) return false
+        settleClosed()
+        firePlanExtended(getState())
+        return true
+    }
+
+    /**
+     * Drop the open flag **and settle a playback that was parked on it** — the two halves of closing, in the
+     * one place both callers reach.
+     *
+     * The second half is the one with teeth. A narration that ran out of steps on an open plan is sitting in
+     * `playing` with no audio coming, waiting for an append; closing is the news that there will not be one,
+     * so it settles to paused exactly the way running off the end of an ordinary plan always has. Without it
+     * the walkthrough ends in a state no non-streaming plan can produce — `playing`, at the last step,
+     * forever.
+     *
+     * Fires `onStatus` when it settles, and nothing otherwise; the caller fires `onPlanExtended`.
+     */
+    private fun settleClosed() {
+        open = false
+        if (status == STATUS_PLAYING && stepIndex >= stepCount() - 1) {
+            status = STATUS_PAUSED
+            fireStatus(status)
+        }
+    }
+
+    /** Whether more steps may still arrive — see [appendSteps]. */
+    @Synchronized
+    fun isOpen(): Boolean = open
+
+    /**
+     * **Narration has run out of steps but the plan is still being written** — park, do not finish.
+     *
+     * Asked by [NarrationController] at the point where it would otherwise disengage. The distinction is the
+     * whole of the streaming behaviour on the playback side: the end of the *known* steps is not the end of
+     * the plan, and treating it as one is how a reader gets "that's all" three steps into a nine-step
+     * walkthrough.
+     */
+    @Synchronized
+    fun awaitingSteps(): Boolean = open && stepIndex >= stepCount() - 1
 
     /** Whether a replaced walkthrough is retained for [restorePrevious] (Phase 7.5 #5 "Undo"). */
     @Synchronized
@@ -205,6 +346,10 @@ class Walkthrough {
         // arithmetic, not I/O.
         val revalidated = PlanLoader.resolve(prev.plan)
         resolved = revalidated
+        // Whatever it was while it was being written, the walkthrough coming *back* is finished: the agent
+        // that was streaming it has long since moved on, so leaving it open would park playback at its last
+        // step waiting for an append that cannot arrive.
+        open = false
         outline = PlanOutline.of(revalidated)
         language = prev.language
         stepIndex = prev.stepIndex.coerceIn(-1, revalidated.steps.size - 1)
@@ -278,7 +423,13 @@ class Walkthrough {
         if (target < 0 || target >= total) {
             // Nothing left to narrate, so a playing walkthrough becomes paused rather than sitting in
             // `playing` with no audio coming.
-            if (delta > 0 && status == STATUS_PLAYING) {
+            //
+            // **Unless the plan is still being written** (`Stream.md`), where sitting in `playing` with no
+            // audio coming is exactly right: the steps are on their way. Settling here would end the
+            // walkthrough three steps into a nine-step one, and pressing Play again would re-narrate the last
+            // step rather than continue. [closePlan] performs this same settle once it knows there is no
+            // more, so the only thing that changed is *when*.
+            if (delta > 0 && status == STATUS_PLAYING && !open) {
                 status = STATUS_PAUSED
                 fireStatus(status)
             }

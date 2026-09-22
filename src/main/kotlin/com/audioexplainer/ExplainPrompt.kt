@@ -304,8 +304,26 @@ object ExplainPrompt {
                     "degraded — READ IT: an [error] there means the user cannot see part of what you wrote " +
                     "(an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.",
             )
+            // **Streaming** (`Stream.md`), in the numbered tail, which is shared by both branches — the
+            // skill branch and the no-skill fallback differ only in item 2.
+            //
+            // So this is stated here AND in `explain-at-cursor.md`, which is the same arrangement the field-
+            // name rule and the `issues` rule already have two items below: the prompt is the instruction and
+            // is self-sufficient, the doc is the reference it points at for detail. Making this one the
+            // exception — doc-only, to avoid a second copy — would mean a failed skill install silently costs
+            // the reader the feature, with nothing on screen to say why their walkthrough went quiet for two
+            // minutes. The duplication is the price of the fallback working, and it is already the price
+            // paid three lines below.
             appendLine(
-                "4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. " +
+                "4. Better: stream it. Put \"streaming\":true on the set_plan, send it with only the first " +
+                    "2-3 steps, then append the rest as you write them with " +
+                    "{\"type\":\"append_steps\",\"steps\":[…]} and a final batch carrying \"final\":true " +
+                    "(send that even if its steps are empty). Same POST, same helper. The reader hears step 1 " +
+                    "while you are still writing step 6. ALL frames must be in the set_plan — append_steps " +
+                    "carries steps only — and a step once sent cannot be edited, replaced or re-ordered.",
+            )
+            appendLine(
+                "5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. " +
                     "Print only a one-line status when done.",
             )
 

@@ -21,7 +21,8 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
-4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
+4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
+5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
 === case: cursor-en-noskill ===
 You are running headless inside the "Audio Explainer" IDE plugin. The user right-clicked "Explain This (Audio)" in their editor to get an automatic, narrated walkthrough of the code at their cursor.
@@ -43,7 +44,8 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
-4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
+4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
+5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
 === case: cursor-de-skill ===
 You are running headless inside the "Audio Explainer" IDE plugin. The user right-clicked "Explain This (Audio)" in their editor to get an automatic, narrated walkthrough of the code at their cursor.
@@ -67,7 +69,8 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
-4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
+4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
+5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
 === case: cursor-de-noskill ===
 You are running headless inside the "Audio Explainer" IDE plugin. The user right-clicked "Explain This (Audio)" in their editor to get an automatic, narrated walkthrough of the code at their cursor.
@@ -91,7 +94,8 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
-4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
+4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
+5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
 === case: file-en-skill ===
 You are running headless inside the "Audio Explainer" IDE plugin. The user right-clicked "Explain This (Audio)" on a file in the Solution Explorer to get an automatic, narrated walkthrough of that whole file.
@@ -113,7 +117,8 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
-4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
+4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
+5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
 === case: file-en-noskill ===
 You are running headless inside the "Audio Explainer" IDE plugin. The user right-clicked "Explain This (Audio)" on a file in the Solution Explorer to get an automatic, narrated walkthrough of that whole file.
@@ -135,7 +140,8 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
-4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
+4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
+5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
 === case: file-de-skill ===
 You are running headless inside the "Audio Explainer" IDE plugin. The user right-clicked "Explain This (Audio)" on a file in the Solution Explorer to get an automatic, narrated walkthrough of that whole file.
@@ -159,7 +165,8 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
-4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
+4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
+5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
 === case: file-de-noskill ===
 You are running headless inside the "Audio Explainer" IDE plugin. The user right-clicked "Explain This (Audio)" on a file in the Solution Explorer to get an automatic, narrated walkthrough of that whole file.
@@ -183,7 +190,8 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
-4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
+4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
+5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
 === case: directory-en-skill ===
 You are running headless inside the "Audio Explainer" IDE plugin. The user right-clicked "Explain This (Audio)" on a folder / project (or several selected items) in the Solution Explorer to get an automatic, narrated tour of that code.
@@ -205,7 +213,8 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
-4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
+4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
+5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
 === case: directory-en-noskill ===
 You are running headless inside the "Audio Explainer" IDE plugin. The user right-clicked "Explain This (Audio)" on a folder / project (or several selected items) in the Solution Explorer to get an automatic, narrated tour of that code.
@@ -227,7 +236,8 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
-4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
+4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
+5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
 === case: directory-de-skill ===
 You are running headless inside the "Audio Explainer" IDE plugin. The user right-clicked "Explain This (Audio)" on a folder / project (or several selected items) in the Solution Explorer to get an automatic, narrated tour of that code.
@@ -251,7 +261,8 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
-4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
+4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
+5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
 === case: directory-de-noskill ===
 You are running headless inside the "Audio Explainer" IDE plugin. The user right-clicked "Explain This (Audio)" on a folder / project (or several selected items) in the Solution Explorer to get an automatic, narrated tour of that code.
@@ -275,7 +286,8 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
-4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
+4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
+5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
 === case: cursor-selection-en-skill ===
 You are running headless inside the "Audio Explainer" IDE plugin. The user right-clicked "Explain This (Audio)" in their editor to get an automatic, narrated walkthrough of the code at their cursor.
@@ -297,7 +309,8 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
-4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
+4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
+5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
 === case: cursor-selection-en-noskill ===
 You are running headless inside the "Audio Explainer" IDE plugin. The user right-clicked "Explain This (Audio)" in their editor to get an automatic, narrated walkthrough of the code at their cursor.
@@ -319,5 +332,6 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
-4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
+4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
+5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===

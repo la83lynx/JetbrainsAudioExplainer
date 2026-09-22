@@ -16,6 +16,12 @@ let state = {
 	/** The plan step showing, or -1. **The whole position model** since Phase 3 flattened it. */
 	currentStep: -1,
 	stepCount: 0,
+	/**
+	 * **The plan is still being written** — more steps will arrive (`Stream.md`). The only thing it changes
+	 * here is the counter, because `3/7` is a claim the plugin cannot make yet: 7 is what has arrived, not
+	 * what there will be.
+	 */
+	streaming: false,
 	/** What Now Playing shows for that step (a `StepView`), or null: title, explanation, ttsText, location. */
 	now: null,
 	status: "idle",
@@ -932,7 +938,11 @@ function renderHighlightProgress() {
 
 	const { current, total } = computeGlobalProgress();
 	if (total > 0) {
-		counter.textContent = `${current}/${total}`;
+		// `3/7+` while the plan streams: the denominator is how many steps have arrived, not how many there
+		// will be, and printing it bare would count down to a total that then grows. The `+` is also the only
+		// on-screen sign that a walkthrough waiting silently at its last step is waiting for more rather than
+		// finished — the progress bar below reads full either way.
+		counter.textContent = state.streaming ? `${current}/${total}+` : `${current}/${total}`;
 	} else {
 		counter.textContent = "";
 	}
@@ -1693,6 +1703,7 @@ window.addEventListener("message", (event) => {
 				outline: msg.outline || { scenes: [], scened: false, steps: 0 },
 				currentStep: typeof msg.currentStep === "number" ? msg.currentStep : -1,
 				stepCount: msg.stepCount || 0,
+				streaming: msg.streaming === true,
 				now: msg.now || null,
 				status: msg.status,
 				language: msg.language || "en",

@@ -10,6 +10,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.doubleOrNull
@@ -40,7 +41,8 @@ import java.util.concurrent.TimeUnit
  *   GET  /api/health        -> {"status":"ok"}
  *   GET  /api/state         -> {title,step,stepCount,status,totalFrames,totalScenes,frame,...}
  *   GET  /api/actions?timeout=<sec>  -> long-poll: 200 UserAction | 204 on timeout (1..120s, default 30)
- *   POST /api/message       -> {"ok":true,"frames":N,"steps":N,"issues":[...]}  (set_plan|goto|resume|stop|ping)
+ *   POST /api/message       -> {"ok":true,"frames":N,"steps":N,"issues":[...]}
+ *                              (set_plan|append_steps|goto|resume|stop|ping)
  *   POST /api/save          -> {"ok":true,"filePath":...}
  *   GET  /api/walkthroughs  -> {"walkthroughs":[{name,title,filePath}]}
  *   POST /api/load          -> {"ok":true,"title":...,"frames":N,"steps":N}
@@ -285,10 +287,24 @@ class ExplainerServer {
      * **`insert_after` / `replace_segment` / `remove_segments` are gone** (Phase 2 decision 10): they edited
      * a segment list that is no longer the source of truth, and a live plan is now changed by POSTing a new
      * `set_plan` — which the agent can do, because it is holding the whole plan already.
+     *
+     * `append_steps` is not a return of those: it is strictly additive, it appends to the plan itself rather
+     * than to a projection of it, and the plan is re-resolved whole afterwards (`Stream.md`). Nothing it does
+     * can move or rewrite a step the reader has already heard.
      */
     private fun dispatchAgentMessage(obj: JsonObject): ResolvedPlan? {
         when (obj["type"]!!.jsonPrimitive.content) {
             "set_plan" -> return walkthrough.setPlan(json.decodeFromJsonElement<Plan>(obj))
+            // **Append, and report only what the appended steps broke** — see [issuesSince]. A plan with no
+            // `set_plan` before it has nothing to extend; `appendSteps` answers null and the reply carries
+            // no counts, which is how the agent learns its first POST never landed.
+            "append_steps" -> {
+                val steps = obj["steps"]?.let { json.decodeFromJsonElement<List<Step>>(it) }.orEmpty()
+                val final = (obj["final"] as? JsonPrimitive)?.booleanOrNull ?: false
+                val before = walkthrough.getResolvedPlan()?.issues.orEmpty()
+                val after = walkthrough.appendSteps(steps, final) ?: return null
+                return ResolvedPlan(after.plan, after.frames, after.steps, issuesSince(before, after.issues))
+            }
             "goto" -> {
                 // `frameId` is the name since Phase 2; `segmentId` is still read as an alias, because an
                 // agent holding an old prompt spells it that way. Both resolve the same: the **first step**
@@ -304,6 +320,34 @@ class ExplainerServer {
             "stop" -> walkthrough.stop()
         }
         return null
+    }
+
+    /**
+     * **What the appended steps broke, and nothing else.**
+     *
+     * `append_steps` re-resolves the whole plan, so its issue list restates every problem the earlier steps
+     * already reported. Sending all of it back would bury the one new complaint among eight the agent has
+     * already read — and worse, invite it to "fix" a step the reader is already listening to, which under an
+     * append-only protocol it cannot do anyway.
+     *
+     * Matched on the rendered text rather than on position, because a re-resolution is free to emit the same
+     * issues in a different order. Identical repeats are matched one-for-one (a plan with two steps that make
+     * the same mistake keeps both), so a genuinely *new* occurrence of an old message still comes through.
+     */
+    private fun issuesSince(before: List<PlanIssue>, after: List<PlanIssue>): List<PlanIssue> {
+        if (before.isEmpty()) return after
+        val remaining = HashMap<String, Int>()
+        for (i in before) remaining.merge(i.toString(), 1, Int::plus)
+        return after.filter { issue ->
+            val key = issue.toString()
+            val left = remaining[key] ?: 0
+            if (left > 0) {
+                remaining[key] = left - 1
+                false
+            } else {
+                true
+            }
+        }
     }
 
     private fun handleSave(ex: HttpExchange) {
@@ -402,6 +446,11 @@ class ExplainerServer {
             // narration, which the loader reports (`plan.no-steps`) rather than rejects. Rejecting at the
             // wire level would turn a reportable authoring mistake into a 400 with no detail.
             "set_plan" -> isJsonString(obj["title"]) && obj["frames"] is JsonArray
+            // `steps` must be an array and it may be **empty**: the last batch of a streamed plan is often
+            // nothing but `{"final":true}`, and rejecting that would make closing a plan require inventing a
+            // step to hang it on. What is not optional is the array itself — a missing `steps` is a
+            // field-name mistake (the commonest failure in this protocol) and deserves the 400.
+            "append_steps" -> obj["steps"] is JsonArray
             "goto" -> isJsonNumber(obj["frameId"]) || isJsonNumber(obj["segmentId"]) ||
                 isJsonNumber(obj["stepIndex"])
             // `echo` is optional and free-form; a `ping` with none is still a valid liveness poke.
@@ -504,7 +553,8 @@ class ExplainerServer {
         private const val PORT_FILE = ".claude-explainer-port"
         private const val TOKEN_FILE = ".claude-explainer-token"
 
-        private val VALID_AGENT_MESSAGE_TYPES = setOf("set_plan", "goto", "resume", "stop", "ping")
+        private val VALID_AGENT_MESSAGE_TYPES =
+            setOf("set_plan", "append_steps", "goto", "resume", "stop", "ping")
 
         private fun generateToken(): String {
             val bytes = ByteArray(32)
