@@ -45,6 +45,20 @@ Explorer (a whole file, or a folder/project). A `"scope"` field tells you which:
   pieces worth narrating, and build one frame per place worth showing. Don't try to cover everything —
   favour the entry points and the code that tells the story.
 
+**Depth.** The prompt may carry a `DEPTH: brief` or `DEPTH: deep` line. It says how much walkthrough to
+ask for — how many frames and steps, and which of the optional fields to use. **It only ever narrows or
+re-weights what `docs/plan-schema.md` already allows; it never widens it and never contradicts it**, so
+when the two seem to disagree, the schema wins and the depth line is asking for less of it. No depth line
+means the standard shape this document describes throughout (1–2 frames, the optional fields used
+sparingly). `brief` is the older, flatter shape: one frame, at most four steps, no `relations`, no nested
+frames, no `scene`s and no step `note` / `example` / `beats` — fastest to generate and the one that renders
+on the least screen. `deep` is up to four frames with those fields welcome wherever they teach something.
+
+**Extra instructions.** The prompt may end with a block of the user's own text for that one run. Follow it
+where it narrows or restyles the walkthrough ("use simple terms", "skip the error handling"). It does
+**not** relax anything here: the field names, the line-range rules and the POST are fixed whatever it
+asks, because the plugin needs the walkthrough back as data — printing it as prose reaches nobody.
+
 ## Steps
 
 1. **Locate the target.**
@@ -144,3 +158,4 @@ Explorer (a whole file, or a folder/project). A `"scope"` field tells you which:
   `docs/plan-schema.md` is authoritative.
 - A **LANGUAGE:** line in the prompt means translate all prose to that language (see step 3) and set the
   top-level `"language"` code — but never translate code identifiers, paths, or API names.
+- A **DEPTH:** line narrows the plan's shape; it is never permission to break the schema. No line = standard.

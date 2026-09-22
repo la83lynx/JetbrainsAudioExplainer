@@ -464,6 +464,13 @@ object Languages {
         return "$DEFAULT_EXPLAIN_LABEL · $badge"
     }
 
+    /**
+     * The "with…" sibling of [explainActionText] — the same label plus an English tail, so the two entries
+     * read as one pair whatever the explanation language is. The tail stays English on purpose: it names a
+     * dialog whose own controls are English, and a half-translated menu item is worse than an English one.
+     */
+    fun explainWithActionText(code: String?): String = explainActionText(code) + " with…"
+
     // ── label derivation ──
 
     private fun voices(vararg ids: String): List<Voice> = ids.map { Voice(it, labelFor(it)) }

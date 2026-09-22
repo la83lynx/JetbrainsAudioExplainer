@@ -34,6 +34,21 @@ data class ExplainRequest(
     /** Additional selected files/folders (project-relative when possible) for a multi-selection; the
      *  primary target stays [file]. Empty for a single-target or cursor request. */
     val extraPaths: List<String> = emptyList(),
+    /**
+     * Per-run `claude --effort` override from the "Explain This with…" dialog, or null to take the saved
+     * [AudioExplainerSettings.State.explainEffort]. **Null for the plain menu entry**, which is what keeps
+     * the one-click path on exactly today's arguments.
+     */
+    val effort: String? = null,
+    /** Per-run depth override, or null to take the saved [AudioExplainerSettings.State.explainDepth]. */
+    val depth: String? = null,
+    /**
+     * Free text the user typed for this one run, appended to the prompt verbatim as its own trailing block
+     * (see [ExplainPrompt.buildPrompt]). Null/blank for the plain entry.
+     *
+     * A one-off never becomes the default: only the *history* of these is persisted, never the value.
+     */
+    val extraInstructions: String? = null,
 ) {
     /** Bare file name, for progress/notification text. */
     val displayName: String

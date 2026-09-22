@@ -17,15 +17,10 @@ import com.intellij.openapi.util.Key
 import com.intellij.openapi.util.text.StringUtil
 import com.intellij.openapi.wm.ToolWindowManager
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.add
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonArray
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
@@ -43,6 +38,11 @@ import java.util.concurrent.atomic.AtomicReference
  *
  * Runs on the background thread of [ExplainThisAction]'s `Task.Backgroundable`, streaming Claude's
  * `stream-json` events into the progress indicator and honouring cancellation.
+ *
+ * **The argv and the prompt are built in [ExplainPrompt]**, which is pure string building and therefore
+ * measurable by `probes/EffortProbe.java`. What stays here is everything that needs an IDE. The three
+ * generation knobs — effort, model, depth — are resolved in exactly one place, [explain], as
+ * `request.x ?: state.x`.
  */
 @Service(Service.Level.APP)
 class ClaudeExplainer {
@@ -73,9 +73,18 @@ class ClaudeExplainer {
 
         val workDir = request.projectBasePath
             ?: request.absolutePath.substringBeforeLast('/', "").ifEmpty { System.getProperty("user.home") }
+        // **The one resolution point** (Effort.md): a per-run override from the "Explain This with…" dialog
+        // wins, and everything it leaves null falls back to the saved default. The plain menu entry sends
+        // nulls for all three, so it takes exactly the saved settings — which is what keeps its path the
+        // one every earlier round judged.
+        val state = AudioExplainerSettings.getInstance().state
+        val effort = request.effort ?: state.explainEffort
+        val model = state.explainModel // no per-run model control — see Effort.md's dialog table
+        val depth = request.depth ?: state.explainDepth
+        val prompt = ExplainPrompt.buildPrompt(request, skillDir, resolveLanguage(), depth, request.extraInstructions)
         val cmd = try {
             GeneralCommandLine(claudeExe.toString())
-                .withParameters(buildArgs(buildPrompt(request, skillDir)))
+                .withParameters(ExplainPrompt.buildArgs(prompt, effort, model))
                 .withWorkDirectory(workDir)
                 .withCharset(StandardCharsets.UTF_8)
                 .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
@@ -100,208 +109,20 @@ class ClaudeExplainer {
         reportResult(project, request, result, tracker)
     }
 
-    // ── Command / prompt construction ──────────────────────────────────────────
-
-    private fun buildArgs(prompt: String): List<String> = buildList {
-        add("-p"); add(prompt)
-        add("--output-format"); add("stream-json")
-        add("--verbose") // required alongside stream-json in print mode
-        // Scoped allow-list: only these tools may run without an (impossible, headless) prompt.
-        // Bash is intentionally command-unrestricted so the POST works cross-platform (curl on any
-        // OS, powershell on Windows, the .sh helper elsewhere) — tighten ALLOWED_TOOLS to narrow it.
-        add("--allowedTools"); add(ALLOWED_TOOLS)
-    }
-
-    private fun buildPrompt(request: ExplainRequest, skillDir: Path?): String {
-        val skillPath = skillDir?.toString()?.replace('\\', '/')
+    /**
+     * The walkthrough language for a new run, warmed if need be.
+     *
+     * A Windows SAPI-only language (Phase L7) exists only after voice discovery has run, so this warms it
+     * — cached, i.e. instant once discovered — and [Languages.byCode] can then answer with its display
+     * name and autonym on the first Explain This of a session rather than the second.
+     */
+    private fun resolveLanguage(): Language {
         val langCode = AudioExplainerSettings.getInstance().state.explanationLanguage
-        // If the configured language is a Windows SAPI-only one (Phase L7), it exists only after voice
-        // discovery has run — warm it so [Languages.byCode] resolves its display name/autonym for the
-        // prompt even on the first Explain This of a session. Cached → instant when already discovered.
         if (langCode != Languages.DEFAULT_CODE && Languages.byCode(langCode).code != langCode) {
             runCatching { TtsService.getInstance().sapiVoices(refresh = false) }
         }
-        val lang = Languages.byCode(langCode)
-        // Scope-specific framing (Phase 5): the editor cursor flow vs. a file / folder-or-project chosen in
-        // the Solution Explorer. The set_plan schema is identical — only what Claude is asked to cover differs.
-        val intro = when (request.scope) {
-            ExplainScope.CURSOR ->
-                "The user right-clicked \"Explain This (Audio)\" in their editor to get an automatic, " +
-                    "narrated walkthrough of the code at their cursor."
-            ExplainScope.FILE ->
-                "The user right-clicked \"Explain This (Audio)\" on a file in the Solution Explorer to get " +
-                    "an automatic, narrated walkthrough of that whole file."
-            ExplainScope.DIRECTORY ->
-                "The user right-clicked \"Explain This (Audio)\" on a folder / project (or several selected " +
-                    "items) in the Solution Explorer to get an automatic, narrated tour of that code."
-        }
-        val contextLabel = when (request.scope) {
-            ExplainScope.CURSOR -> "Cursor context"
-            ExplainScope.FILE -> "Target file"
-            ExplainScope.DIRECTORY -> "Target folder / project"
-        }
-        val step1 = when (request.scope) {
-            ExplainScope.CURSOR ->
-                "1. Read in/around the cursor and expand to the enclosing method/class — YOU do the symbol resolution."
-            ExplainScope.FILE ->
-                "1. Read the whole target file and pick the parts worth narrating — its key types, methods, and flow."
-            ExplainScope.DIRECTORY ->
-                "1. Explore the listed folder/project path(s) — read the important files and pick the pieces " +
-                    "worth a guided tour. Keep it lean; don't try to cover every file."
-        }
-        return buildString {
-            appendLine(
-                "You are running headless inside the \"Audio Explainer\" IDE plugin. $intro",
-            )
-            appendLine()
-            appendLine(
-                "This is a NON-INTERACTIVE run: there is no human to answer questions. Do NOT ask anything, " +
-                    "do NOT wait — act autonomously and finish in one pass.",
-            )
-            appendLine()
-            if (lang.code != Languages.DEFAULT_CODE) {
-                appendLine(
-                    "LANGUAGE: Generate the walkthrough in ${lang.displayName} (${lang.autonym}). Write the " +
-                        "`title`, every frame `title` and `explanation`, and every step `ttsText`, " +
-                        "`explanation` and `note` in ${lang.displayName}. Keep code identifiers, file paths, and API names " +
-                        "verbatim (do NOT translate code) — a beat's `token` and a frame's `callToken` especially, since " +
-                        "both must match the source text exactly to resolve, and `example`, which is code. The same split " +
-                        "applies to a frame's `relations`: their `note` is prose, their `token` and `symbol` are code. " +
-                        "You MUST put \"language\":\"${lang.code}\" at the top " +
-                        "level of the `set_plan` JSON.",
-                )
-                appendLine()
-            }
-            appendLine("$contextLabel (JSON):")
-            appendLine(buildContextJson(request))
-            appendLine()
-            if (skillPath != null) {
-                appendLine("Follow the headless flow documented here (read it first):")
-                appendLine("  $skillPath/docs/explain-at-cursor.md")
-                appendLine("The `set_plan` schema is documented ONCE, authoritatively — read it before writing the plan:")
-                appendLine("  $skillPath/docs/plan-schema.md")
-                appendLine("The helpers that POST the plan are in $skillPath/scripts/ (explainer.ps1 on Windows, explainer.sh elsewhere).")
-                appendLine()
-            }
-            appendLine("What to do:")
-            appendLine(step1)
-            if (skillPath != null) {
-                appendLine(
-                    "2. Build a lean `set_plan` (usually 1-2 frames) with dense, pointer-style steps and good " +
-                        "plain-text `ttsText`, following docs/plan-schema.md exactly. A plan is `frames` (each one a " +
-                        "file plus the `keep` ranges visible in it — header rows as \"context\", the member itself as " +
-                        "\"focus\") plus `steps` (the narration, in order, each naming its frame and the `ranges` it " +
-                        "lights). EVERY line a step lights must be inside its frame's `keep`. Where a one-line aside " +
-                        "next to the code would genuinely help (a constraint, a gotcha, the reason behind a magic " +
-                        "number), add an optional one-sentence `note` to that step — sparingly, not on every one. " +
-                        "Where a step is really about ONE identifier, add an optional `beats` entry — " +
-                        "{\"line\":N,\"token\":\"…\"} with the name copied verbatim from THAT line, so the plugin " +
-                        "can pulse it — again sparingly. Where a concrete " +
-                        "case would clarify a tricky transformation or a surprising result, add an optional " +
-                        "ONE-LINE `example` (\"Parse(\\\"2024-01\\\") → DateOnly(2024, 1, 1)\") — one line only, and " +
-                        "only where it teaches something the code doesn't show. Where two places are genuinely " +
-                        "linked — a value produced on one line and consumed on another, a call whose target is in " +
-                        "another file — add an optional frame-level `relations` entry and the plugin will draw the " +
-                        "connection; 2-3 per frame at most, and anchor an endpoint inside the step it belongs to. " +
-                        "Declare a link ONCE: a cross-file one is drawn as a matched pair of portals, one in each " +
-                        "place, so give its far end both `file` and `line`. " +
-                        "Every plan renders as a tree of code — do not send `view` at all. When the explanation IS " +
-                        "a caller-callee chain, give each nested frame `parent`, `callLine` and `callToken` (the " +
-                        "call line must be a line the parent keeps). When it walks over several unrelated places " +
-                        "in turn, group the frames into `scene`s: frames sharing a `scene` are on screen together " +
-                        "and a step in another scene replaces them, so a long walkthrough keeps a handful of files " +
-                        "visible rather than all of them. A `parent` must be in the same `scene`.",
-                )
-            } else {
-                // No skill dir on disk, so docs/plan-schema.md is unreachable and the agent has nothing to
-                // read. This inline copy is the FALLBACK mirror only — keep it in sync with that doc, which
-                // stays the source of truth for every other caller.
-                appendLine(
-                    "2. Build a lean `set_plan` (usually 1-2 frames) with dense, pointer-style steps and good " +
-                        "plain-text `ttsText`. Schema (1-based, inclusive line ranges; absolute file paths):",
-                )
-                appendLine(
-                    "   {\"type\":\"set_plan\",\"title\":\"…\",\"language\":\"${lang.code}\"," +
-                        "\"frames\":[{\"id\":0,\"file\":\"…\",\"title\":\"…\",\"explanation\":\"…\",\"scene\":0," +
-                        "\"keep\":[{\"start\":N,\"end\":N,\"role\":\"context\"},{\"start\":N,\"end\":N,\"role\":\"focus\"}]," +
-                        "\"relations\":[{\"kind\":\"flow\",\"from\":{\"line\":N,\"token\":\"…\"},\"to\":{\"line\":N,\"token\":\"…\"},\"note\":\"…\"}]}]," +
-                        "\"steps\":[{\"frame\":0,\"ranges\":[{\"start\":N,\"end\":N}],\"ttsText\":\"…\",\"explanation\":\"…\"," +
-                        "\"note\":\"…\",\"example\":\"…\",\"beats\":[{\"line\":N,\"token\":\"…\"}]}]}",
-                )
-                appendLine(
-                    "   A frame is ONE file plus the `keep` ranges visible in it — everything else is folded away. List " +
-                        "the class/method header rows yourself as \"context\" ranges (nothing derives them) and the " +
-                        "member the frame is about as the one \"focus\" range. EVERY line a step lights must be inside " +
-                        "its frame's `keep`, or it highlights a fold placeholder.",
-                )
-                appendLine(
-                    "   Step `note` is optional: ONE plain-text sentence, drawn as a callout box beside the code. " +
-                        "Use it only where a margin aside helps; omit it otherwise.",
-                )
-                appendLine(
-                    "   Step `example` is optional: ONE line showing the code in action with concrete values " +
-                        "(\"Parse(\\\"2024-01\\\") → DateOnly(2024, 1, 1)\"), drawn under the note. One line is a hard " +
-                        "limit — no fences, no multi-statement snippets. Omit it unless a concrete case clarifies.",
-                )
-                appendLine(
-                    "   Step `beats` is optional: [{\"line\":N,\"token\":\"…\"}], the ONE identifier that step is " +
-                        "about, copied verbatim from that line (the plugin pulses it). The line must be one the " +
-                        "step lights. Omit `beats` when there is no single focal name.",
-                )
-                appendLine(
-                    "   Frame `relations` is optional: each entry links two places — `kind` \"flow\" (A feeds B) or " +
-                        "\"backforth\", and `from`/`to` each {\"line\":N,\"token\":\"…\"}, or {\"file\":\"…\",\"line\":N,\"token\":\"…\"} " +
-                        "for somewhere in another file, plus a short optional `note`. The plugin draws an arrow when both " +
-                        "ends are lines of this file, and otherwise a matched pair of portals — one at each end, " +
-                        "so give a cross-file end a `file`, a `line` AND a `token`. 2-3 per frame " +
-                        "at most, and one endpoint MUST be inside the step the relation belongs to or it is never shown.",
-                )
-            }
-            appendLine(
-                "   Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/" +
-                    "startLine/endLine/label/subHighlights.",
-            )
-            appendLine("   The top-level \"language\" is the walkthrough's language code (\"en\" if English).")
-            appendLine(
-                "3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and " +
-                    "~/.claude-explainer-token). Use a skill helper script, or curl directly. A {\"ok\":true} reply = " +
-                    "success. The reply also carries an `issues` array whenever the plan was partly dropped or " +
-                    "degraded — READ IT: an [error] there means the user cannot see part of what you wrote " +
-                    "(an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.",
-            )
-            appendLine(
-                "4. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. " +
-                    "Print only a one-line status when done.",
-            )
-        }
+        return Languages.byCode(langCode)
     }
-
-    private fun buildContextJson(r: ExplainRequest): String = buildJsonObject {
-        put("file", r.file)
-        put("absolutePath", r.absolutePath)
-        if (r.scope == ExplainScope.CURSOR) {
-            put("caretLine", r.caretLine)
-            val sel = r.selectionText
-            if (sel != null) {
-                // Cap the inlined selection; Claude reads the file itself for anything longer.
-                put("selectionText", StringUtil.shortenTextWithEllipsis(sel, MAX_SELECTION_CHARS, 0))
-                put("selectionStartLine", r.selectionStartLine ?: r.caretLine)
-                put("selectionEndLine", r.selectionEndLine ?: r.caretLine)
-            } else {
-                put("selectionText", JsonNull)
-            }
-        } else {
-            // Solution-Explorer scope: the target is the whole file/folder (plus any extra selected items).
-            put("scope", if (r.scope == ExplainScope.DIRECTORY) "directory" else "file")
-            if (r.extraPaths.isNotEmpty()) {
-                putJsonArray("targets") {
-                    add(r.file)
-                    r.extraPaths.forEach { add(it) }
-                }
-            }
-        }
-        r.projectBasePath?.let { put("projectRoot", it) }
-    }.toString()
 
     // ── Process execution ────────────────────────────────────────────────────
 
@@ -475,20 +296,8 @@ class ClaudeExplainer {
      * Find `claude` robustly: an explicit settings path, then PATH (trying `.exe`/`.cmd`/… on Windows),
      * then common install dirs directly (so a narrow IDE PATH still resolves). See [ExecutableFinder].
      */
-    private fun findClaudeExecutable(): Path? {
-        val home = Path.of(System.getProperty("user.home"))
-        return ExecutableFinder.find(
-            "claude",
-            AudioExplainerSettings.getInstance().state.claudeExecutablePath,
-            listOf(
-                home.resolve(".local/bin"),
-                home.resolve(".claude/local"),
-                home.resolve("AppData/Roaming/npm"),
-                home.resolve("AppData/Local/Programs/claude"),
-                home.resolve("bin"),
-            ),
-        )
-    }
+    private fun findClaudeExecutable(): Path? =
+        ExecutableFinder.findClaude(AudioExplainerSettings.getInstance().state.claudeExecutablePath)
 
     private fun notify(project: Project, type: NotificationType, title: String, content: String) {
         ApplicationManager.getApplication().invokeLater {
@@ -508,10 +317,6 @@ class ClaudeExplainer {
     companion object {
         const val NOTIFICATION_GROUP = "Audio Explainer"
         private const val TOOL_WINDOW_ID = "Audio Explainer"
-        private const val MAX_SELECTION_CHARS = 4000
-
-        /** Enumerated tool allow-list for the headless run (see [buildArgs]). */
-        private const val ALLOWED_TOOLS = "Read Grep Glob Task Write TodoWrite Bash"
 
         fun getInstance(): ClaudeExplainer = service()
     }

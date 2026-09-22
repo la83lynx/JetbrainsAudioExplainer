@@ -311,6 +311,46 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
          */
         @JvmField var ttsSetupPrompted: Boolean = false
 
+        // ── Explanation generation (Effort.md) ────────────────────
+
+        /**
+         * `claude --effort` for an Explain This run: "" (inherit the CLI's own default), or one of
+         * [EFFORT_LEVELS].
+         *
+         * **It ships `medium`, and that is the one place this plugin deliberately overrides a setting the
+         * user made elsewhere.** Blank-means-inherit is the safe default for [explainModel]; here it is
+         * precisely the bug the speed round found — a `~/.claude/settings.json` `effortLevel` chosen for
+         * interactive coding was costing a walkthrough four minutes where `medium` takes two and produces
+         * the same plan shape (Speed.md's table: 255s vs 118s). Blank stays reachable for the two people
+         * who want it.
+         */
+        @JvmField var explainEffort: String = EFFORT_MEDIUM
+
+        /**
+         * `claude --model` alias — blank (the default) leaves the user's own configured model alone, which
+         * is almost always the right one. [MODEL_ALIASES] are the offered values; any full model name the
+         * CLI accepts also works if it is put here by hand.
+         */
+        @JvmField var explainModel: String = ""
+
+        /**
+         * How much walkthrough to ask for: [DEPTH_BRIEF], [DEPTH_STANDARD] or [DEPTH_DEEP]. Prompt text
+         * only — nothing else in the pipeline reads it, and it narrows what `docs/plan-schema.md` allows
+         * rather than adding to it. **Depth is the knob that buys back wall-clock time** (output volume is
+         * the best single predictor of a run's length); effort mostly buys correctness.
+         */
+        @JvmField var explainDepth: String = DEPTH_STANDARD
+
+        /**
+         * The last [MAX_INSTRUCTION_HISTORY] non-empty "additional instructions" typed into the per-run
+         * dialog, most recent first.
+         *
+         * **The one thing that dialog persists.** A per-run effort or depth must never become the saved
+         * default — that is how a reader ends up wondering why every explanation went terse — but
+         * retyping "use simple terms" on every run is the friction the dialog exists to remove.
+         */
+        @JvmField var explainInstructionHistory: MutableList<String> = mutableListOf()
+
         // ── Executable overrides (advanced) ─────────────────────────────────────
 
         /**
@@ -325,6 +365,19 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
 
     /** Speed as a multiplier for the TTS request (`ttsSpeedPercent` / 100). */
     fun speed(): Double = (myState.ttsSpeedPercent.coerceIn(25, 400)) / 100.0
+
+    /**
+     * Push [text] onto the per-run instruction history (most recent first, de-duplicated, capped at
+     * [MAX_INSTRUCTION_HISTORY]). Blank input is ignored, so an empty box never evicts a remembered entry.
+     */
+    fun rememberInstruction(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        val next = ArrayList<String>(MAX_INSTRUCTION_HISTORY)
+        next += trimmed
+        myState.explainInstructionHistory.filterTo(next) { it != trimmed }
+        myState.explainInstructionHistory = next.take(MAX_INSTRUCTION_HISTORY).toMutableList()
+    }
 
     /** The robotic-voice parameter profile for a variant name (`ae_m` → male, anything else → female). */
     fun espeakProfile(variant: String?): EspeakProfile =
@@ -385,6 +438,26 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         const val DEF_TOKEN_FLASH_MS = 700
         const val DEF_ACTIVE_GLOW_COLOR = "FFFFFF"
         const val DEF_ACCENT_COLOR = "FFBE3C"
+
+        // Explanation generation (Effort.md). `--effort` exists from CLI 2.1.274; `--model` takes an alias.
+        const val EFFORT_LOW = "low"
+        const val EFFORT_MEDIUM = "medium"
+        const val EFFORT_HIGH = "high"
+        const val EFFORT_XHIGH = "xhigh"
+        const val EFFORT_MAX = "max"
+
+        /** The five `--effort` stops, in order. The per-run slider's stops are these, by index. */
+        val EFFORT_LEVELS = listOf(EFFORT_LOW, EFFORT_MEDIUM, EFFORT_HIGH, EFFORT_XHIGH, EFFORT_MAX)
+
+        const val DEPTH_BRIEF = "brief"
+        const val DEPTH_STANDARD = "standard"
+        const val DEPTH_DEEP = "deep"
+        val DEPTH_LEVELS = listOf(DEPTH_BRIEF, DEPTH_STANDARD, DEPTH_DEEP)
+
+        /** `--model` aliases offered in the combo; blank (inherit) is the first item and is not in here. */
+        val MODEL_ALIASES = listOf("fable", "opus", "sonnet")
+
+        const val MAX_INSTRUCTION_HISTORY = 8
 
         // TTS defaults (Phase 7)
         const val ENGINE_KOKORO = "kokoro"

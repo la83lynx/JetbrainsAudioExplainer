@@ -37,6 +37,28 @@ object ExecutableFinder {
         return null
     }
 
+    /**
+     * The `claude` CLI: [overridePath] (the settings field), then `PATH`, then the install directories a
+     * narrow IDE environment tends to miss.
+     *
+     * **One list, two callers** — [ClaudeExplainer] runs it and [ExplainerDiagnostics] reports on it, and a
+     * diagnostic that looked in different places from the thing it diagnoses would be worse than none.
+     */
+    fun findClaude(overridePath: String?): Path? {
+        val home = Path.of(System.getProperty("user.home"))
+        return find(
+            "claude",
+            overridePath,
+            listOf(
+                home.resolve(".local/bin"),
+                home.resolve(".claude/local"),
+                home.resolve("AppData/Roaming/npm"),
+                home.resolve("AppData/Local/Programs/claude"),
+                home.resolve("bin"),
+            ),
+        )
+    }
+
     private fun resolveInDir(dir: Path, name: String): Path? {
         for (candidate in withExtensions(name)) {
             val p = runCatching { dir.resolve(candidate) }.getOrNull() ?: continue

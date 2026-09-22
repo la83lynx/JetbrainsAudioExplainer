@@ -1,6 +1,7 @@
 # `probes/` — three-second checks on the pure parts
 
-Five `javac` probes — one over the schema layer, one over the token anchor, and three **benches** that paint
+Six `javac` probes — one over the schema layer, one over the token anchor, one over the prompt and the argv,
+and three **benches** that paint
 production drawing into PNGs (the links, and the two settings previews) — one `node` probe over the webview's
 playback clock, and one Python gate over the repo itself. They exist because `PlanLoader`, `PlanOutline`,
 `WalkthroughStorage`, `TreeStyle` and the renderer's own `findNth` are pure arithmetic over line numbers, paths and strings — no VFS, no documents, no EDT — so every question about them is answerable
@@ -13,6 +14,12 @@ probes `import com.audioexplainer.*` and call the real `PlanLoader` / `PlanOutli
 derivation; the probe cannot disagree with it, only report what it does. `TokenProbe` reaches a **private**
 method reflectively for the same reason: what it measures is the production method, not a copy widened to be
 measurable — and a rename breaks it loudly instead of leaving it agreeing with something that moved.
+
+`EffortProbe` adds a second kind of instrument to the shelf: a **golden file**. `probes/prompt-standard.txt`
+is the generated prompt frozen at the commit before depth existed, and the probe compares against it byte for
+byte. That is not an invariant anybody derived — it is a record of what shipped, kept because the prompt is
+the part an upgrade can change for every existing user without anything looking different. Regenerating it
+(`java EffortProbe --freeze`) is therefore a deliberate act, not a way to make a red probe green.
 
 They also follow the standing rule that **every "X is absent" assertion needs a case where X is present**:
 each control (no cycle reported, no depth issue, budget not exceeded) sits beside a case that does report it,
@@ -37,6 +44,8 @@ reading. **Round 9's two**: a fanned token end's **stem** measured for all 4 fan
 | `TreeBench.java` | **The Code-tree settings preview.** `TreePreview` exists so a reader sees what a dropdown does instead of reading a paragraph, and that promise has a testable form: **every value of every Code-tree dropdown must change the picture**. Paints leader × 3, chevron × 4, path × 3, de-emphasis × 4 and elision × 2, asserts each marks the canvas and that no two rasters are identical — so a combo wired to nothing, or a mode that silently paints like its neighbour, fails here rather than looking like "I can't tell the difference" in a four-minute sandbox launch. Two **controls** keep it honest: step-fold and the height ceiling are a behaviour and a sizing rule the miniature does not stage, and must leave the frame byte-identical. PNGs beside the assertions, one per value |
 | `AppearanceBench.java` | **The Appearance settings preview**, same contract over nineteen controls: frame style, opacity, callout tint, radius, bar width, leader, dock, text scale, accent, glow, both dims, the non-active tint, the gutter, the overview mark and the four arrow settings. The control is a setting from *outside* Appearance, which must leave the frame untouched. The one thing it cannot borrow is an `EditorColorsScheme` — a platform interface with no headless implementation — so it poses one as a `java.lang.reflect.Proxy` answering the four things `SpotlightRenderer.palette` and `calloutFont` actually ask of a scheme; every blend, clamp and mix downstream is still production's |
 | `ClockProbe.js` | **The webview's playback clock**, which had no instrument at all until B1b needed one. `node probes/ClockProbe.js`, no build step. It **extracts** `scheduleSlot` / `recordChunk` / `stepElapsed` / `currentWordFor` / `sentenceForWord` / `beatKey` / `sentenceForBeat` / `fireDueBeats` out of `sidebar.js` by name and runs them in a `vm` context — a copy would pass forever while the shipped file drifted, and a rename raises instead of quietly testing nothing. Two clocks live in that file and they disagree only when playback starves: a 1.5 s underrun is measured leaving the cursor **three words of a six-word sentence** ahead of the voice, with the un-corrected elapsed kept as the control and a healthy stream asserted to bank no correction at all. Then the beats: a phrase resolving to the piece the splitter made out of `e.g.` (where a sentence *number* lands wrong), a straddling phrase left unresolved mid-stream and resolved to the sentence it starts in once every sentence is known, the no-`stext` fallback, firing once and only at its sentence's start, and two beats in one sentence collapsing to one pulse — with the same two phrases in *different* sentences as the control. Shares `beat-normalize.tsv` with `PlanProbe` |
+| `EffortProbe.java` | **The two generation knobs and the per-run free text** (`Effort.md`), asserted on the exact strings handed to `claude`. It calls the real `ExplainPrompt` — which exists as its own object *because* the prompt and the argv are a pure function of the request, the skill dir, the language and the three knobs, so 3 scopes × 2 skill states × 3 depths build in milliseconds with no IDE. **The assertion that matters is the golden one**: all 14 Standard-depth prompts (every scope, both languages, with and without the skill installed) byte-identical to `prompt-standard.txt`, so a user who never opens the new controls is provably asked for exactly what they were asked for before. The argv deliberately is *not* identical — it gains `--effort medium`, which is the fix. Then: blank effort/model adding no flags at all against each of the 5 levels and 3 aliases adding exactly one pair; Brief carrying **none** of the six optional-field asks with Standard and Deep carrying all six as its controls, in the skill branch **and** in the no-skill fallback mirror (where Brief silently meaning Standard would be a defect with no symptom); the per-run override beating the saved value and a null falling back to it; and the free text appearing once, verbatim, after the numbered steps, carrying the sentence that keeps the `set_plan` contract fixed, with an empty and a whitespace-only box as controls. **Plus the diagnostics**: every check names a fix (a static property of the check, so a row cannot arrive without one), the OS filter *omitting* the inapplicable checks rather than passing them — both directions, with "neither set is the whole catalogue" as the control — the version floor's component-wise comparison (`2.1.27` is below `2.1.274`), and one real run on this machine asserted for *shape* rather than verdict: whether `claude` is installed here is not something a probe gets an opinion about, so the tallies are printed and the contract is asserted |
+| `prompt-standard.txt` | Not a probe — **the prompt as it shipped before depth existed**, 14 cases, frozen. Read only by `EffortProbe`. See the note above on why regenerating it is a decision |
 | `beat-normalize.tsv` | Not a probe — **the one copy of the beat-matching rule**, read by `PlanProbe` (Kotlin's `Beat.normalize`) and `ClockProbe` (the webview's `beatKey`). A phrase the loader accepts and the webview never matches is the only failure in B1b with no symptom, so the two implementations are asserted against one table instead of against each other |
 | `gates.py` | The build gates, none of which a green compile implies: no `noCompiledSerializer` stub in `build/classes` (dropping `@Serializable` **compiles** and throws at runtime), every `plugin.xml` class reference resolving to a compiled class, every resource XML parsing, no mixed line endings, the skill manifest matching disk, `VERSION` bumped, markdown fences balanced, and **one destination for a plan** — the tree controller built once and registered once, with no code naming the deleted `view` field (comments may, and do: the record of why it went is the thing worth keeping). `python probes/gates.py` from the repo root, after `compileKotlin` |
 
@@ -60,6 +69,7 @@ printf -- '-cp\n"%s"\n' "$CP" > build/probe/cp.txt
 javac -nowarn "@build/probe/cp.txt" -d build/probe probes/*.java
 java "@build/probe/cp.txt" PlanProbe
 java "@build/probe/cp.txt" TokenProbe
+java "@build/probe/cp.txt" EffortProbe          # from the repo root: it reads probes/prompt-standard.txt
 node probes/ClockProbe.js                # no classpath, no build — it reads sidebar.js directly
 java -Dide.ui.scale=1.0 -Dsun.java2d.uiScale.enabled=false "@build/probe/cp.txt" LinkBench build/probe/pngs
 java -Dide.ui.scale=1.0 -Dsun.java2d.uiScale.enabled=false "@build/probe/cp.txt" TreeBench build/probe/tree
@@ -102,7 +112,13 @@ Two notes that cost a few minutes each:
 - **Git Bash mangles a `;`-separated `-cp`** when it is passed straight through. Write the whole `-cp "…"`
   line into a file and run `java "@argfile"`, or set `MSYS_NO_PATHCONV=1`.
 
+**`EffortProbe` shells out, and only at the end.** Its last section runs the real diagnostics, which means
+`claude --version`, one `powershell -File` and one loopback POST through the installed `explainer.ps1`. The
+POST is a `ping`, which is side-effect-free by design — `set_plan` would have replaced whatever walkthrough
+you have loaded — so unlike `encoding_probe.py` it is safe to run against a live sandbox.
+
 Expected: `137 pass / 0 fail` from `PlanProbe`, `18 pass / 0 fail` from `TokenProbe`,
+`49 pass / 0 fail` from `EffortProbe`,
 `217 pass / 0 fail` from `LinkBench`, and `44 pass / 0 fail` from `ClockProbe`.
 
 `LinkBench` also prints a count of ends the room check rejected, and it is **0** at the mock node widths it

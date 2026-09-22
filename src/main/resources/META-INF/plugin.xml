@@ -51,6 +51,17 @@
             <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
         </action>
 
+        <!-- The per-run overrides (Effort.md). Declared AFTER the plain entry and anchored "last" in the
+             same two groups, so it lands directly under it: the common case stays one click and does not
+             move, and the dialog is the thing you go looking for. -->
+        <action id="AudioExplainer.ExplainThisWith"
+                class="com.audioexplainer.ExplainThisWithAction"
+                text="Explain This (Audio) with&#8230;"
+                description="Audio-explain with a per-run effort, depth and extra instructions">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        </action>
+
         <group id="AudioExplainer.ToolsMenu" text="Audio Explainer" popup="true">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
             <action id="AudioExplainer.SetupTts"

@@ -40,7 +40,7 @@ import java.util.concurrent.TimeUnit
  *   GET  /api/health        -> {"status":"ok"}
  *   GET  /api/state         -> {title,step,stepCount,status,totalFrames,totalScenes,frame,...}
  *   GET  /api/actions?timeout=<sec>  -> long-poll: 200 UserAction | 204 on timeout (1..120s, default 30)
- *   POST /api/message       -> {"ok":true,"frames":N,"steps":N,"issues":[...]}  (set_plan|goto|resume|stop)
+ *   POST /api/message       -> {"ok":true,"frames":N,"steps":N,"issues":[...]}  (set_plan|goto|resume|stop|ping)
  *   POST /api/save          -> {"ok":true,"filePath":...}
  *   GET  /api/walkthroughs  -> {"walkthroughs":[{name,title,filePath}]}
  *   POST /api/load          -> {"ok":true,"title":...,"frames":N,"steps":N}
@@ -68,6 +68,20 @@ class ExplainerServer {
 
     @Volatile
     private var storage: WalkthroughStorage? = null
+
+    /**
+     * The `echo` string of the last `ping`, exactly as this process decoded it off the wire.
+     *
+     * Read by [ExplainerDiagnostics]' round-trip check, and it is read here rather than out of the helper's
+     * stdout on purpose: a reply printed by `explainer.ps1` goes through the console's output encoding on
+     * the way back, so comparing *that* would fail on a correct POST whose printing was lossy. What the
+     * check needs to know is what arrived.
+     */
+    @Volatile
+    private var lastPing: String? = null
+
+    /** See [lastPing]. Null until a `ping` has been received. */
+    fun lastPingEcho(): String? = lastPing
 
     private var server: HttpServer? = null
 
@@ -230,6 +244,16 @@ class ExplainerServer {
         if (!validateAgentMessage(obj)) {
             sendJson(ex, 400, error("Invalid message format")); return
         }
+        // **`ping` answers and returns**: it is the one message with no walkthrough in it, added so a
+        // diagnostic can drive the real POST path end to end without replacing whatever the reader is
+        // currently looking at. `set_plan` could not be used for that — a check that wipes your
+        // walkthrough is a rude check.
+        if (obj["type"]!!.jsonPrimitive.content == "ping") {
+            val echo = stringField(obj, "echo") ?: ""
+            lastPing = echo
+            sendJson(ex, 200, buildJsonObject { put("ok", true); put("echo", echo) })
+            return
+        }
         val resolved = try {
             dispatchAgentMessage(obj)
         } catch (e: Exception) {
@@ -380,6 +404,8 @@ class ExplainerServer {
             "set_plan" -> isJsonString(obj["title"]) && obj["frames"] is JsonArray
             "goto" -> isJsonNumber(obj["frameId"]) || isJsonNumber(obj["segmentId"]) ||
                 isJsonNumber(obj["stepIndex"])
+            // `echo` is optional and free-form; a `ping` with none is still a valid liveness poke.
+            "ping" -> true
             "resume", "stop" -> true
             else -> false
         }
@@ -478,7 +504,7 @@ class ExplainerServer {
         private const val PORT_FILE = ".claude-explainer-port"
         private const val TOKEN_FILE = ".claude-explainer-token"
 
-        private val VALID_AGENT_MESSAGE_TYPES = setOf("set_plan", "goto", "resume", "stop")
+        private val VALID_AGENT_MESSAGE_TYPES = setOf("set_plan", "goto", "resume", "stop", "ping")
 
         private fun generateToken(): String {
             val bytes = ByteArray(32)

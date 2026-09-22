@@ -15,6 +15,7 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.colors.EditorFontType
 import com.intellij.openapi.options.BoundConfigurable
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.ComboBox
@@ -291,6 +292,40 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
             row {
                 button("Re-check engines") { recheckAll() }
             }.rowComment("Re-probes the Kokoro prerequisites and rescans Windows voices (background), then refreshes the status above.")
+        }.apply { expanded = true }
+
+        // **Then what gets generated**, which precedes how it is spoken — so this sits above language and
+        // narration rather than beside them. Three knobs over one subprocess: how much walkthrough to ask
+        // for, how hard the agent thinks per turn, and which model does it. These are also the values the
+        // per-run "Explain This (Audio) with…" dialog is seeded from.
+        collapsibleGroup("Explanation") {
+            row("Depth:") {
+                comboBox(AudioExplainerSettings.DEPTH_LEVELS)
+                    .bindItem(
+                        { state.explainDepth },
+                        { state.explainDepth = it ?: AudioExplainerSettings.DEPTH_STANDARD },
+                    )
+                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { depthOptionLabel(it) } }
+            }.rowComment(
+                "How much walkthrough to ask for. <b>Depth is the knob that buys back time</b> — output " +
+                    "volume is the best single predictor of how long a run takes; effort mostly buys " +
+                    "correctness. Depth never asks for anything the plan schema does not already allow.",
+            )
+            row("Effort:") {
+                comboBox(listOf("") + AudioExplainerSettings.EFFORT_LEVELS)
+                    .bindItem({ state.explainEffort }, { state.explainEffort = it ?: "" })
+                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { effortLabel(it) } }
+            }.rowComment(
+                "<b>The plugin ships <code>medium</code>, overriding your CLI default on purpose.</b> Blank " +
+                    "inherits <code>~/.claude/settings.json</code>'s <code>effortLevel</code> — which, chosen " +
+                    "for interactive coding, was measured costing a walkthrough 255s where medium took 118s " +
+                    "for the same plan shape.",
+            )
+            row("Model:") {
+                comboBox(listOf("") + AudioExplainerSettings.MODEL_ALIASES)
+                    .bindItem({ state.explainModel }, { state.explainModel = it?.trim() ?: "" })
+                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { modelLabel(it) } }
+            }.rowComment("Blank keeps your own configured model, which is usually the right one.")
         }.apply { expanded = true }
 
         // **Then what a walkthrough is made of.** The language governs the prose *and* the narration, so
@@ -637,6 +672,14 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 textField().bindText({ state.pythonExecutablePath }, { state.pythonExecutablePath = it.trim() })
                     .comment("Blank = auto-detect. Used to launch the Kokoro TTS server.")
             }
+            row {
+                button("Check permissions and settings") { runDiagnostics() }
+            }.rowComment(
+                "Read-only checks over the things that decide whether an Explain This run can work at all — " +
+                    "the CLI and its version, which effort is actually in force, the skill install, the " +
+                    "loopback server, and a real POST through the platform's own helper with non-ASCII text " +
+                    "in it. Every row names its fix. It uses the <i>saved</i> values, so apply first.",
+            )
         }.apply { expanded = false }
 
         row {
@@ -897,6 +940,31 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     }
 
     /** "Re-check engines": re-probe Kokoro prerequisites + rescan SAPI voices off the EDT, then refresh. */
+    /**
+     * Run [ExplainerDiagnostics] off the EDT behind a modal progress, then show the rows.
+     *
+     * It reads the **saved** state, not the pending controls: a check that reported on values you have not
+     * applied yet would be reporting on a run that cannot happen. The row comment says so. The server is
+     * handed in so the round-trip check can compare what arrived rather than what was printed.
+     */
+    private fun runDiagnostics() {
+        val project = ProjectManager.getInstance().openProjects.firstOrNull()
+        val ctx = DiagnosticContext(
+            state = state,
+            isWindows = SystemInfo.isWindows,
+            server = runCatching { service<ExplainerServerService>().server }.getOrNull(),
+            projectPath = project?.basePath,
+        )
+        var results: List<DiagnosticResult> = emptyList()
+        ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            { results = ExplainerDiagnostics.run(ctx) },
+            "Checking Permissions and Settings…",
+            true,
+            project,
+        )
+        DiagnosticsDialog(project, results).show()
+    }
+
     private fun recheckAll() {
         kokoroStatusLabel?.text = "Checking…"
         piperStatusLabel?.text = "Checking…"
@@ -987,6 +1055,26 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         private fun languageCodes(): List<String> = Languages.allLanguages().map { it.code }
 
         private const val PACK_NOTE = "  ·  needs TTS pack"
+
+        /**
+         * Label for an effort value; "" is the first item and is the *inherit* one.
+         *
+         * The numbers are `Speed.md`'s, and only the measured stops carry one — `high` and `max` were never
+         * run, and a plausible-looking interpolation on a settings page reads as a result.
+         */
+        private fun effortLabel(value: String): String = when (value) {
+            "" -> "Default — inherit your CLI's own effortLevel"
+            AudioExplainerSettings.EFFORT_LOW -> "low — fastest (74s measured), likeliest to get a line number wrong"
+            AudioExplainerSettings.EFFORT_MEDIUM -> "medium — 118s measured, same plan shape (shipped default)"
+            AudioExplainerSettings.EFFORT_HIGH -> "high — between medium and xhigh (not measured)"
+            AudioExplainerSettings.EFFORT_XHIGH -> "xhigh — 255s measured"
+            AudioExplainerSettings.EFFORT_MAX -> "max — the most careful and the slowest (not measured)"
+            else -> value
+        }
+
+        /** Label for a `--model` alias; "" is the first item and leaves the user's own model alone. */
+        private fun modelLabel(value: String): String =
+            if (value.isEmpty()) "Default — your configured model" else value
 
         /**
          * Label for a language code: name, autonym, and the voice tiers it offers (e.g.

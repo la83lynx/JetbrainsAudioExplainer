@@ -48,6 +48,16 @@ JetBrains re-signs on upload; the signature only proves integrity/authorship. To
 
 ## Also open
 
+- **The effort/depth/model knobs, the "Explain This with…" dialog and the diagnostics are built but not
+  judged in a sandbox.** Everything pure about them is asserted — `probes/EffortProbe.java`, 49 checks,
+  including the 14 that hold the Standard-depth prompt byte-identical to what shipped before depth existed —
+  but no session has yet seen the Explanation group, the per-run dialog or the diagnostics list on screen.
+  The one behaviour a probe cannot reach is the default itself: a fresh install now passes `--effort medium`
+  instead of inheriting `~/.claude/settings.json`, which is a **deliberate override of a setting the user made
+  elsewhere** and needs a line in the release notes. Two deltas from the plan, both behavioural: `PowerShell`
+  is now on `ALLOWED_TOOLS` (the plan had a diagnostic row and no fix, which would have shipped a check nobody
+  could act on — `Bash` was already command-unrestricted, so it grants nothing new), and Depth's combo has no
+  blank item. Plan: `git show f873b3d:Effort.md`; measurements: `Speed.md`.
 - **Re-check Japanese narration by ear.** Everything else in the narration tiers is judged — the `runIde`
   session of 2026-09-16 passed all seven checks plus the UX batch, the install console and the C++ row, and
   confirmed the three fixes from the round before (see `ExplainerLanguages.md`). The one thing it found is

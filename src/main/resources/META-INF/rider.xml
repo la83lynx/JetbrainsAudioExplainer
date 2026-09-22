@@ -8,5 +8,8 @@
         <reference ref="AudioExplainer.ExplainThis">
             <add-to-group group-id="SolutionExplorerPopupMenu" anchor="last"/>
         </reference>
+        <reference ref="AudioExplainer.ExplainThisWith">
+            <add-to-group group-id="SolutionExplorerPopupMenu" anchor="last"/>
+        </reference>
     </actions>
 </idea-plugin>

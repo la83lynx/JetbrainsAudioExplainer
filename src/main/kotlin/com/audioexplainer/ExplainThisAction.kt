@@ -24,16 +24,19 @@ import com.intellij.openapi.vfs.VirtualFile
  * The menu label reflects the selected explanation language (localized verb, English fallback) via
  * [Languages.explainActionText], refreshed on every [update]. Both paths run the same cancellable
  * background "Explaining…" task that hands the request to [ClaudeExplainer].
+ *
+ * **[ExplainThisWithAction] is this class with one hook overridden** ([decorate]), and that is the whole
+ * point of the split: the per-run dialog must not be able to change how a target is turned into an
+ * [ExplainRequest], only what is attached to the one this class already built. The plain entry therefore
+ * keeps taking exactly the path every earlier round judged — it does not even grow a branch.
  */
-class ExplainThisAction : AnAction() {
+open class ExplainThisAction : AnAction() {
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 
     override fun update(e: AnActionEvent) {
         // Reflect the selected explanation language in the label (both menus); recomputed on every show,
         // so changing the language in Settings takes effect on the next right-click.
-        e.presentation.text = Languages.explainActionText(
-            AudioExplainerSettings.getInstance().state.explanationLanguage,
-        )
+        e.presentation.text = label(AudioExplainerSettings.getInstance().state.explanationLanguage)
         val hasEditor = e.getData(CommonDataKeys.EDITOR) != null
         val hasFile = e.getData(CommonDataKeys.VIRTUAL_FILE) != null
         // This action lives in exactly two groups (EditorPopupMenu, ProjectViewPopupMenu), so update() is
@@ -52,7 +55,7 @@ class ExplainThisAction : AnAction() {
         // Editor scope: caret / selection. actionPerformed runs on the EDT, so reading the caret/selection
         // models here is safe.
         if (editor != null && editorFile != null) {
-            launch(project, buildCursorRequest(project, editor, editorFile))
+            launch(project, decorate(project, buildCursorRequest(project, editor, editorFile)) ?: return)
             return
         }
 
@@ -68,8 +71,17 @@ class ExplainThisAction : AnAction() {
             )
             return
         }
-        launch(project, buildSelectionRequest(project, selected))
+        launch(project, decorate(project, buildSelectionRequest(project, selected)) ?: return)
     }
+
+    /** This entry's menu label for [code]; [ExplainThisWithAction] answers with the "with…" sibling. */
+    protected open fun label(code: String): String = Languages.explainActionText(code)
+
+    /**
+     * Last chance to attach per-run overrides to [request] before it is launched, on the EDT. The plain
+     * entry attaches nothing; returning null cancels the invocation (the dialog's Cancel button).
+     */
+    protected open fun decorate(project: Project, request: ExplainRequest): ExplainRequest? = request
 
     private fun launch(project: Project, request: ExplainRequest) {
         ProgressManager.getInstance().run(

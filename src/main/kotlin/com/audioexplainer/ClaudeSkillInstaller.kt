@@ -27,6 +27,9 @@ object ClaudeSkillInstaller {
     fun skillDir(): Path =
         Path.of(System.getProperty("user.home"), ".claude", "skills", SKILL_NAME)
 
+    /** The VERSION this build carries, or null when the bundled resources cannot be read. */
+    fun bundledVersion(): String? = readResource("VERSION")?.trim()?.takeIf { it.isNotEmpty() }
+
     /**
      * Ensure the skill is present and current. Returns the skill directory, or null if the bundled
      * resources could not be read/written (logged, non-fatal — [ClaudeExplainer] falls back to an
