@@ -50,7 +50,8 @@ data class SavedWalkthrough(val name: String, val filePath: String)
  *
  * **`issues` on a `set_plan` reply is the one channel that reaches the agent that authored the plan.** A
  * frame dropped, a cycle cut, a step lighting a line its frame elides — all of it comes back on the POST,
- * because §1b's requirement is that a plan rendering three of its four frames says so.
+ * because §1b's requirement is that a plan rendering three of its four frames says so. So does what only the
+ * code can show — a token not on its line, a file that does not resolve ([PlanSourceCheck]).
  *
  * The upstream WebSocket channel is intentionally NOT ported: it only carried `state` broadcasts
  * and inbound AgentMessages (both redundant with HTTP), no reused client ever connects to it, and
@@ -71,6 +72,10 @@ class ExplainerServer {
 
     @Volatile
     private var storage: WalkthroughStorage? = null
+
+    /** The open project's base path — what a relative plan path is read against. Last project wins, like [storage]. */
+    @Volatile
+    private var workspaceRoot: String? = null
 
     /**
      * The `echo` string of the last `ping`, exactly as this process decoded it off the wire.
@@ -115,6 +120,7 @@ class ExplainerServer {
     /** Point per-workspace save/load at [root] (the open project's base path). Last project wins. */
     fun setWorkspaceRoot(root: Path) {
         storage = WalkthroughStorage(root)
+        workspaceRoot = root.toString()
     }
 
     /** Queue a user action for the agent's next `/api/actions` long-poll (Phase 4 sidebar). */
@@ -282,8 +288,9 @@ class ExplainerServer {
             if (resolved != null) {
                 put("frames", resolved.frames.size)
                 put("steps", resolved.steps.size)
-                if (resolved.issues.isNotEmpty()) {
-                    putJsonArray("issues") { resolved.issues.forEach { add(it.toString()) } }
+                val issues = replyIssues(resolved)
+                if (issues.isNotEmpty()) {
+                    putJsonArray("issues") { issues.forEach { add(it.toString()) } }
                 }
             }
         })
@@ -398,10 +405,31 @@ class ExplainerServer {
             put("frames", resolved.frames.size)
             put("steps", resolved.steps.size)
             put("language", data.language)
-            if (resolved.issues.isNotEmpty()) {
-                putJsonArray("issues") { resolved.issues.forEach { add(it.toString()) } }
+            val issues = replyIssues(resolved)
+            if (issues.isNotEmpty()) {
+                putJsonArray("issues") { issues.forEach { add(it.toString()) } }
             }
         })
+    }
+
+    /**
+     * Everything wrong with [resolved] **including what only the code can show** — the loader's structural
+     * issues, then [PlanSourceCheck]'s: a token not on its line, a line past the end, a file that does not
+     * resolve. That second half is what the agent used to check for itself, with a script, on every run.
+     *
+     * It runs here, on the HTTP thread, because this is where the reply is built and nothing else needs to
+     * wait for it: a few files read once each. **A failure costs the check and never the POST**, since the
+     * plan is already loaded and showing by the time this runs.
+     */
+    private fun replyIssues(resolved: ResolvedPlan): List<PlanIssue> {
+        val source = try {
+            PlanSourceCheck.check(resolved, ProjectSourceLines(workspaceRoot))
+        } catch (e: Exception) {
+            log.warn("source check failed; replying with the structural issues only", e)
+            emptyList()
+        }
+        for (issue in source) log.warn("plan source: $issue")
+        return resolved.issues + source
     }
 
     // ── Validation (mirrors upstream validateAgentMessage) ─────────────────────

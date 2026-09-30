@@ -79,7 +79,7 @@ light up ranges in several frames at once, and it can come back to a frame the n
 | `frames[]` | message | yes | The code on screen — see **Scenes** and the caps |
 | `steps[]` | message | yes | The narration, in order |
 | `id` | frame | yes | Unique integer. **The only identity a frame has** — two frames may share one `file` |
-| `file` | frame | yes | **Absolute or relative to the project root — both resolve** (a relative path is resolved against the open project). Absolute is safer when you cannot be sure which directory the user opened. Note *when* this is checked: the path is resolved as the tree **mounts**, not as the plan loads, so a `set_plan` reply with no `issues` does not prove your paths were right — an unresolved one becomes `frame.file-unresolved` in the log and the view's own report |
+| `file` | frame | yes | **Absolute or relative to the project root — both resolve** (a relative path is resolved against the open project). Absolute is safer when you cannot be sure which directory the user opened. A path that does not resolve comes back in the reply as `frame.file-unresolved` |
 | `title` | frame | yes | Short label — usually the member this frame is about (`"MidInvoker.InvokeOn"`) |
 | `explanation` | frame | yes | Markdown; the sidebar overview for this frame |
 | `scene` | frame | no | Which set of frames this one is on screen with. Default `0`. See **Scenes** |
@@ -367,9 +367,8 @@ which match when it repeats. There is one such mechanism in the plugin and this 
   appears twice on the line and you mean the second, add `"occurrence": 2`.
 - **One identifier, not a phrase.** `"maxRetries"`, not `"the maxRetries constant"`. A short expression is
   fine when that is genuinely the subject (`"?? 0"`), but prefer a name.
-- **A token that isn't on that line is dropped silently** — no pulse, no error, nothing else about the step
-  changes. So a wrong guess is harmless, but it is also wasted: get the line right and the plugin can tell
-  you at load time, which it cannot do for the token itself.
+- **A token that isn't on that line does not pulse**, and nothing else about the step changes. The reply
+  names it (`step.beat-token-not-on-line`) and quotes the line as it actually reads, so fix it and re-POST.
 - **Only where a step has an obvious focal word.** A step about control flow as a whole has none — omit
   `beats` entirely.
 
@@ -519,7 +518,7 @@ Guidance:
   link, and the `line` is what decides where a link is drawn.
 - **Skip it entirely** when the code is linear. Most frames have no relation worth drawing.
 
-**What `issues` now tells you about relations, and what it still cannot.** The loader reports every way a
+**What `issues` tells you about relations.** The loader reports every way a
 relation can fail to be **drawn**:
 
 | Code | What it caught |
@@ -530,17 +529,24 @@ relation can fail to be **drawn**:
 | `relation.endpoint-unnamed` | an end with neither a `line` nor a `symbol` — nowhere to draw it and nothing to call it |
 | `relation.unknown-kind` | a `kind` that is neither `flow` nor `backforth`, read as `flow` |
 
-**What it still cannot see is the code.** The loader validates the plan against *itself* and never opens a
-file, so a `line` past the end of the file, a `token` that is not on that line, and a `file` that does not
-exist all pass silently. That is the dangerous half: a miscounted `line` still draws a link, at the wrong
-place, saying something false about the code, where a wrong `token` costs only the tint. So the `token` on
-both ends is not decoration, it is the only check you have there — **write one on every endpoint and count the
-line twice.**
+**The reply also checks the plan against the code.** The plugin opens every file the plan names and reports
+what does not match:
 
-The same holds for `file`: nothing you can read validates it. For a headless run there is no IDE log to
-consult at all, so **verify before you POST** — that every `file` exists, and that every `token` really is a
-substring of the line you paired it with. A twenty-line script over your own plan catches what the whole
-pipeline downstream will not.
+| Code | What it caught |
+|---|---|
+| `frame.file-unresolved` | a frame's `file` that does not exist — the frame is not rendered (`[error]`) |
+| `frame.keep-past-eof` | a kept range running past the last line of the file |
+| `frame.call-token-not-on-line` | a `callToken` that is not on its `callLine` |
+| `step.beat-token-not-on-line` | a beat `token` that is not on its `line` — the pulse never happens |
+| `relation.token-not-on-line` | an endpoint `token` that is not on its `line` |
+| `relation.line-past-eof` | a token-less endpoint on a line the file does not have |
+| `relation.file-unresolved` | an endpoint `file` that does not exist |
+
+Each miss quotes the line as it actually reads. A token that is not on its line almost always means the
+*line* was miscounted, and a miscounted line still draws the link, in the wrong place, saying something
+false about the code. So **write a `token` on every endpoint**: it is what makes the check possible. **Do not
+write your own validator script** — the reply already does this check, against the text the reader will
+see.
 
 ## Steps — the narration order
 

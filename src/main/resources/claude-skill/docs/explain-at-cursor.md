@@ -113,8 +113,8 @@ asks, because the plugin needs the walkthrough back as data — printing it as p
    {"line":44,"token":"raw"},"to":{"line":51,"token":"parsed"},"note":"parsed value"}`). The plugin draws an
    arrow between nearby lines of the same file and a matched pair of coloured portals for anything else. **The
    hard cap is 5 on any one step** and the sixth is dropped silently; 2-3 is what reads well. One endpoint must
-   fall inside the step it belongs to, and the line numbers have to be ones you checked — no relation mistake
-   is ever reported in `issues`.
+   fall inside the step it belongs to. Give both ends a `token` copied from their line: the POST reply
+   checks every token against the code, and a missing one usually means a miscounted line.
 
    **Do not send `view`** — every plan renders as a tree of code, and one frame is a one-node tree, which is
    the normal shape for a single method. When the explanation *is* a caller→callee chain, give each nested
@@ -149,7 +149,9 @@ asks, because the plugin needs the walkthrough back as data — printing it as p
    **The reply may also carry an `issues` array** — everything the plugin dropped, degraded or found over a
    cap. An `[error]` there means the reader is missing part of what you wrote (a path that did not resolve, a
    step naming a frame that does not exist): fix it and re-POST. `[warn]` renders differently from what you
-   authored. `[info]` is a soft cap or a value the plugin derived for you.
+   authored — including a token not on the line you named, quoted as the line actually reads. `[info]` is a
+   soft cap or a value the plugin derived for you. **This is the validation: do not write a script to check
+   your own plan first.**
 
 5. **Done.** Do NOT send `goto`/`resume` (the plugin/sidebar drives playback). Print one status line.
 

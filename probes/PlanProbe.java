@@ -237,6 +237,92 @@ public final class PlanProbe {
         return new Relation(kind, from, to, "note");
     }
 
+    // ── 15. The source check (`SourceCheck.md`): the plan against the files it names ──
+    //
+    // The loader never opens a file, so these were the agent's to check, with a script, every run. Now the
+    // server checks them; here the "files" are a map, which is the whole reason SourceLines is an interface.
+
+    static long count(List<PlanIssue> issues, String code) {
+        return issues.stream().filter(i -> i.getCode().equals(code)).count();
+    }
+
+    static Frame callFrame(int id, String file, int parent, int callLine, String token, int occurrence,
+                           LineRange keep) {
+        return new Frame(id, file, "F" + id, "", 0, parent, callLine, token, occurrence,
+                Collections.singletonList(keep), Collections.emptyList());
+    }
+
+    static void sourceCheck() {
+        // A.cs: 30 lines. Line 12 holds the lookup, line 15 calls Apply twice.
+        List<String> a = new ArrayList<>();
+        for (int n = 1; n <= 30; n++) a.add("    var x" + n + " = Compute(" + n + ");");
+        a.set(11, "    if (cache.TryGetValue(key, out var hit)) return hit;");
+        a.set(14, "        Apply(Apply(x));");
+        List<String> b = new ArrayList<>();
+        for (int n = 1; n <= 20; n++) b.add("    int b" + n + " = " + n + ";");
+        Map<String, List<String>> disk = new HashMap<>();
+        disk.put("C:/proj/A.cs", a);
+        disk.put("C:/proj/src/B.cs", b);
+        SourceLines source = disk::get;
+        String tts = "It looks up the cache first.";
+
+        // Clean: every anchor is on its line. Second Apply is occurrence 2; "B.cs" names frame 1's file.
+        Frame a0 = new Frame(0, "C:/proj/A.cs", "A", "", 0, null, 0, null, 1,
+                Collections.singletonList(focus(1, 30)), Arrays.asList(
+                        new Relation("flow", new Endpoint(null, 12, "cache", 1, null),
+                                new Endpoint(null, 14, "x14", 1, null), "n"),
+                        new Relation("flow", new Endpoint(null, 12, "hit", 2, null),
+                                new Endpoint("B.cs", 5, "b5", 1, null), "n")));
+        ResolvedPlan clean = PlanLoader.INSTANCE.resolve(plan(
+                Arrays.asList(a0, callFrame(1, "C:/proj/src/B.cs", 0, 15, "Apply", 2, ctx(1, 20))),
+                Collections.singletonList(beatStep(0, tts, new Beat(12, "TryGetValue", 1, "looks up")))));
+        List<PlanIssue> none = PlanSourceCheck.INSTANCE.check(clean, source);
+        check("source: a clean plan raises nothing (" + none + ")", none.isEmpty());
+
+        // Faulty: one of each, against the same files.
+        Frame f0 = new Frame(0, "C:/proj/A.cs", "A", "", 0, null, 0, null, 1,
+                Arrays.asList(focus(1, 20), ctx(25, 34)), Arrays.asList(
+                        new Relation("flow", new Endpoint(null, 13, "cache", 1, null),
+                                new Endpoint(null, 99, null, 1, null), "n"),
+                        new Relation("flow", new Endpoint(null, 12, "cache", 1, null),
+                                new Endpoint("Missing.cs", 3, "m", 1, null), "n")));
+        ResolvedPlan bad = PlanLoader.INSTANCE.resolve(plan(
+                Arrays.asList(f0,
+                        callFrame(1, "C:/proj/src/B.cs", 0, 15, "Apply", 3, ctx(1, 20)),
+                        callFrame(2, "C:/proj/src/B.cs", 0, 16, "Apply", 1, ctx(1, 20)),
+                        frame(3, "C:/proj/Gone.cs", null, 0, null, ctx(1, 5))),
+                Collections.singletonList(beatStep(0, tts,
+                        new Beat(12, "TryGetValues", 1, "looks up"),
+                        new Beat(13, "TryGetValue", 1, "the cache")))));
+        List<PlanIssue> got = PlanSourceCheck.INSTANCE.check(bad, source);
+        for (PlanIssue i : got) System.out.println("      " + i);
+        check("source: missing file is an error", count(got, "frame.file-unresolved") == 1
+                && got.stream().anyMatch(i -> i.getCode().equals("frame.file-unresolved")
+                        && i.getLevel() == IssueLevel.ERROR));
+        check("source: keep 25-34 of a 30-line file", count(got, "frame.keep-past-eof") == 1);
+        check("source: call token on another line, and a 3rd Apply of two — both reported",
+                count(got, "frame.call-token-not-on-line") == 2);
+        check("source: an occurrence overshoot says how many there are",
+                got.stream().anyMatch(i -> i.getMessage().contains("as occurrence 3 — it occurs there only 2 time(s)")));
+        check("source: both beats miss — a misspelt token, and a real token on the wrong line",
+                count(got, "step.beat-token-not-on-line") == 2);
+        check("source: relation token on line 13 is reported, quoting what line 13 reads",
+                count(got, "relation.token-not-on-line") == 1
+                        && got.stream().anyMatch(i -> i.getMessage().contains("x13 = Compute(13)")));
+        check("source: tokenless end on line 99", count(got, "relation.line-past-eof") == 1);
+        check("source: cross-file end naming a file that does not exist",
+                count(got, "relation.file-unresolved") == 1);
+        check("source: nothing but these seven kinds", got.size() == 9);
+
+        // The token rule itself, both sides of each edge.
+        check("tokenOnLine: overlapping matches count (aaa holds aa twice)",
+                ProtocolKt.tokenOnLine("aaa", "aa", 2) && !ProtocolKt.tokenOnLine("aaa", "aa", 3));
+        check("tokenOnLine: a substring inside an identifier counts, as the renderer's fallback does",
+                ProtocolKt.tokenOnLine("rateTable", "rate", 1));
+        check("tokenOnLine: empty token never matches", !ProtocolKt.tokenOnLine("abc", "", 1));
+        check("tokenOnLine: occurrence below 1 reads as 1", ProtocolKt.tokenOnLine("abc", "b", 0));
+    }
+
     /** True when NO issue of this code was raised — the absence half of every pair below. */
     static boolean lacks(ResolvedPlan r, String code) { return !has(r, code); }
 
@@ -645,6 +731,7 @@ public final class PlanProbe {
 
         savingStorage();
         savingIdentity();
+        sourceCheck();
 
         // ── 12. The tree's settings defaults ARE §1c's verdicts ──
         //

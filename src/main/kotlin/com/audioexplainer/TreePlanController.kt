@@ -10,9 +10,7 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
-import java.nio.file.Path
 
 /**
  * **Drives the tree surface from walkthrough state, and it is now the only surface.** Resolves N files, opens
@@ -242,13 +240,7 @@ class TreePlanController(private val project: Project, private val walkthrough: 
     }
 
     /** Off-EDT only: performs a synchronous VFS refresh so newly written files are found. */
-    private fun resolveFile(filePath: String): VirtualFile? = try {
-        val nio = Path.of(filePath)
-        val abs = if (nio.isAbsolute) nio else project.basePath?.let { Path.of(it).resolve(nio) } ?: nio
-        LocalFileSystem.getInstance().refreshAndFindFileByNioFile(abs.normalize())
-    } catch (_: Exception) {
-        null
-    }
+    private fun resolveFile(filePath: String): VirtualFile? = resolvePlanFile(filePath, project.basePath)
 
     private fun runOnEdt(block: () -> Unit) {
         ApplicationManager.getApplication().invokeLater {

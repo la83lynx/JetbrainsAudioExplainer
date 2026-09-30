@@ -355,6 +355,29 @@ internal fun sameFilePath(file: String, frameFile: String): Boolean {
 }
 
 /**
+ * **Whether the [occurrence]-th match of [token] is on [lineText]** — the question every `{ line, token }`
+ * anchor asks of the code, answered without a document.
+ *
+ * A plain substring count, and that is exact rather than approximate: `SpotlightRenderer.resolveToken` tries
+ * whole-word matches first and falls back to a bare substring, and `LeaderArt.locateCallToken` is a bare
+ * substring from the start, so either finds its nth match **iff** the line holds n substring matches. Both
+ * scan with `idx + 1`, so overlapping matches count here too. The caller trims or not as its renderer does —
+ * beats and relation ends are trimmed, a call token is not.
+ */
+internal fun tokenOnLine(lineText: String, token: String, occurrence: Int): Boolean {
+    if (token.isEmpty()) return false
+    val n = occurrence.coerceAtLeast(1)
+    var hits = 0
+    var from = 0
+    while (true) {
+        val idx = lineText.indexOf(token, from)
+        if (idx < 0) return false
+        if (++hits >= n) return true
+        from = idx + 1
+    }
+}
+
+/**
  * **True when this endpoint names a line of a step's active band** — i.e. the relation holding it is one this
  * step draws. [startLine] and [endLine] are 1-based and inclusive.
  *

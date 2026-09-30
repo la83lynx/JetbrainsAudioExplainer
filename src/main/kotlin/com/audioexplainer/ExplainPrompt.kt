@@ -322,6 +322,13 @@ object ExplainPrompt {
                     "degraded — READ IT: an [error] there means the user cannot see part of what you wrote " +
                     "(an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.",
             )
+            // **The reply is the validation** (`SourceCheck.md`). Told to verify its own tokens and lines, the
+            // agent wrote and ran a script for it on every run — ~16 s and three turns, measured (`Speed.md` #4).
+            // The server checks the same things against the same text now, so the prompt says not to.
+            appendLine(
+                "   The reply checks every token and line number against the source files, so do NOT write or " +
+                    "run a script to validate the plan yourself — POST it and read the reply.",
+            )
             // **Where the POSTed JSON goes** (`Saving.md` B). "A temp file" with no directory is how payloads
             // ended up in the project's `.walkthroughs/` and showed as blank rows in the saved list, so the
             // prompt names one. In the shared tail, so the no-skill fallback does not lose it.
