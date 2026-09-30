@@ -265,20 +265,6 @@ data class Plan(
     val language: String = Languages.DEFAULT_CODE,
     val frames: List<Frame> = emptyList(),
     val steps: List<Step> = emptyList(),
-    /**
-     * **More steps are coming** — the agent will `append_steps` (`Stream.md`). Narration starts on what is
-     * here and parks at the end of it instead of settling to paused, until the plan is closed.
-     *
-     * Defaults to false, so a plan that never mentions it behaves exactly as every plan did before: the
-     * end of `steps` is the end of the walkthrough. `frames` is **not** streamed and this does not open it
-     * — the tree is built once, from this message, because rebuilding it would close the tab the reader is
-     * watching.
-     *
-     * Deliberately not persisted as meaningful: [WalkthroughStorage] saves whatever plan is current, and a
-     * saved walkthrough is by definition finished, so a `true` read back off disk is closed by
-     * [Walkthrough.setPlan]'s own load path rather than leaving a file that parks forever.
-     */
-    val streaming: Boolean = false,
 )
 
 // ─────────────────────────── Relations (unchanged, now on the frame) ───────────────────────────

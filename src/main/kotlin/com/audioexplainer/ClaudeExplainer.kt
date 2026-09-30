@@ -267,17 +267,6 @@ class ClaudeExplainer {
      * which is what decides whether its plan directory is evidence worth keeping.
      */
     private fun reportResult(project: Project, request: ExplainRequest, result: RunResult, tracker: ExplainSessionTracker): Boolean {
-        // **The streaming backstop, and it is first because it is unconditional** (`Stream.md`). A plan POSTed
-        // with `streaming: true` keeps playback parked at its last step, waiting for an `append_steps` that
-        // only this process can send. The process is over — cancelled, failed, or finished without ever
-        // sending its `final` — so no append is coming, and a parked narration would wait for the rest of the
-        // session. The agent's own `{"final":true}` is the fast path; this is the one that makes closing a
-        // fact rather than a hope, which is why it does not care which branch below is about to run.
-        val closed = runCatching {
-            service<ExplainerServerService>().server.walkthrough.closePlan()
-        }.getOrDefault(false)
-        if (closed) log.info("plan was still streaming when claude exited (${result.exitCode}); closed it")
-
         if (result.cancelled) {
             tracker.finish() // clear the banner; the balloon reports the cancellation
             notify(project, NotificationType.INFORMATION, "Explain This cancelled", "The walkthrough request was cancelled.")

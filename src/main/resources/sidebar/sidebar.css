@@ -273,9 +273,6 @@ code {
     display: inline-flex;
 }
 .icon-btn:hover { background: var(--ae-btn-hover); color: var(--ae-fg); }
-/* aria-disabled rather than [disabled], so the tooltip explaining why still gets its hover (Saving.md C). */
-.icon-btn[aria-disabled="true"] { opacity: 0.4; cursor: default; }
-.icon-btn[aria-disabled="true"]:hover { background: transparent; color: var(--ae-fg-dim); }
 
 /* The Save split button: Save, then a narrow caret opening a one-item menu (Save As…). */
 .split-btn { position: relative; display: inline-flex; }

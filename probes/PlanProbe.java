@@ -81,15 +81,12 @@ public final class PlanProbe {
     }
 
     static Plan plan(List<Frame> frames, List<Step> steps) {
-        // `streaming` is false here and everywhere in this probe: nothing the loader does depends on it
-        // (it is a walkthrough-lifecycle flag, asserted by StreamProbe), so a plan under test is an
-        // ordinary closed one.
-        return new Plan("t", "en", frames, steps, /*streaming*/ false);
+        return new Plan("t", "en", frames, steps);
     }
 
     // ── 11b. The saved list accepts exactly what the saver could have written (`Saving.md` A) ──
     //
-    // The streaming round left the agent's POST payloads in `.walkthroughs/`, and the old `list()` decoded
+    // Agents told only "a temp file" left their POST payloads in `.walkthroughs/`, and the old `list()` decoded
     // each leniently into a Plan with a blank title — the blank rows that errored on open. The payload that
     // matters most is the `set_plan` one: it HAS a title and frames, so only its `type` gives it away.
 
@@ -107,15 +104,15 @@ public final class PlanProbe {
         java.nio.file.Path dir = root.resolve(".walkthroughs");
         WalkthroughStorage store = new WalkthroughStorage(root);
 
-        writeJson(dir, "ref-plan-1", "{\"type\":\"set_plan\",\"title\":\"Ref plan\",\"streaming\":true," + FRAMES_JSON + "}");
-        writeJson(dir, "ref-plan-2", "{\"type\":\"append_steps\",\"steps\":[{\"frame\":0,\"ranges\":[{\"start\":4,\"end\":5}]}]}");
+        writeJson(dir, "ref-plan-1", "{\"type\":\"set_plan\",\"title\":\"Ref plan\"," + FRAMES_JSON + "}");
+        writeJson(dir, "ref-plan-2", "{\"type\":\"goto\",\"step\":1}");
         writeJson(dir, "blank-title", "{\"title\":\"\"," + FRAMES_JSON + "}");
         writeJson(dir, "no-frames", "{\"title\":\"No frames\",\"frames\":[],\"steps\":[]}");
         writeJson(dir, "not-an-object", "[1, 2, 3]");
         Plan real = new Plan("Real save", "en",
                 Collections.singletonList(new Frame(0, root.resolve("src").resolve("A.cs").toString(), "A", "", 0,
                         null, 0, null, 1, Collections.singletonList(focus(1, 9)), Collections.<Relation>emptyList())),
-                Collections.singletonList(step(0, focus(2, 3))), false);
+                Collections.singletonList(step(0, focus(2, 3))));
         store.save(real, "memory0");
 
         List<WalkthroughEntry> listed = store.list();
@@ -124,7 +121,7 @@ public final class PlanProbe {
                         && "Real save".equals(listed.get(0).getTitle()));
         check("saving: load refuses the set_plan payload, though it has a title and frames",
                 store.load("ref-plan-1") == null);
-        check("saving: load refuses the append_steps payload", store.load("ref-plan-2") == null);
+        check("saving: load refuses another wire message (a goto)", store.load("ref-plan-2") == null);
         check("saving: load refuses a blank title", store.load("blank-title") == null);
         check("saving: load refuses no frames, and a file that is not an object",
                 store.load("no-frames") == null && store.load("not-an-object") == null);
@@ -161,7 +158,7 @@ public final class PlanProbe {
         return new Plan(title, "en",
                 Collections.singletonList(new Frame(0, "/src/A.cs", "A.M", "", 0, null, 0, null, 1,
                         Arrays.asList(ctx(10, 10), focus(20, 40)), Collections.<Relation>emptyList())),
-                ss, false);
+                ss);
     }
 
     static void savingIdentity() {
@@ -190,20 +187,16 @@ public final class PlanProbe {
         // Position is not saved, so nothing that only moves it can make the walkthrough stale.
         w.play(); w.nextStep(); w.gotoStep(2); w.prevStep(); w.pause(); w.restart(); w.pause();
         check("identity: playback and stepping do not dirty it", !w.getState().getUnsaved());
-        w.closePlan();
-        check("identity: closePlan does not dirty it", !w.getState().getUnsaved());
-        w.appendSteps(Collections.<Step>emptyList(), true);
-        check("identity: an empty final batch does not dirty it", !w.getState().getUnsaved());
 
-        w.appendSteps(Collections.singletonList(step(0, focus(30, 31))), false);
-        check("identity: appendSteps marks it stale, and keeps the name Save writes back to",
-                w.getState().getUnsaved() && "generated".equals(w.getState().getSavedAs()));
-        check("  control: the save of the pre-append snapshot cannot clean the longer plan",
+        // The one way a saved walkthrough stops being clean on this base: a new plan replaces it.
+        w.setPlan(savingPlan("Regenerated", 3));
+        check("identity: setPlan over a save clears savedAs, and the new plan is unsaved",
+                w.getState().getSavedAs() == null && w.getState().getUnsaved());
+        check("  control: the save of the earlier snapshot cannot clean the plan that replaced it",
                 !w.markSaved("generated", gen.getPlan()) && w.getState().getUnsaved());
 
         w.discardUnsaved();
-        check("identity: Don't save clears the mark and keeps the identity",
-                !w.getState().getUnsaved() && "generated".equals(w.getState().getSavedAs()));
+        check("identity: Don't save clears the mark", !w.getState().getUnsaved());
         int before = events.saveStates;
         w.discardUnsaved();
         check("  and a second Don't save is a no-op (no event)", events.saveStates == before);
@@ -223,7 +216,7 @@ public final class PlanProbe {
         check("identity: stop clears the name and the mark",
                 w.getState().getSavedAs() == null && !w.getState().getUnsaved());
 
-        w.setPlan(new Plan("", "en", savingPlan("x", 1).getFrames(), savingPlan("x", 1).getSteps(), false));
+        w.setPlan(new Plan("", "en", savingPlan("x", 1).getFrames(), savingPlan("x", 1).getSteps()));
         check("identity: an unsaved plan with no title is NOT worth asking about (Save would refuse it)",
                 w.getState().getUnsaved() && !w.getState().getWorthAsking());
     }
@@ -580,12 +573,9 @@ public final class PlanProbe {
                 Arrays.asList(ctx(17, 17), focus(36, 60)), Collections.<Relation>emptyList());
         Frame saveFar = new Frame(2, fileC, "C.Apply", "", 2, null, 0, null, 1,
                 Collections.singletonList(focus(10, 30)), Collections.<Relation>emptyList());
-        // `streaming = true` on the way in, deliberately: a saved walkthrough is by definition finished, and
-        // the two assertions below are that the flag reaches neither the file nor the loaded plan.
         Plan saved = new Plan("Round trip", "de",
                 Arrays.asList(saveRoot, saveChild, saveFar),
-                Arrays.asList(step(0, ctx(68, 70)), step(1, ctx(36, 38)), step(2, ctx(10, 12))),
-                /*streaming*/ true);
+                Arrays.asList(step(0, ctx(68, 70)), step(1, ctx(36, 38)), step(2, ctx(10, 12))));
 
         WalkthroughStorage store = new WalkthroughStorage(root);
         String savedAt = store.save(saved, "round-trip");
@@ -609,11 +599,6 @@ public final class PlanProbe {
                         && back.getFrames().get(1).getCallLine() == 85
                         && "InvokeOn".equals(back.getFrames().get(1).getCallToken())
                         && back.getFrames().get(1).getCallOccurrence() == 2);
-        // `Stream.md`: a file carrying `streaming` would park playback at its last step forever, waiting for
-        // an agent that stopped running long ago. Saving closes it, and loading closes it again — belt and
-        // braces, because a hand-edited file is the case the save side cannot reach.
-        check("storage: `streaming` never reaches the file", !onDisk.contains("\"streaming\": true"));
-        check("storage: and a loaded plan is closed whatever the file said", !back.getStreaming());
         check("storage: keep ranges survive with their roles",
                 back.getFrames().get(0).getKeep().size() == 2
                         && back.getFrames().get(0).getKeep().get(1).isFocus());

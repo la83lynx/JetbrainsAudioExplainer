@@ -334,8 +334,8 @@ public final class EffortProbe {
         String withExtra = prompt(ExplainScope.CURSOR, SKILL, STD, typed);
         check("the user's text appears verbatim, exactly once", countOf(withExtra, typed) == 1);
         check("  it comes after the numbered steps",
-                withExtra.indexOf(typed) > withExtra.indexOf("5. Do NOT print the walkthrough")
-                        && withExtra.indexOf("5. Do NOT print the walkthrough") >= 0);
+                withExtra.indexOf(typed) > withExtra.indexOf("4. Do NOT print the walkthrough")
+                        && withExtra.indexOf("4. Do NOT print the walkthrough") >= 0);
         check("  and it carries the sentence that keeps the contract fixed",
                 withExtra.contains("They do NOT relax the `set_plan` contract"));
         check("  control: no text means no block at all",
@@ -353,7 +353,7 @@ public final class EffortProbe {
         // The payloads the agent POSTs must not land in the project, where they showed up as blank rows in
         // the saved list. The prompt names the directory, and the argv grants it explicitly, so a headless
         // `Write` outside the working directory does not rest on the user's own permission settings.
-        String planLine = "Write every JSON file you POST (the set_plan and each append_steps) in "
+        String planLine = "Write the JSON file you POST in "
                 + "/tmp/audio-explainer/plans/run-0/";
         int namedDir = 0;
         for (Case c : cases) if (countOf(prompt(c), planLine) == 1) namedDir++;
@@ -363,7 +363,7 @@ public final class EffortProbe {
         check("  in the shared tail, so the no-skill fallback keeps it too", stdNo.contains(planLine));
         check("  control: no plan dir means no line at all",
                 !ExplainPrompt.INSTANCE.buildPrompt(request(ExplainScope.CURSOR, false, null, STD, null), SKILL,
-                        Languages.INSTANCE.byCode("en"), STD, null, null).contains("Write every JSON file you POST"));
+                        Languages.INSTANCE.byCode("en"), STD, null, null).contains("Write the JSON file you POST"));
         check("  a Windows plan dir is written with forward slashes, like the skill dir",
                 ExplainPrompt.INSTANCE.buildPrompt(request(ExplainScope.CURSOR, false, null, STD, null), SKILL,
                         Languages.INSTANCE.byCode("en"), STD, null, Paths.get("C:\\Temp\\plans\\run-1"))

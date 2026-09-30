@@ -22,13 +22,11 @@ object SaveFlow {
 
     /**
      * **The Save button.** A walkthrough that is already a save is written back to its file with no dialog
-     * and no second entry; one that never was asks for a name, seeded with its title's slug. Refuses while
-     * the plan is still streaming — the button is disabled then, and this is the backstop behind it.
-     * Returns true when a file was written.
+     * and no second entry; one that never was asks for a name, seeded with its title's slug. Returns true
+     * when a file was written.
      */
     fun save(project: Project): Boolean {
         val state = server.walkthrough.getState()
-        if (state.streaming) return false
         val name = state.savedAs ?: return askAndWrite(project, "Save Walkthrough", WalkthroughStorage.slugify(state.title))
         return write(project, name)
     }
@@ -36,7 +34,6 @@ object SaveFlow {
     /** **Save As…** — always asks, seeded with the current name. Returns true when a file was written. */
     fun saveAs(project: Project): Boolean {
         val state = server.walkthrough.getState()
-        if (state.streaming) return false
         return askAndWrite(project, "Save Walkthrough As", state.savedAs ?: WalkthroughStorage.slugify(state.title))
     }
 
@@ -45,8 +42,7 @@ object SaveFlow {
      * go ahead with whatever was about to replace it, false to stop.
      *
      * Asks nothing, and answers true, when there is nothing unsaved worth asking about
-     * ([WalkthroughSnapshot.worthAsking]). A plan still streaming cannot be saved, so it is offered only
-     * Discard and continue · Cancel. **"Don't save" deletes nothing** — nothing was written — and a
+     * ([WalkthroughSnapshot.worthAsking]). **"Don't save" deletes nothing** — nothing was written — and a
      * walkthrough saved earlier keeps its file; it only clears the unsaved mark, so the next moment (a second
      * project closing) does not ask again about the same walkthrough.
      *
@@ -57,18 +53,6 @@ object SaveFlow {
         val state = walkthrough.getState()
         if (!state.worthAsking) return true
         val title = "“${state.title}”"
-        if (state.streaming) {
-            val choice = Messages.showOkCancelDialog(
-                project,
-                "$title is still being written, so it cannot be saved yet.\n$consequence",
-                UNSAVED_TITLE,
-                "Discard and Continue", "Cancel",
-                Messages.getWarningIcon(),
-            )
-            if (choice != Messages.OK) return false
-            walkthrough.discardUnsaved()
-            return true
-        }
         val choice = Messages.showDialog(
             project,
             "$title has not been saved.\n$consequence",
@@ -120,8 +104,7 @@ object SaveFlow {
         if (server.saveCurrentWalkthrough(name) != null) return true
         Messages.showErrorDialog(
             project,
-            "Could not save — no active walkthrough, it is still being written, or this project has no " +
-                "workspace folder.",
+            "Could not save — no active walkthrough, or this project has no workspace folder.",
             "Save Walkthrough",
         )
         return false

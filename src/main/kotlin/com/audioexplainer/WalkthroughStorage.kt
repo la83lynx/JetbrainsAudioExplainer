@@ -47,14 +47,7 @@ class WalkthroughStorage(private val workspaceRoot: Path) {
     fun save(plan: Plan, name: String?): String {
         Files.createDirectories(dir)
         val file = dir.resolve("${slugify(name ?: plan.title)}.json")
-        // `streaming = false` on the way out, and again on the way in (`Stream.md`): a *saved* walkthrough is
-        // by definition finished, so the field that means "more steps are coming" must not reach disk. A file
-        // that carried it would park playback at its last step forever, waiting for an agent that stopped
-        // running long ago.
-        Files.writeString(
-            file,
-            json.encodeToString(plan.copy(frames = toRelativePaths(plan.frames), streaming = false)),
-        )
+        Files.writeString(file, json.encodeToString(plan.copy(frames = toRelativePaths(plan.frames))))
         return file.toAbsolutePath().toString()
     }
 
@@ -66,7 +59,7 @@ class WalkthroughStorage(private val workspaceRoot: Path) {
         val file = dir.resolve("${slugify(name)}.json")
         if (!Files.exists(file)) return null
         val data = readSave(file) ?: return null
-        return data.copy(frames = toAbsolutePaths(data.frames), streaming = false)
+        return data.copy(frames = toAbsolutePaths(data.frames))
     }
 
     /** Whether a file named [name] exists here — any file, save or not, since it is what a save would replace. */
@@ -79,9 +72,9 @@ class WalkthroughStorage(private val workspaceRoot: Path) {
      * It accepts exactly what [save] could have written, and the negative form is what makes it work on the
      * files already on disk, which carry no marker:
      *  - **a top-level `type` means a wire message, not a save.** [Plan] has no `type` field, so [save] cannot
-     *    write one; a file with it is an agent's `set_plan` / `append_steps` payload, written into the project
-     *    by an agent that was told "a temp file" and not where (`Saving.md`). Decoded leniently it becomes a
-     *    [Plan] with a blank title and no frames — the blank rows that errored on open.
+     *    write one; a file with it is an agent's `set_plan` payload, written into the project by an agent
+     *    that was told "a temp file" and not where (`Saving.md`). Decoded leniently it becomes a [Plan] with
+     *    a blank title and no frames — the blank rows that errored on open.
      *  - **a blank `title` or no `frames`** is what `saveCurrentWalkthrough` refuses to write, so it is not a
      *    save whatever else it is.
      */

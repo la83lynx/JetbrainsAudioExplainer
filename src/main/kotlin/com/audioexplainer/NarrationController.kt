@@ -66,17 +66,6 @@ class NarrationController(
      * [narrateCurrent]) rather than drain-[resume] the previous step's buffered audio.
      */
     private var restartPending = false
-    /**
-     * **Narration ran out of steps on a plan that is still being written** (`Stream.md`) — parked, not
-     * finished.
-     *
-     * The difference from [suspended] is who is waiting for whom: suspended is the reader pausing, and the
-     * audio is buffered and ready to drain. Parked is narration having nothing to say yet, with [active]
-     * still true so that the append that wakes it does not have to restart the whole engagement. A step
-     * arriving clears it; so does anything that moves the position, because a reader who navigated is no
-     * longer at the open end.
-     */
-    private var parked = false
     private var stream: TtsService.TtsStream? = null
     private var ttsErrorNotified = false
 
@@ -121,7 +110,6 @@ class NarrationController(
         active = false
         suspended = false
         restartPending = false
-        parked = false
         stepIndex = -1
         sync()
     }
@@ -204,10 +192,6 @@ class NarrationController(
                 }
                 when {
                     !active -> startAt(snap.stepIndex)
-                    // Parked at the open end. Anything that moved the position while we waited (a click, a
-                    // Prev/Next) means the reader is no longer there, so that case is handled by the arm
-                    // below — this one is only "we are still where we stopped, has anything arrived?".
-                    parked && stepIndex == snap.stepIndex -> unpark()
                     // The walk moved under us (a click, an agent `goto`, the tree) — narrate where it is.
                     stepIndex != snap.stepIndex -> startAt(snap.stepIndex)
                     // User stepped while paused → start THIS step from the beginning.
@@ -246,13 +230,6 @@ class NarrationController(
      * walkthrough from inside this method, which is what made the position two-level and two-owned.
      */
     private fun narrateCurrent(speak: Boolean = true) {
-        // **The one place the park is released**, because this is the one place a step is narrated. Every
-        // caller that moves the position comes through here — [startAt], [userAdvanceInternal],
-        // [gotoStepInternal], [restartCurrent], [unpark] — and a parked flag surviving one of them would
-        // leave [advanceAfterPlayback] returning early forever: narration engaged, a step on screen, and the
-        // walkthrough never advancing again. Clearing it per caller is the version of this that gets a caller
-        // added later and forgotten.
-        parked = false
         val resolved = walkthrough.getResolvedPlan() ?: return finish()
         val total = resolved.steps.size
         if (stepIndex !in 0 until total) return finish()
@@ -333,45 +310,10 @@ class NarrationController(
      * plan is [Walkthrough.nextStep] returning false (it settles a playing walkthrough to paused itself).
      */
     private fun advanceAfterPlayback() {
-        if (!active || suspended || parked) return
-        if (!walkthrough.nextStep()) {
-            // **The end of the known steps is not always the end of the plan** (`Stream.md`). On a plan still
-            // being written, park: stay engaged, keep the walkthrough `playing`, and let the append wake us.
-            // Finishing here is what would tell the reader "that's all" three steps into a nine-step
-            // walkthrough — and because `finish()` disengages, the steps that arrived a second later would
-            // need a fresh Play to be heard at all.
-            if (walkthrough.awaitingSteps()) return park()
-            return finish()
-        }
+        if (!active || suspended) return
+        if (!walkthrough.nextStep()) return finish()
         stepIndex = walkthrough.currentStepIndex() ?: return finish()
         narrateCurrent()
-    }
-
-    /**
-     * Wait at the open end of a streamed plan. Nothing is cancelled and nothing is posted: the reader is
-     * looking at the last step that exists, which is the right thing to be looking at, and the sidebar's
-     * generation banner is still up saying the explanation is being written.
-     */
-    private fun park() {
-        parked = true
-        if (log.isDebugEnabled) log.debug("narrate: parked at step $stepIndex, plan still streaming")
-    }
-
-    /**
-     * **Steps arrived, or the plan closed** — the counterpart to [park], reached through [sync].
-     *
-     * Two outcomes and no third: there is a step after the one we stopped on, so narrate it; or the plan was
-     * closed with nothing more, so finish exactly as running off the end of an ordinary plan does. The second
-     * is what [Walkthrough.closePlan] settles the status for, so this does not have to.
-     */
-    private fun unpark() {
-        parked = false
-        if (walkthrough.awaitingSteps()) {
-            parked = true // closed neither, and still nothing past us — keep waiting
-            return
-        }
-        if (stepIndex >= walkthrough.stepCount() - 1) return finish()
-        advanceAfterPlayback()
     }
 
     /**
@@ -462,7 +404,6 @@ class NarrationController(
         active = false
         suspended = false
         restartPending = false
-        parked = false
     }
 
     private fun finish() {
@@ -470,7 +411,6 @@ class NarrationController(
         active = false
         suspended = false
         restartPending = false
-        parked = false
     }
 
     private fun onTtsError(message: String, voice: String) {

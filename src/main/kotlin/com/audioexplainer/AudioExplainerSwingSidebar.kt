@@ -90,13 +90,6 @@ class AudioExplainerSwingSidebar(
     }
 
     override fun onPlan(state: WalkthroughSnapshot) = render(state)
-
-    /**
-     * Steps were appended (`Stream.md`). This surface has no outline to grow — it shows the step count and
-     * the current step — so re-rendering the same state is the whole of it, and the count moves.
-     */
-    override fun onPlanExtended(state: WalkthroughSnapshot) = render(state)
-
     override fun onStep(index: Int) = render(walkthrough.getState())
     override fun onStatus(status: String) = render(walkthrough.getState())
 

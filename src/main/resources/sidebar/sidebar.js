@@ -17,17 +17,11 @@ let state = {
 	currentStep: -1,
 	stepCount: 0,
 	/**
-	 * **The plan is still being written** — more steps will arrive (`Stream.md`). The only thing it changes
-	 * here is the counter, because `3/7` is a claim the plugin cannot make yet: 7 is what has arrived, not
-	 * what there will be.
-	 */
-	streaming: false,
-	/**
 	 * **Which saved walkthrough this is** (`Saving.md` C) — the file stem Save writes without asking — or
 	 * null when it was never saved, and Save asks for a name.
 	 */
 	savedAs: null,
-	/** The plan holds content no file does: never saved, or appended to since. Only the tooltip reads it. */
+	/** The plan holds content no file does: it was never saved. Only the tooltip reads it. */
 	unsaved: false,
 	/** What Now Playing shows for that step (a `StepView`), or null: title, explanation, ttsText, location. */
 	now: null,
@@ -743,22 +737,15 @@ function maybeRepaintOnViewChange(view) {
 }
 
 /**
- * The Save split button's state (`Saving.md` C): disabled while the plan is still being written, and a
- * tooltip that says which file Save writes — so the one-click, no-dialog Save of a saved walkthrough is
- * never a surprise. Called from render() and when the save directory arrives.
+ * The Save split button's state (`Saving.md` C): a tooltip that says which file Save writes — so the
+ * one-click, no-dialog Save of a saved walkthrough is never a surprise. Called from render() and when the save directory arrives.
  */
 function renderSaveButton() {
 	const save = document.getElementById("btn-save");
 	const caret = document.getElementById("btn-save-menu");
 	if (!save || !caret) return;
-	const disabled = saveDisabled();
-	save.setAttribute("aria-disabled", disabled ? "true" : "false");
-	caret.setAttribute("aria-disabled", disabled ? "true" : "false");
-	if (disabled) setSaveMenuOpen(false);
 	let tip;
-	if (disabled) {
-		tip = "Still being written — Save enables itself when the walkthrough is complete";
-	} else if (state.savedAs) {
+	if (state.savedAs) {
 		tip = state.unsaved
 			? `Save changes to “${state.savedAs}”`
 			: `Saved as “${state.savedAs}” — Save writes it again`;
@@ -766,7 +753,7 @@ function renderSaveButton() {
 		tip = walkthroughsDir ? `Save walkthrough in ${walkthroughsDir}` : "Save Walkthrough";
 	}
 	setTip(save, tip);
-	setTip(caret, disabled ? tip : "More save options");
+	setTip(caret, "More save options");
 }
 
 function render() {
@@ -976,11 +963,7 @@ function renderHighlightProgress() {
 
 	const { current, total } = computeGlobalProgress();
 	if (total > 0) {
-		// `3/7+` while the plan streams: the denominator is how many steps have arrived, not how many there
-		// will be, and printing it bare would count down to a total that then grows. The `+` is also the only
-		// on-screen sign that a walkthrough waiting silently at its last step is waiting for more rather than
-		// finished — the progress bar below reads full either way.
-		counter.textContent = state.streaming ? `${current}/${total}+` : `${current}/${total}`;
+		counter.textContent = `${current}/${total}`;
 	} else {
 		counter.textContent = "";
 	}
@@ -1416,10 +1399,7 @@ document.getElementById("btn-restart").addEventListener("click", () => {
 });
 
 // The Save split button (`Saving.md` C). The dialogs are the plugin's; this side only says which half was
-// pressed, and refuses both while the plan is still being written.
-function saveDisabled() {
-	return state.streaming === true;
-}
+// pressed.
 function setSaveMenuOpen(open) {
 	const menu = document.getElementById("save-menu");
 	const caret = document.getElementById("btn-save-menu");
@@ -1429,17 +1409,14 @@ function setSaveMenuOpen(open) {
 }
 document.getElementById("btn-save").addEventListener("click", () => {
 	setSaveMenuOpen(false);
-	if (saveDisabled()) return;
 	vscode.postMessage({ type: "save" });
 });
 document.getElementById("btn-save-menu").addEventListener("click", (e) => {
 	e.stopPropagation(); // or the document handler below closes it again on the same click
-	if (saveDisabled()) return;
 	setSaveMenuOpen(document.getElementById("save-menu").style.display === "none");
 });
 document.getElementById("btn-save-as").addEventListener("click", () => {
 	setSaveMenuOpen(false);
-	if (saveDisabled()) return;
 	vscode.postMessage({ type: "save_as" });
 });
 document.addEventListener("click", (e) => {
@@ -1772,7 +1749,6 @@ window.addEventListener("message", (event) => {
 				outline: msg.outline || { scenes: [], scened: false, steps: 0 },
 				currentStep: typeof msg.currentStep === "number" ? msg.currentStep : -1,
 				stepCount: msg.stepCount || 0,
-				streaming: msg.streaming === true,
 				savedAs: typeof msg.savedAs === "string" ? msg.savedAs : null,
 				unsaved: msg.unsaved === true,
 				now: msg.now || null,

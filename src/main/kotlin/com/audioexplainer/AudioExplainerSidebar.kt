@@ -159,24 +159,6 @@ class AudioExplainerSidebar(
     }
 
     /**
-     * **Steps arrived on a plan already showing** (`Stream.md`) — push the new rows and nothing else.
-     *
-     * Deliberately *not* [onPlan]'s body. Three of those four calls would be wrong here: `onPlanChanged`
-     * hard-resets narration (cancelling the audio the reader is listening to), the voice options cannot have
-     * changed because `language` is fixed at `set_plan`, and the Undo banner would offer to undo the
-     * walkthrough *back to itself*. What is left is the row model, which is exactly what grew.
-     *
-     * [pushUpdate] already sends the whole outline and the webview rebuilds it only when its signature
-     * changed, so an append costs one push and a redraw of the list.
-     */
-    override fun onPlanExtended(state: WalkthroughSnapshot) {
-        pushUpdate()
-        // The narration may be parked at what used to be the last step, waiting for exactly this. It is a
-        // re-sync, not a reset: `onWalkthroughChanged` leaves the position and the audio alone.
-        narration.onWalkthroughChanged()
-    }
-
-    /**
      * **The position moved — the one navigation callback, and the sidebar consumes it.**
      *
      * Round 3's one defect was this method's ancestor not existing: the sidebar learned its sub-step position
@@ -220,11 +202,8 @@ class AudioExplainerSidebar(
             // and the one place a file and a line survive (the location link).
             put("now", if (now != null) json.encodeToJsonElement(now) else JsonNull)
             put("status", state.status)
-            // "playing, but the next step has not been written yet" is otherwise indistinguishable from
-            // "playing" with silent audio — see `Stream.md`'s open end.
-            put("streaming", state.streaming)
             // The Save split button's state (`Saving.md` C): which file Save writes, and whether it has
-            // anything to write. `streaming` above is what disables it.
+            // anything to write.
             put("savedAs", state.savedAs?.let { JsonPrimitive(it) } ?: JsonNull)
             put("unsaved", state.unsaved)
             put("language", lang.code)

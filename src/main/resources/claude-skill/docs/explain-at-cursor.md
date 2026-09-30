@@ -21,8 +21,6 @@ because the user right-clicked **"Explain This (Audio)"** in their editor. It is
 - **A plan is `frames` + `steps`.** Frames are the code on screen (one file plus the lines kept visible in
   it); steps are the narration, in order, naming the frame each one is about. `docs/plan-schema.md` is the
   contract — read it before writing the plan, every time.
-- **Send the first steps early and append the rest** (step 5). The reader hears step 1 while you are writing
-  step 6, instead of hearing nothing until you are done.
 
 ## Context you are given
 
@@ -130,8 +128,8 @@ asks, because the plugin needs the walkthrough back as data — printing it as p
 
    **Write it in the plan directory the prompt names** — a per-run directory the plugin made for exactly
    this and deletes when you finish. If the prompt names none, use the system temp directory. **Never write
-   it inside the project**: a `set_plan` or `append_steps` file there can land in `.walkthroughs/`, where it
-   shows up in the user's saved list as a blank walkthrough that errors when opened.
+   it inside the project**: a `set_plan` file there can land in `.walkthroughs/`, where it shows up in the
+   user's saved list as a blank walkthrough that errors when opened.
 
    Send the file with the helper for your platform (both live in this skill's `scripts/` dir):
 
@@ -153,51 +151,12 @@ asks, because the plugin needs the walkthrough back as data — printing it as p
    step naming a frame that does not exist): fix it and re-POST. `[warn]` renders differently from what you
    authored. `[info]` is a soft cap or a value the plugin derived for you.
 
-5. **Stream the rest** (strongly preferred). Do not make the reader wait in silence for the whole plan.
-   Put `"streaming": true` on the `set_plan` above, send it with only your **first 2-3 steps**, and then
-   append the rest in batches as you write them:
-
-   ```json
-   { "type": "append_steps", "steps": [ …the next few… ] }
-   { "type": "append_steps", "steps": [ …the last few… ], "final": true }
-   ```
-
-   Sent with the **same helper and the same verb** as the plan (`explainer.ps1 plan <file>` /
-   `explainer.sh plan <file>` — it POSTs whatever message the file holds), so each batch is another `Write`
-   plus another send. **Each batch file goes in the same plan directory as the `set_plan`** (step 4), never
-   inside the project — for the same reason.
-
-   **Why it is worth the extra POSTs:** the walkthrough starts playing the moment the first batch lands, so
-   the reader is listening to step 1 while you are still writing step 6. The run takes exactly as long
-   either way — what changes is that they spend it *hearing the explanation* instead of watching a spinner.
-
-   The constraints, in full:
-
-   - **All frames go in the `set_plan`.** `append_steps` carries `steps` and nothing else. Decide the frames
-     first — they are the code on screen, the plugin builds it once, and a frame arriving later would rebuild
-     the view under a reader who is in the middle of it.
-   - **Append-only and in order.** A step you sent is already being narrated: it cannot be edited, replaced
-     or re-ordered, and re-POSTing `set_plan` mid-stream replaces the whole walkthrough instead of extending
-     it.
-   - **Always finish with `"final": true`**, even if the last batch is empty
-     (`{"type":"append_steps","steps":[],"final":true}`). Until it arrives the walkthrough stays open and
-     waits at its last step. (If your process dies first the plugin closes it for you — but then the reader
-     waited for nothing.)
-   - Each reply's `issues` covers **only that batch**; anything already reported is not repeated.
-
-   Skip streaming only when the whole plan is 2-3 steps anyway, and for `DEPTH: brief` (at most four steps,
-   where the second POST costs more than it saves).
-
-6. **Done.** Do NOT send `goto`/`resume` (the plugin/sidebar drives playback). Print one status line.
+5. **Done.** Do NOT send `goto`/`resume` (the plugin/sidebar drives playback). Print one status line.
 
 ## Reminders
 
 - The plugin loads the plan into a **paused** walkthrough positioned at the first step — the user presses
   Play in the sidebar. Sending `set_plan` is enough; nothing else.
-- **Streaming changes nothing about that.** The walkthrough still lands paused on step 1 and still waits for
-  Play; the only difference is that the steps after your first batch arrive while the reader is already
-  listening. If they reach the last step you have sent, playback waits there for the next batch rather than
-  ending.
 - If the server is unreachable, the discovery files (`~/.claude-explainer-port`, `~/.claude-explainer-token`)
   are missing — the plugin isn't running. Report it plainly; don't retry in a loop.
 - Field-name mistakes are the most common failure: it is `frames`/`steps`/`keep`/`ranges`/`start`/`end`/
