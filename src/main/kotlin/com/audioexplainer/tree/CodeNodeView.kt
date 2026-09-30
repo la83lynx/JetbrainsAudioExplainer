@@ -269,12 +269,26 @@ class CodeNodeView(
         // constraint 9's coupling arriving as an event rather than as a guess. Both 1a′ benches hid this by
         // revalidating their own container after every render; a caller that does not would have kept a stale
         // slot around a taller node.
+        //
+        // **Not inside a batch.** Rider's frontend adds its inlays through `InlayModel.execute(batch = true)`, and
+        // `offsetToXY` asserts `!isInBatchMode` — so resyncing from `onAdded` threw a SEVERE per inlay (500+ in one
+        // sandbox round). The batch's inlays are owed one resync, paid when it finishes; the platform clears the
+        // flag before notifying (`InlayModelImpl.execute`), so `offsetToXY` is legal again by then.
         editor.inlayModel.addListener(
             object : InlayModel.Listener {
-                override fun onAdded(inlay: Inlay<*>) = resync(TRIGGER_INLAY)
-                override fun onUpdated(inlay: Inlay<*>) = resync(TRIGGER_INLAY)
-                override fun onUpdated(inlay: Inlay<*>, changeFlags: Int) = resync(TRIGGER_INLAY)
-                override fun onRemoved(inlay: Inlay<*>) = resync(TRIGGER_INLAY)
+                private var owed = false
+                private fun changed() {
+                    if (editor.inlayModel.isInBatchMode) owed = true else resync(TRIGGER_INLAY)
+                }
+                override fun onAdded(inlay: Inlay<*>) = changed()
+                override fun onUpdated(inlay: Inlay<*>) = changed()
+                override fun onUpdated(inlay: Inlay<*>, changeFlags: Int) = changed()
+                override fun onRemoved(inlay: Inlay<*>) = changed()
+                override fun onBatchModeFinish(editor: Editor) {
+                    if (!owed) return
+                    owed = false
+                    resync(TRIGGER_INLAY)
+                }
             },
             listeners,
         )
