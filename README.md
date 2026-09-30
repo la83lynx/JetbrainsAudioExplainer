@@ -24,6 +24,9 @@ ships to users.
   code is the surviving copy. **`Effort.md` went the same way** — the plan for the effort/depth/model knobs,
   the per-run dialog and the diagnostics, cited from `AudioExplainerSettings`, `ClaudeExplainer`,
   `ExplainPrompt`, `plugin.xml` and `probes/EffortProbe.java`, and readable at `git show f873b3d:Effort.md`.
+  **`Saving.md` too** — the plan for the saved list's filter, the plan directory outside the project, save
+  identity and the unsaved prompt, cited from `SaveFlow`, `Walkthrough`, `WalkthroughStorage`,
+  `ExplainPrompt`, `ClaudeExplainer`, the sidebar and both probes: `git show 4a54373:Saving.md`.
   `Speed.md` stays in the tree, because its ranked candidates are work nobody has done yet.
 - `build.gradle.kts` / `settings.gradle.kts` — Gradle + IntelliJ Platform Gradle Plugin 2.x, targeting Rider 2026.1.4 (branch 261).
 - `src/main/resources/META-INF/plugin.xml` — tool window, context-menu action, startup activity, app service.
