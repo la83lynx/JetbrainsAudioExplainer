@@ -8,12 +8,14 @@ import com.intellij.execution.process.ProcessOutputTypes
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
+import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.util.text.StringUtil
 import com.intellij.openapi.wm.ToolWindowManager
 import kotlinx.serialization.json.Json
@@ -22,6 +24,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -81,32 +84,68 @@ class ClaudeExplainer {
         val effort = request.effort ?: state.explainEffort
         val model = state.explainModel // no per-run model control — see Effort.md's dialog table
         val depth = request.depth ?: state.explainDepth
-        val prompt = ExplainPrompt.buildPrompt(request, skillDir, resolveLanguage(), depth, request.extraInstructions)
-        val cmd = try {
-            GeneralCommandLine(claudeExe.toString())
-                .withParameters(ExplainPrompt.buildArgs(prompt, effort, model))
-                .withWorkDirectory(workDir)
-                .withCharset(StandardCharsets.UTF_8)
-                .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
-        } catch (e: Exception) {
-            log.warn("failed to build claude command line", e)
-            tracker.fail(e.message ?: "Failed to start Claude.")
-            notify(project, NotificationType.ERROR, "Explain This failed", errorHtml(e.message))
+        // The run's own directory for the JSON it POSTs (`Saving.md` B), so no payload lands in the project.
+        val planDir = createPlanDir()
+        // **Kept unless the run succeeds**: a failed run's payloads are the evidence of what it sent.
+        var keepPlanDir = true
+        try {
+            val prompt = ExplainPrompt.buildPrompt(
+                request, skillDir, resolveLanguage(), depth, request.extraInstructions, planDir,
+            )
+            val cmd = try {
+                GeneralCommandLine(claudeExe.toString())
+                    .withParameters(ExplainPrompt.buildArgs(prompt, effort, model, planDir))
+                    .withWorkDirectory(workDir)
+                    .withCharset(StandardCharsets.UTF_8)
+                    .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
+            } catch (e: Exception) {
+                log.warn("failed to build claude command line", e)
+                tracker.fail(e.message ?: "Failed to start Claude.")
+                notify(project, NotificationType.ERROR, "Explain This failed", errorHtml(e.message))
+                return
+            }
+
+            indicator.text = "Claude is reading ${request.displayName} and planning the walkthrough…"
+            tracker.progress("Reading ${request.displayName} and planning…")
+            val result = try {
+                runClaude(cmd, indicator, tracker::progress)
+            } catch (e: Exception) {
+                log.warn("claude invocation failed", e)
+                tracker.fail(e.message ?: "Claude invocation failed.")
+                notify(project, NotificationType.ERROR, "Explain This failed", errorHtml(e.message))
+                return
+            }
+
+            keepPlanDir = !reportResult(project, request, result, tracker)
+        } finally {
+            disposePlanDir(planDir, keepPlanDir)
+        }
+    }
+
+    /**
+     * A fresh `run-*` directory under the IDE's temp path for this run's POST payloads (`Saving.md` B), or
+     * null when one cannot be made — the prompt then names none, which is how every run behaved before.
+     */
+    private fun createPlanDir(): Path? = try {
+        val base = Path.of(PathManager.getTempPath(), "audio-explainer", "plans")
+        Files.createDirectories(base)
+        Files.createTempDirectory(base, "run-")
+    } catch (e: Exception) {
+        log.warn("could not create a plan directory; the prompt will name none", e)
+        null
+    }
+
+    /**
+     * The process has exited, so nothing can write here again: delete the directory, or keep it and say
+     * where it is when the run failed, because then its payloads are the evidence.
+     */
+    private fun disposePlanDir(planDir: Path?, keep: Boolean) {
+        if (planDir == null) return
+        if (keep) {
+            log.info("explain run failed; its plan payloads are kept in $planDir")
             return
         }
-
-        indicator.text = "Claude is reading ${request.displayName} and planning the walkthrough…"
-        tracker.progress("Reading ${request.displayName} and planning…")
-        val result = try {
-            runClaude(cmd, indicator, tracker::progress)
-        } catch (e: Exception) {
-            log.warn("claude invocation failed", e)
-            tracker.fail(e.message ?: "Claude invocation failed.")
-            notify(project, NotificationType.ERROR, "Explain This failed", errorHtml(e.message))
-            return
-        }
-
-        reportResult(project, request, result, tracker)
+        if (!FileUtil.delete(planDir.toFile())) log.info("could not delete the plan directory $planDir")
     }
 
     /**
@@ -223,7 +262,11 @@ class ClaudeExplainer {
 
     // ── Result reporting ───────────────────────────────────────────────────────
 
-    private fun reportResult(project: Project, request: ExplainRequest, result: RunResult, tracker: ExplainSessionTracker) {
+    /**
+     * Report how the run ended. Returns true when it did not fail — a plan arrived, or the user cancelled —
+     * which is what decides whether its plan directory is evidence worth keeping.
+     */
+    private fun reportResult(project: Project, request: ExplainRequest, result: RunResult, tracker: ExplainSessionTracker): Boolean {
         // **The streaming backstop, and it is first because it is unconditional** (`Stream.md`). A plan POSTed
         // with `streaming: true` keeps playback parked at its last step, waiting for an `append_steps` that
         // only this process can send. The process is over — cancelled, failed, or finished without ever
@@ -238,7 +281,7 @@ class ClaudeExplainer {
         if (result.cancelled) {
             tracker.finish() // clear the banner; the balloon reports the cancellation
             notify(project, NotificationType.INFORMATION, "Explain This cancelled", "The walkthrough request was cancelled.")
-            return
+            return true
         }
 
         val state = runCatching { service<ExplainerServerService>().server.walkthrough.getState() }.getOrNull()
@@ -257,7 +300,7 @@ class ClaudeExplainer {
                     if (detail != null) append("<br/><br/>").append(errorHtml(detail))
                 },
             )
-            return
+            return false
         }
 
         if (planLoaded) {
@@ -269,6 +312,7 @@ class ClaudeExplainer {
                     "${state.plan.steps.size} step(s). " +
                     "Open the <b>Audio Explainer</b> tool window and press Play.",
             )
+            return true
         } else {
             // Claude reported success but no plan reached the server.
             tracker.fail("Claude finished but no walkthrough was received by the plugin.")
@@ -280,6 +324,7 @@ class ClaudeExplainer {
                 },
             )
         }
+        return false
     }
 
     private fun activateSidebar(project: Project) {

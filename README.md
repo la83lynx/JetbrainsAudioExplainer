@@ -37,7 +37,8 @@ ships to users.
 - `AudioExplainerSettings.kt` — app-level `PersistentStateComponent` (`audioExplainer.xml`) holding the tunable highlight appearance and the tree's shape. Its `DEF_TREE_*` defaults are the verdicts nine judged rounds settled, so Reset-to-defaults restores what was actually approved.
 - `tree/TreeStyle.kt` — the one place a persisted setting becomes a `NestStyle`/`CodeNodeStyle`. Values are enum constant names, so there is no second vocabulary; an unrecognised one degrades to the default rather than stopping the tree from drawing.
 - `HighlightSettingsConfigurable.kt` — the **Settings → Tools → Audio Explainer** page (Kotlin UI DSL). Its first group is the **code tree's own shape** — the nesting leader (`BRACE` by default, or `CORNERS`/`ARROW`), the collapse control, the caption path, node de-emphasis, the elision style and the height ceiling — and the rest decorate the lines inside a node. On Apply it asks `TreePlanController.refresh()`, which re-styles the tree when the shape changed and re-renders the step when only a colour did; a **theme** change re-renders it too, via each node view's own colour-scheme subscription, because the palette is computed per render.
-- `WalkthroughStorage.kt` — per-workspace save/load under `<project>/.walkthroughs/` (port of `storage.ts`).
+- `WalkthroughStorage.kt` — per-workspace save/load under `<project>/.walkthroughs/` (port of `storage.ts`). Lists and loads only what `save` could have written: a file with a top-level `type` is a wire message, and a blank title or no frames is not a save.
+- `SaveFlow.kt` — the Save / Save As… dialogs and the unsaved prompt, shared by the sidebar, `ExplainThisAction.launch` and the `projectCloseHandler` (`Saving.md`).
 - `ExplainThisAction.kt` — the **Explain This (Audio)** context-menu action: captures the caret/selection + project-relative file, packages an `ExplainRequest`, and runs a cancellable "Explaining…" background task.
 - `ExplainThisWithAction.kt` / `ExplainOptionsDialog.kt` — **Explain This with…**, the per-run overrides: the same action with one hook overridden, opening a modal seeded from the saved settings (effort slider, depth, free-text instructions with a history drop-down). Per-run values deliberately do **not** write back to Settings — a one-off must not silently become the new default — but the instruction history does persist. The plain entry stays first in the menu and unchanged, so the common case never grows a click.
 - `ExplainRequest.kt` — the context handed to Claude (`{file, caretLine, selectionText}` + project root / absolute path / selection line range), plus the three per-run overrides (`effort`, `depth`, `extraInstructions`), all null for the plain action.
@@ -116,9 +117,13 @@ bar. `stop` (or a `stop` agent message) closes the tab. The layers are the Intel
 
 **Phase 4 check:** with a walkthrough active, open the **Audio Explainer** tool window (right stripe).
 The sidebar shows the title, an outline, the current segment, and a progress bar. **Play/Pause**, **Next**,
-**Prev**, and clicking an outline entry move the walkthrough — and the tree view follows. **Save**
-prompts for a name and writes to `<project>/.walkthroughs/`; the idle view lists saved walkthroughs to
-reload. Audio (speed/voice + narration) is stubbed until the TTS phase. If JCEF is unavailable, the
+**Prev**, and clicking an outline entry move the walkthrough — and the tree view follows. **Save** is a
+split button (`Saving.md`): the first Save asks for a name and writes to `<project>/.walkthroughs/`, later
+Saves write the same file with no dialog, the caret's **Save As…** always asks (and confirms replacing a
+different walkthrough), and both are disabled while a plan is still streaming. An unsaved walkthrough is
+asked about before a new generation, the sidebar's Close, or the project closing. The idle view lists saved
+walkthroughs to reload — only files the saver could have written, so an agent's stray POST payload never
+shows as a blank row. Audio (speed/voice + narration) is stubbed until the TTS phase. If JCEF is unavailable, the
 window falls back to a plain Swing control panel wired to the same walkthrough.
 
 **Phase 5 check:** open a file, right-click in the editor → **Explain This (Audio)** appears (and is

@@ -273,6 +273,41 @@ code {
     display: inline-flex;
 }
 .icon-btn:hover { background: var(--ae-btn-hover); color: var(--ae-fg); }
+/* aria-disabled rather than [disabled], so the tooltip explaining why still gets its hover (Saving.md C). */
+.icon-btn[aria-disabled="true"] { opacity: 0.4; cursor: default; }
+.icon-btn[aria-disabled="true"]:hover { background: transparent; color: var(--ae-fg-dim); }
+
+/* The Save split button: Save, then a narrow caret opening a one-item menu (Save As…). */
+.split-btn { position: relative; display: inline-flex; }
+.split-btn > #btn-save { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.split-caret { padding: 4px 2px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.split-menu {
+    position: absolute;
+    top: calc(100% + 2px);
+    right: 0;
+    z-index: 5;
+    min-width: 110px;
+    padding: 3px;
+    background: var(--ae-panel);
+    border: 1px solid var(--ae-border);
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.split-menu-item {
+    display: block;
+    width: 100%;
+    padding: 4px 10px;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+    color: var(--ae-fg);
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.split-menu-item:hover { background: var(--ae-btn-hover); }
 
 #walkthrough-title {
     margin: 0;

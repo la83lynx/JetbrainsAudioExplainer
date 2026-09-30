@@ -38,7 +38,16 @@ object ExplainPrompt {
 
     private const val MAX_SELECTION_CHARS = 4000
 
-    fun buildArgs(prompt: String, effort: String, model: String): List<String> = buildList {
+    /**
+     * [planDir] is the run's own directory for the JSON it POSTs (`Saving.md` B), granted with `--add-dir`:
+     * it is outside the working directory by design. On the dev machine a headless `Write` there succeeded
+     * with or without the flag (measured 2026-09-23); it is passed anyway so the grant is explicit rather
+     * than resting on whatever permission settings the user has, where a refused `Write` would have no one
+     * to ask. **Last**, because `--add-dir` takes a variadic list and would swallow whatever positional came
+     * after it. Null adds nothing, so the argv `EffortProbe` measures is unchanged.
+     */
+    @JvmOverloads
+    fun buildArgs(prompt: String, effort: String, model: String, planDir: Path? = null): List<String> = buildList {
         add("-p"); add(prompt)
         add("--output-format"); add("stream-json")
         add("--verbose") // required alongside stream-json in print mode
@@ -52,16 +61,25 @@ object ExplainPrompt {
         // two people who want it; it is simply no longer the default.
         if (effort.isNotBlank()) { add("--effort"); add(effort.trim()) }
         if (model.isNotBlank()) { add("--model"); add(model.trim()) }
+        if (planDir != null) { add("--add-dir"); add(planDir.toString()) }
     }
 
+    /**
+     * [planDir] is where the agent writes the JSON it POSTs (`Saving.md` B) — a per-run directory outside the
+     * project, because a payload written inside it lands in `.walkthroughs/` often enough to fill the user's
+     * saved list with blank rows. Null (no directory could be made) leaves the line out rather than naming a
+     * directory that does not exist.
+     */
     fun buildPrompt(
         request: ExplainRequest,
         skillDir: Path?,
         lang: Language,
         depth: String,
         extraInstructions: String?,
+        planDir: Path?,
     ): String {
         val skillPath = skillDir?.toString()?.replace('\\', '/')
+        val planPath = planDir?.toString()?.replace('\\', '/')
         // Scope-specific framing (Phase 5): the editor cursor flow vs. a file / folder-or-project chosen in
         // the Solution Explorer. The set_plan schema is identical — only what Claude is asked to cover differs.
         val intro = when (request.scope) {
@@ -304,6 +322,16 @@ object ExplainPrompt {
                     "degraded — READ IT: an [error] there means the user cannot see part of what you wrote " +
                     "(an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.",
             )
+            // **Where the POSTed JSON goes** (`Saving.md` B). "A temp file" with no directory is how payloads
+            // ended up in the project's `.walkthroughs/` and showed as blank rows in the saved list, so the
+            // prompt names one. In the shared tail for the same reason item 4 is: the no-skill fallback must
+            // not lose it.
+            if (planPath != null) {
+                appendLine(
+                    "   Write every JSON file you POST (the set_plan and each append_steps) in $planPath/ — " +
+                        "never inside the project, where it would show up in the user's saved walkthroughs.",
+                )
+            }
             // **Streaming** (`Stream.md`), in the numbered tail, which is shared by both branches — the
             // skill branch and the no-skill fallback differ only in item 2.
             //

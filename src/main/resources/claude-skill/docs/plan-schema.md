@@ -573,8 +573,9 @@ gets translated; its `token` and `symbol` do not.
 
 ## Sending it
 
-Write the JSON to a temp file, then POST the file — never pass JSON inline on a command line, where
-shell quoting corrupts embedded quotes and newlines. See `docs/explain-at-cursor.md` (headless) or
+Write the JSON to a temp file **outside the project**, then POST the file — never pass JSON inline on a
+command line, where shell quoting corrupts embedded quotes and newlines. A payload written inside the
+project can land among the user's saved walkthroughs. See `docs/explain-at-cursor.md` (headless) or
 `docs/walkthrough.md` (interactive) for the helper scripts and the exact call. Then read the reply's
 `issues` array, as above.
 

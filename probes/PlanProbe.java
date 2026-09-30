@@ -87,6 +87,147 @@ public final class PlanProbe {
         return new Plan("t", "en", frames, steps, /*streaming*/ false);
     }
 
+    // ── 11b. The saved list accepts exactly what the saver could have written (`Saving.md` A) ──
+    //
+    // The streaming round left the agent's POST payloads in `.walkthroughs/`, and the old `list()` decoded
+    // each leniently into a Plan with a blank title — the blank rows that errored on open. The payload that
+    // matters most is the `set_plan` one: it HAS a title and frames, so only its `type` gives it away.
+
+    static void writeJson(java.nio.file.Path dir, String name, String json) throws java.io.IOException {
+        java.nio.file.Files.createDirectories(dir);
+        java.nio.file.Files.write(dir.resolve(name + ".json"), json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    static final String FRAMES_JSON =
+            "\"frames\":[{\"id\":0,\"file\":\"src/A.cs\",\"keep\":[{\"start\":1,\"end\":9}]}],"
+                    + "\"steps\":[{\"frame\":0,\"ranges\":[{\"start\":2,\"end\":3}]}]";
+
+    static void savingStorage() throws Exception {
+        java.nio.file.Path root = java.nio.file.Files.createTempDirectory("ae-saving");
+        java.nio.file.Path dir = root.resolve(".walkthroughs");
+        WalkthroughStorage store = new WalkthroughStorage(root);
+
+        writeJson(dir, "ref-plan-1", "{\"type\":\"set_plan\",\"title\":\"Ref plan\",\"streaming\":true," + FRAMES_JSON + "}");
+        writeJson(dir, "ref-plan-2", "{\"type\":\"append_steps\",\"steps\":[{\"frame\":0,\"ranges\":[{\"start\":4,\"end\":5}]}]}");
+        writeJson(dir, "blank-title", "{\"title\":\"\"," + FRAMES_JSON + "}");
+        writeJson(dir, "no-frames", "{\"title\":\"No frames\",\"frames\":[],\"steps\":[]}");
+        writeJson(dir, "not-an-object", "[1, 2, 3]");
+        Plan real = new Plan("Real save", "en",
+                Collections.singletonList(new Frame(0, root.resolve("src").resolve("A.cs").toString(), "A", "", 0,
+                        null, 0, null, 1, Collections.singletonList(focus(1, 9)), Collections.<Relation>emptyList())),
+                Collections.singletonList(step(0, focus(2, 3))), false);
+        store.save(real, "memory0");
+
+        List<WalkthroughEntry> listed = store.list();
+        check("saving: of six files, only the real save is listed",
+                listed.size() == 1 && "memory0".equals(listed.get(0).getName())
+                        && "Real save".equals(listed.get(0).getTitle()));
+        check("saving: load refuses the set_plan payload, though it has a title and frames",
+                store.load("ref-plan-1") == null);
+        check("saving: load refuses the append_steps payload", store.load("ref-plan-2") == null);
+        check("saving: load refuses a blank title", store.load("blank-title") == null);
+        check("saving: load refuses no frames, and a file that is not an object",
+                store.load("no-frames") == null && store.load("not-an-object") == null);
+        check("  control: load still opens the real save", store.load("memory0") != null);
+        long onDisk;
+        try (java.util.stream.Stream<java.nio.file.Path> s = java.nio.file.Files.list(dir)) { onDisk = s.count(); }
+        check("saving: hidden, not deleted — all six files are still on disk", onDisk == 6);
+        check("saving: a hidden file still counts as one a save would replace", store.exists("ref-plan-1"));
+        check("  control: a name nobody wrote does not", !store.exists("never-written"));
+
+        // The control that makes the first check mean something: the SAME set_plan payload with its `type`
+        // removed is listed. So it is the `type` key that hid it, not an instrument that lists nothing.
+        java.nio.file.Path root2 = java.nio.file.Files.createTempDirectory("ae-saving-ctl");
+        writeJson(root2.resolve(".walkthroughs"), "ref-plan-1", "{\"title\":\"Ref plan\"," + FRAMES_JSON + "}");
+        List<WalkthroughEntry> listed2 = new WalkthroughStorage(root2).list();
+        check("  control: the set_plan payload without its `type` IS listed",
+                listed2.size() == 1 && "Ref plan".equals(listed2.get(0).getTitle()));
+    }
+
+    // ── 11c. Save gets an identity (`Saving.md` C/D) ──
+    //
+    // `savedAs` + `unsaved` live on the REAL Walkthrough, which is pure, so every transition the Save button
+    // and the unsaved prompt read is reachable here with no IDE.
+
+    static final class SaveCounting implements WalkthroughListener {
+        int saveStates = 0, plans = 0;
+        @Override public void onSaveState(WalkthroughSnapshot s) { saveStates++; }
+        @Override public void onPlan(WalkthroughSnapshot s) { plans++; }
+    }
+
+    static Plan savingPlan(String title, int steps) {
+        List<Step> ss = new ArrayList<>();
+        for (int i = 0; i < steps; i++) ss.add(step(0, focus(20 + i, 21 + i)));
+        return new Plan(title, "en",
+                Collections.singletonList(new Frame(0, "/src/A.cs", "A.M", "", 0, null, 0, null, 1,
+                        Arrays.asList(ctx(10, 10), focus(20, 40)), Collections.<Relation>emptyList())),
+                ss, false);
+    }
+
+    static void savingIdentity() {
+        Walkthrough w = new Walkthrough();
+        SaveCounting events = new SaveCounting();
+        w.addListener(events);
+
+        check("identity: before any plan, nothing is unsaved",
+                !w.getState().getUnsaved() && w.getState().getSavedAs() == null && !w.getState().getWorthAsking());
+
+        w.setPlan(savingPlan("Generated", 3));
+        WalkthroughSnapshot gen = w.getState();
+        check("identity: a generated plan lands unsaved, with no name", gen.getUnsaved() && gen.getSavedAs() == null);
+        check("  and is worth asking about", gen.getWorthAsking());
+        check("  and setPlan does not fire onSaveState (the snapshot in onPlan carries it)",
+                events.saveStates == 0 && events.plans == 1);
+
+        check("identity: markSaved on a DIFFERENT plan object is refused",
+                !w.markSaved("x", savingPlan("Generated", 3)) && w.getState().getUnsaved());
+        check("identity: markSaved on the plan showing names it and cleans it",
+                w.markSaved("generated", gen.getPlan())
+                        && "generated".equals(w.getState().getSavedAs()) && !w.getState().getUnsaved());
+        check("  and fires onSaveState once", events.saveStates == 1);
+        check("  and a clean plan is not worth asking about", !w.getState().getWorthAsking());
+
+        // Position is not saved, so nothing that only moves it can make the walkthrough stale.
+        w.play(); w.nextStep(); w.gotoStep(2); w.prevStep(); w.pause(); w.restart(); w.pause();
+        check("identity: playback and stepping do not dirty it", !w.getState().getUnsaved());
+        w.closePlan();
+        check("identity: closePlan does not dirty it", !w.getState().getUnsaved());
+        w.appendSteps(Collections.<Step>emptyList(), true);
+        check("identity: an empty final batch does not dirty it", !w.getState().getUnsaved());
+
+        w.appendSteps(Collections.singletonList(step(0, focus(30, 31))), false);
+        check("identity: appendSteps marks it stale, and keeps the name Save writes back to",
+                w.getState().getUnsaved() && "generated".equals(w.getState().getSavedAs()));
+        check("  control: the save of the pre-append snapshot cannot clean the longer plan",
+                !w.markSaved("generated", gen.getPlan()) && w.getState().getUnsaved());
+
+        w.discardUnsaved();
+        check("identity: Don't save clears the mark and keeps the identity",
+                !w.getState().getUnsaved() && "generated".equals(w.getState().getSavedAs()));
+        int before = events.saveStates;
+        w.discardUnsaved();
+        check("  and a second Don't save is a no-op (no event)", events.saveStates == before);
+
+        w.setPlan(savingPlan("Next", 2));
+        check("identity: setPlan clears savedAs, and the new plan is unsaved",
+                w.getState().getSavedAs() == null && w.getState().getUnsaved());
+
+        w.setPlan(savingPlan("Loaded", 2), "memory0");
+        check("identity: a plan loaded from a file IS that save, and lands clean",
+                "memory0".equals(w.getState().getSavedAs()) && !w.getState().getUnsaved());
+        check("identity: Undo restores the replaced plan's identity with it",
+                w.restorePrevious() && w.getState().getSavedAs() == null && w.getState().getUnsaved()
+                        && "Next".equals(w.getState().getTitle()));
+
+        w.stop();
+        check("identity: stop clears the name and the mark",
+                w.getState().getSavedAs() == null && !w.getState().getUnsaved());
+
+        w.setPlan(new Plan("", "en", savingPlan("x", 1).getFrames(), savingPlan("x", 1).getSteps(), false));
+        check("identity: an unsaved plan with no title is NOT worth asking about (Save would refuse it)",
+                w.getState().getUnsaved() && !w.getState().getWorthAsking());
+    }
+
     /** A root frame carrying relations — the only thing section 14 varies. */
     static Frame relFrame(int id, String file, LineRange keep, Relation... rels) {
         return new Frame(id, file, "F" + id, "", 0, null, 0, null, 1,
@@ -516,6 +657,9 @@ public final class PlanProbe {
                 legacy != null && legacy.getFrames().size() == 1);
         check("storage: and its scene is read, not discarded with the unknown keys",
                 legacy.getFrames().get(0).getScene() == 3);
+
+        savingStorage();
+        savingIdentity();
 
         // ── 12. The tree's settings defaults ARE §1c's verdicts ──
         //

@@ -21,6 +21,7 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
+   Write every JSON file you POST (the set_plan and each append_steps) in /tmp/audio-explainer/plans/run-0/ — never inside the project, where it would show up in the user's saved walkthroughs.
 4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
 5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
@@ -44,6 +45,7 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
+   Write every JSON file you POST (the set_plan and each append_steps) in /tmp/audio-explainer/plans/run-0/ — never inside the project, where it would show up in the user's saved walkthroughs.
 4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
 5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
@@ -69,6 +71,7 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
+   Write every JSON file you POST (the set_plan and each append_steps) in /tmp/audio-explainer/plans/run-0/ — never inside the project, where it would show up in the user's saved walkthroughs.
 4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
 5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
@@ -94,6 +97,7 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
+   Write every JSON file you POST (the set_plan and each append_steps) in /tmp/audio-explainer/plans/run-0/ — never inside the project, where it would show up in the user's saved walkthroughs.
 4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
 5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
@@ -117,6 +121,7 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
+   Write every JSON file you POST (the set_plan and each append_steps) in /tmp/audio-explainer/plans/run-0/ — never inside the project, where it would show up in the user's saved walkthroughs.
 4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
 5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
@@ -140,6 +145,7 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
+   Write every JSON file you POST (the set_plan and each append_steps) in /tmp/audio-explainer/plans/run-0/ — never inside the project, where it would show up in the user's saved walkthroughs.
 4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
 5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
@@ -165,6 +171,7 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
+   Write every JSON file you POST (the set_plan and each append_steps) in /tmp/audio-explainer/plans/run-0/ — never inside the project, where it would show up in the user's saved walkthroughs.
 4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
 5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
@@ -190,6 +197,7 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
+   Write every JSON file you POST (the set_plan and each append_steps) in /tmp/audio-explainer/plans/run-0/ — never inside the project, where it would show up in the user's saved walkthroughs.
 4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
 5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
@@ -213,6 +221,7 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
+   Write every JSON file you POST (the set_plan and each append_steps) in /tmp/audio-explainer/plans/run-0/ — never inside the project, where it would show up in the user's saved walkthroughs.
 4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
 5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
@@ -236,6 +245,7 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
+   Write every JSON file you POST (the set_plan and each append_steps) in /tmp/audio-explainer/plans/run-0/ — never inside the project, where it would show up in the user's saved walkthroughs.
 4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
 5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
@@ -261,6 +271,7 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
+   Write every JSON file you POST (the set_plan and each append_steps) in /tmp/audio-explainer/plans/run-0/ — never inside the project, where it would show up in the user's saved walkthroughs.
 4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
 5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
@@ -286,6 +297,7 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
+   Write every JSON file you POST (the set_plan and each append_steps) in /tmp/audio-explainer/plans/run-0/ — never inside the project, where it would show up in the user's saved walkthroughs.
 4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
 5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
@@ -309,6 +321,7 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
+   Write every JSON file you POST (the set_plan and each append_steps) in /tmp/audio-explainer/plans/run-0/ — never inside the project, where it would show up in the user's saved walkthroughs.
 4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
 5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===
@@ -332,6 +345,7 @@ What to do:
    Use field names frames/steps/keep/ranges/start/end/ttsText — never segments/highlights/startLine/endLine/label/subHighlights.
    The top-level "language" is the walkthrough's language code ("en" if English).
 3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and ~/.claude-explainer-token). Use a skill helper script, or curl directly. A {"ok":true} reply = success. The reply also carries an `issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there means the user cannot see part of what you wrote (an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.
+   Write every JSON file you POST (the set_plan and each append_steps) in /tmp/audio-explainer/plans/run-0/ — never inside the project, where it would show up in the user's saved walkthroughs.
 4. Better: stream it. Put "streaming":true on the set_plan, send it with only the first 2-3 steps, then append the rest as you write them with {"type":"append_steps","steps":[…]} and a final batch carrying "final":true (send that even if its steps are empty). Same POST, same helper. The reader hears step 1 while you are still writing step 6. ALL frames must be in the set_plan — append_steps carries steps only — and a step once sent cannot be edited, replaced or re-ordered.
 5. Do NOT print the walkthrough as terminal text and do NOT send goto/resume — just `set_plan`. Print only a one-line status when done.
 === end ===

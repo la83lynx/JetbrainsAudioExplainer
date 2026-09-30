@@ -83,7 +83,16 @@ open class ExplainThisAction : AnAction() {
      */
     protected open fun decorate(project: Project, request: ExplainRequest): ExplainRequest? = request
 
+    /**
+     * Start the generation — after asking about an unsaved walkthrough it would replace (`Saving.md` D).
+     *
+     * **Here, before the run, and not when its `set_plan` lands.** The user is at the keyboard now, having
+     * just clicked; a prompt at landing time would put a modal in front of a reader who walked away two
+     * minutes ago, and hold the new plan behind it. This is the one choke point for both menu entries and
+     * both scopes.
+     */
     private fun launch(project: Project, request: ExplainRequest) {
+        if (!SaveFlow.confirmLoss(project, "Starting a new explanation replaces it.")) return
         ProgressManager.getInstance().run(
             object : Task.Backgroundable(project, "Explaining code…", /* canBeCancelled = */ true) {
                 override fun run(indicator: ProgressIndicator) {

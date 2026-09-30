@@ -124,10 +124,16 @@ asks, because the plugin needs the walkthrough back as data — printing it as p
    When it moves on to a different subject, put the later frames in a different `scene` so the earlier files
    leave the screen. `docs/plan-schema.md` has the depth cap, the scene rules and the rest.
 
-4. **POST the plan.** ALWAYS write the full `set_plan` JSON to a temp file first (use the `Write` tool),
+4. **POST the plan.** ALWAYS write the full `set_plan` JSON to a file first (use the `Write` tool),
    then send that file. **Never pass the JSON inline on a command line** — shell quoting will corrupt it
-   (embedded quotes/newlines break `curl -d '<json>'`). Send the file with the helper for your platform
-   (both live in this skill's `scripts/` dir):
+   (embedded quotes/newlines break `curl -d '<json>'`).
+
+   **Write it in the plan directory the prompt names** — a per-run directory the plugin made for exactly
+   this and deletes when you finish. If the prompt names none, use the system temp directory. **Never write
+   it inside the project**: a `set_plan` or `append_steps` file there can land in `.walkthroughs/`, where it
+   shows up in the user's saved list as a blank walkthrough that errors when opened.
+
+   Send the file with the helper for your platform (both live in this skill's `scripts/` dir):
 
    - **Windows:** `powershell -NoProfile -ExecutionPolicy Bypass -File "<skillDir>/scripts/explainer.ps1" plan "<planFile>"`
    - **macOS/Linux/git-bash:** `<skillDir>/scripts/explainer.sh plan "<planFile>"`
@@ -158,7 +164,8 @@ asks, because the plugin needs the walkthrough back as data — printing it as p
 
    Sent with the **same helper and the same verb** as the plan (`explainer.ps1 plan <file>` /
    `explainer.sh plan <file>` — it POSTs whatever message the file holds), so each batch is another `Write`
-   plus another send.
+   plus another send. **Each batch file goes in the same plan directory as the `set_plan`** (step 4), never
+   inside the project — for the same reason.
 
    **Why it is worth the extra POSTs:** the walkthrough starts playing the moment the first batch lands, so
    the reader is listening to step 1 while you are still writing step 6. The run takes exactly as long

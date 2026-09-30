@@ -194,6 +194,16 @@ class AudioExplainerSidebar(
         narration.onWalkthroughChanged()
     }
 
+    /**
+     * **Saved, or its unsaved content discarded** (`Saving.md` C) — the Save button's tooltip follows the new
+     * identity, and a save may have added a row to the saved list. Narration is not told: nothing it plays
+     * changed.
+     */
+    override fun onSaveState(state: WalkthroughSnapshot) {
+        pushUpdate()
+        pushSavedList()
+    }
+
     private fun pushUpdate() {
         val state = walkthrough.getState()
         val lang = Languages.byCode(state.language)
@@ -213,6 +223,10 @@ class AudioExplainerSidebar(
             // "playing, but the next step has not been written yet" is otherwise indistinguishable from
             // "playing" with silent audio — see `Stream.md`'s open end.
             put("streaming", state.streaming)
+            // The Save split button's state (`Saving.md` C): which file Save writes, and whether it has
+            // anything to write. `streaming` above is what disables it.
+            put("savedAs", state.savedAs?.let { JsonPrimitive(it) } ?: JsonNull)
+            put("unsaved", state.unsaved)
             put("language", lang.code)
             put("languageName", lang.displayName)
             put("autonym", lang.autonym)
@@ -451,12 +465,18 @@ class AudioExplainerSidebar(
             // useful after the user navigated elsewhere in the editor. Does not touch playback.
             "reveal_location" -> obj.stringField("file")?.let { revealLocation(it, obj.intField("start") ?: 1) }
             "restart" -> walkthrough.restart()
-            "close_walkthrough" -> walkthrough.stop()
+            // Asked about first when it holds unsaved work (`Saving.md` D); Cancel leaves it showing.
+            "close_walkthrough" -> onClose()
             // Phase 7.5 #5 — undo/keep the walkthrough that a generation just replaced.
             "restore_previous" -> walkthrough.restorePrevious()
             "dismiss_replace" -> walkthrough.clearPrevious()
             "request_saved_list" -> pushSavedList()
-            "save" -> onSave()
+            // The split button (`Saving.md` C): Save writes the file this walkthrough already is, or asks once;
+            // the caret's Save As… always asks.
+            "save" -> onSave(saveAs = false)
+            "save_as" -> onSave(saveAs = true)
+            // **No unsaved prompt here, deliberately** (`Saving.md` D): loading from the saved list is the one
+            // replacement made on the list itself, and the replace-and-Undo banner already covers it.
             "load" -> obj.stringField("name")?.let { onLoad(it) }
             // Saved-list management: delete one (confirmed) / delete all (confirmed). Confirmation is a
             // native Messages dialog — JCEF's off-screen renderer doesn't reliably show `window.confirm`.
@@ -593,25 +613,19 @@ class AudioExplainerSidebar(
         }
     }
 
-    private fun onSave() {
+    /** Save / Save As… — the dialogs are [SaveFlow]'s; a successful save re-pushes through [onSaveState]. */
+    private fun onSave(saveAs: Boolean) {
         ApplicationManager.getApplication().invokeLater {
             if (disposed || project.isDisposed) return@invokeLater
-            val name = Messages.showInputDialog(
-                project,
-                "Name for this walkthrough (leave blank to use the title):",
-                "Save Walkthrough",
-                null,
-            ) ?: return@invokeLater // cancelled
-            val saved = server.saveCurrentWalkthrough(name.ifBlank { null })
-            if (saved == null) {
-                Messages.showErrorDialog(
-                    project,
-                    "Could not save — no active walkthrough, or this project has no workspace folder.",
-                    "Save Walkthrough",
-                )
-            } else {
-                pushSavedList()
-            }
+            if (saveAs) SaveFlow.saveAs(project) else SaveFlow.save(project)
+        }
+    }
+
+    /** The header's Close and the done view's Finish: ask about unsaved work, then end the walkthrough. */
+    private fun onClose() {
+        ApplicationManager.getApplication().invokeLater {
+            if (disposed || project.isDisposed) return@invokeLater
+            if (SaveFlow.confirmLoss(project, "Closing it discards it.")) walkthrough.stop()
         }
     }
 

@@ -59,6 +59,12 @@ public final class EffortProbe {
     /** A fixed, OS-independent skill dir: `buildPrompt` normalises separators, so the golden is stable. */
     static final Path SKILL = Paths.get("/home/u/.claude/skills/audio-explainer");
 
+    /**
+     * A fixed plan dir, for the same reason (`Saving.md` B): the real one is a fresh temp directory per run,
+     * and a golden holding it would differ on every machine and every run.
+     */
+    static final Path PLAN_DIR = Paths.get("/tmp/audio-explainer/plans/run-0");
+
     // ── the case matrix the golden freezes ────────────────────────────────────
     // Scope x language x skill-installed, because each of the three moves a different part of the prompt:
     // scope picks the intro/step-1/context block, a non-English language adds the LANGUAGE paragraph, and a
@@ -109,12 +115,12 @@ public final class EffortProbe {
     }
 
     static String prompt(Case c) {
-        return ExplainPrompt.INSTANCE.buildPrompt(c.req, c.skill, c.lang, c.req.getDepth(), c.req.getExtraInstructions());
+        return ExplainPrompt.INSTANCE.buildPrompt(c.req, c.skill, c.lang, c.req.getDepth(), c.req.getExtraInstructions(), PLAN_DIR);
     }
 
     static String prompt(ExplainScope scope, Path skill, String depth, String extra) {
         ExplainRequest r = request(scope, false, null, depth, extra);
-        return ExplainPrompt.INSTANCE.buildPrompt(r, skill, Languages.INSTANCE.byCode("en"), depth, extra);
+        return ExplainPrompt.INSTANCE.buildPrompt(r, skill, Languages.INSTANCE.byCode("en"), depth, extra, PLAN_DIR);
     }
 
     // ── the golden file ───────────────────────────────────────────────────────
@@ -328,7 +334,8 @@ public final class EffortProbe {
         String withExtra = prompt(ExplainScope.CURSOR, SKILL, STD, typed);
         check("the user's text appears verbatim, exactly once", countOf(withExtra, typed) == 1);
         check("  it comes after the numbered steps",
-                withExtra.indexOf(typed) > withExtra.indexOf("4. Do NOT print the walkthrough"));
+                withExtra.indexOf(typed) > withExtra.indexOf("5. Do NOT print the walkthrough")
+                        && withExtra.indexOf("5. Do NOT print the walkthrough") >= 0);
         check("  and it carries the sentence that keeps the contract fixed",
                 withExtra.contains("They do NOT relax the `set_plan` contract"));
         check("  control: no text means no block at all",
@@ -341,6 +348,34 @@ public final class EffortProbe {
         check("depth and free text compose: Brief plus instructions keeps both",
                 prompt(ExplainScope.CURSOR, SKILL, BRIEF, typed).contains("DEPTH: brief")
                         && countOf(prompt(ExplainScope.CURSOR, SKILL, BRIEF, typed), typed) == 1);
+
+        // ── (f) the plan directory (`Saving.md` B) ─────────────────────────────
+        // The payloads the agent POSTs must not land in the project, where they showed up as blank rows in
+        // the saved list. The prompt names the directory, and the argv grants it explicitly, so a headless
+        // `Write` outside the working directory does not rest on the user's own permission settings.
+        String planLine = "Write every JSON file you POST (the set_plan and each append_steps) in "
+                + "/tmp/audio-explainer/plans/run-0/";
+        int namedDir = 0;
+        for (Case c : cases) if (countOf(prompt(c), planLine) == 1) namedDir++;
+        check("every golden prompt names the plan directory exactly once (" + namedDir + "/" + cases.size() + ")",
+                namedDir == cases.size());
+        check("  and says why: never inside the project", std.contains("never inside the project"));
+        check("  in the shared tail, so the no-skill fallback keeps it too", stdNo.contains(planLine));
+        check("  control: no plan dir means no line at all",
+                !ExplainPrompt.INSTANCE.buildPrompt(request(ExplainScope.CURSOR, false, null, STD, null), SKILL,
+                        Languages.INSTANCE.byCode("en"), STD, null, null).contains("Write every JSON file you POST"));
+        check("  a Windows plan dir is written with forward slashes, like the skill dir",
+                ExplainPrompt.INSTANCE.buildPrompt(request(ExplainScope.CURSOR, false, null, STD, null), SKILL,
+                        Languages.INSTANCE.byCode("en"), STD, null, Paths.get("C:\\Temp\\plans\\run-1"))
+                        .contains("C:/Temp/plans/run-1/"));
+        List<String> granted = ExplainPrompt.INSTANCE.buildArgs("P", "medium", "", PLAN_DIR);
+        check("the argv grants the plan dir with one `--add-dir <dir>` pair",
+                countOf(String.join(" ", granted), "--add-dir") == 1
+                        && PLAN_DIR.toString().equals(granted.get(granted.indexOf("--add-dir") + 1)));
+        check("  last, so its variadic list swallows nothing after it",
+                granted.indexOf("--add-dir") == granted.size() - 2);
+        check("  control: no plan dir means no `--add-dir`",
+                !ExplainPrompt.INSTANCE.buildArgs("P", "medium", "").contains("--add-dir"));
 
         // ── the diagnostics ──────────────────────────────────────
         // Two things are asserted without running anything: every check names a fix, and the OS filter

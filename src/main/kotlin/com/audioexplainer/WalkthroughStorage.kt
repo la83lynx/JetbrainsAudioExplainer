@@ -1,9 +1,10 @@
 package com.audioexplainer
 
 import kotlinx.serialization.ExperimentalSerializationApi
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -57,16 +58,43 @@ class WalkthroughStorage(private val workspaceRoot: Path) {
         return file.toAbsolutePath().toString()
     }
 
-    /** Load by name; returns null if the file is absent or malformed. Paths resolved to absolute. */
+    /**
+     * Load by name; returns null if the file is absent, malformed, or not a save at all (see [readSave]).
+     * Paths resolved to absolute.
+     */
     fun load(name: String): Plan? {
         val file = dir.resolve("${slugify(name)}.json")
         if (!Files.exists(file)) return null
-        val data = try {
-            json.decodeFromString<Plan>(Files.readString(file))
-        } catch (_: Exception) {
-            return null
-        }
+        val data = readSave(file) ?: return null
         return data.copy(frames = toAbsolutePaths(data.frames), streaming = false)
+    }
+
+    /** Whether a file named [name] exists here — any file, save or not, since it is what a save would replace. */
+    fun exists(name: String): Boolean = Files.exists(dir.resolve("${slugify(name)}.json"))
+
+    /**
+     * **The file as a save, or null when it is not one** — the one test [list] and [load] share, so a file the
+     * list hides cannot be opened through a stale link either.
+     *
+     * It accepts exactly what [save] could have written, and the negative form is what makes it work on the
+     * files already on disk, which carry no marker:
+     *  - **a top-level `type` means a wire message, not a save.** [Plan] has no `type` field, so [save] cannot
+     *    write one; a file with it is an agent's `set_plan` / `append_steps` payload, written into the project
+     *    by an agent that was told "a temp file" and not where (`Saving.md`). Decoded leniently it becomes a
+     *    [Plan] with a blank title and no frames — the blank rows that errored on open.
+     *  - **a blank `title` or no `frames`** is what `saveCurrentWalkthrough` refuses to write, so it is not a
+     *    save whatever else it is.
+     */
+    private fun readSave(file: Path): Plan? = try {
+        val element = json.parseToJsonElement(Files.readString(file))
+        val obj = element as? JsonObject
+        if (obj == null || "type" in obj) {
+            null
+        } else {
+            json.decodeFromJsonElement<Plan>(obj).takeIf { it.title.isNotBlank() && it.frames.isNotEmpty() }
+        }
+    } catch (_: Exception) {
+        null
     }
 
     /** Delete a saved walkthrough by name. Returns true if a file was removed (false if absent / on error). */
@@ -92,23 +120,22 @@ class WalkthroughStorage(private val workspaceRoot: Path) {
         return removed
     }
 
-    /** List all saved walkthroughs (malformed files are skipped). */
+    /**
+     * List all saved walkthroughs. Malformed files are skipped, and so is every file that is not a save —
+     * see [readSave]. **Skipped, not deleted**: nothing here removes a file this plugin did not write.
+     */
     fun list(): List<WalkthroughEntry> {
         if (!Files.isDirectory(dir)) return emptyList()
         val results = mutableListOf<WalkthroughEntry>()
         Files.newDirectoryStream(dir, "*.json").use { stream ->
             for (path in stream) {
-                try {
-                    val data = json.decodeFromString<Plan>(Files.readString(path))
-                    results += WalkthroughEntry(
-                        name = path.fileName.toString().removeSuffix(".json"),
-                        title = data.title,
-                        filePath = path.toAbsolutePath().toString(),
-                        language = data.language,
-                    )
-                } catch (_: Exception) {
-                    // Skip unreadable/malformed files, like upstream.
-                }
+                val data = readSave(path) ?: continue
+                results += WalkthroughEntry(
+                    name = path.fileName.toString().removeSuffix(".json"),
+                    title = data.title,
+                    filePath = path.toAbsolutePath().toString(),
+                    language = data.language,
+                )
             }
         }
         return results

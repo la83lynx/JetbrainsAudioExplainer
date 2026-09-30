@@ -30,7 +30,24 @@ data class WalkthroughSnapshot(
      * behaviour differs, and only while it is open.
      */
     val streaming: Boolean = false,
-)
+    /**
+     * **The saved walkthrough this plan is** — the file stem under `.walkthroughs/` — or null when it has
+     * never been saved (`Saving.md` C). Save writes this file without asking; with none, Save asks for a name.
+     */
+    val savedAs: String? = null,
+    /**
+     * **The plan has content no file holds**: a generated plan that was never saved, or a saved one that
+     * steps were appended to since. What the unsaved prompt asks about (`Saving.md` D).
+     */
+    val unsaved: Boolean = false,
+) {
+    /**
+     * **Losing this plan loses work, so ask first** (`Saving.md` D). [unsaved] alone is not enough: a plan
+     * with no title or no frames is one `saveCurrentWalkthrough` refuses to write, and offering Save on it
+     * would offer a button that fails.
+     */
+    val worthAsking: Boolean get() = unsaved && title.isNotEmpty() && plan.frames.isNotEmpty()
+}
 
 /**
  * Observer of walkthrough changes — the tree surface and the sidebar each register one.
@@ -70,6 +87,13 @@ interface WalkthroughListener {
 
     /** Playback status changed. */
     fun onStatus(status: String) {}
+
+    /**
+     * **The save state changed and nothing else did** — the plan was saved, or its unsaved content was
+     * discarded (`Saving.md`). Only the sidebar cares: its Save button and saved list read it. A new plan
+     * carries its save state in [onPlan]'s snapshot and does not fire this.
+     */
+    fun onSaveState(state: WalkthroughSnapshot) {}
 
     /**
      * **Playback started or resumed** — distinct from [onStatus] because it is what re-asserts the authored
@@ -122,6 +146,20 @@ class Walkthrough {
     private var language: String = Languages.DEFAULT_CODE
 
     /**
+     * **Which saved walkthrough this plan is**, as a file stem, or null (`Saving.md` C). It lives here and not
+     * in the sidebar because this is the object that knows when the plan is replaced: [setPlan] clears it,
+     * [markSaved] sets it, [stop] clears it.
+     */
+    private var savedAs: String? = null
+
+    /**
+     * **The plan has content no file holds** — see [WalkthroughSnapshot.unsaved]. A new plan is unsaved
+     * unless it came *from* a file, an append makes a saved one stale, and position never touches it:
+     * playback and navigation are not saved, so they cannot make anything stale.
+     */
+    private var unsaved: Boolean = false
+
+    /**
      * The walkthrough that was loaded immediately before the current one (Phase 7.5 #5). Captured by
      * [setPlan] whenever a *non-empty* plan is replaced, so the sidebar can offer a one-level **Undo**
      * ([restorePrevious]) rather than silently clobbering whatever the user had open.
@@ -151,10 +189,11 @@ class Walkthrough {
     private fun firePlanExtended(state: WalkthroughSnapshot) = listeners.forEach { it.onPlanExtended(state) }
     private fun fireStep(index: Int) = listeners.forEach { it.onStep(index) }
     private fun fireResume() = listeners.forEach { it.onResume() }
+    private fun fireSaveState(state: WalkthroughSnapshot) = listeners.forEach { it.onSaveState(state) }
 
     @Synchronized
     fun getState(): WalkthroughSnapshot =
-        WalkthroughSnapshot(title, outline, stepIndex, stepCount(), status, language, plan, open)
+        WalkthroughSnapshot(title, outline, stepIndex, stepCount(), status, language, plan, open, savedAs, unsaved)
 
     /** The validated plan, for the surface that renders `frames` directly. Null before the first plan. */
     @Synchronized
@@ -185,9 +224,15 @@ class Walkthrough {
      * Returns the [ResolvedPlan] so the caller can report what was wrong with it. **That return value is
      * the point**: the `set_plan` responder is the only channel that reaches the agent that authored the
      * plan, and §1b's second requirement is that a plan rendering three of its four frames says so.
+     *
+     * [savedAs] is the file the plan was read from, when it was (`Saving.md` C): a walkthrough loaded from the
+     * saved list *is* that save, so it lands clean and its Save writes back to it. Every other plan — a
+     * generation, an agent's own `set_plan` — lands unsaved with no identity. Passed in rather than set after,
+     * so no listener ever sees a loaded save as an unsaved plan for the length of one callback.
      */
+    @JvmOverloads
     @Synchronized
-    fun setPlan(newPlan: Plan): ResolvedPlan {
+    fun setPlan(newPlan: Plan, savedAs: String? = null): ResolvedPlan {
         val resolvedPlan = PlanLoader.resolve(newPlan)
         // Preserve whatever was loaded so an unexpected replacement can be undone (Phase 7.5 #5).
         // Only snapshot a non-empty plan; the common "first load over idle" case leaves no undo.
@@ -203,6 +248,8 @@ class Walkthrough {
         this.language = newPlan.language.ifBlank { Languages.DEFAULT_CODE }
         this.stepIndex = if (resolvedPlan.steps.isEmpty()) -1 else 0
         this.status = STATUS_PAUSED
+        this.savedAs = savedAs
+        this.unsaved = savedAs == null
         firePlan(getState())
         fireStatus(status)
         // Reveal the first step's code location without starting playback.
@@ -239,6 +286,9 @@ class Walkthrough {
             val revalidated = PlanLoader.resolve(plan)
             resolved = revalidated
             outline = PlanOutline.of(revalidated)
+            // The file this plan was saved as no longer holds all of it. The identity stays: Save writes the
+            // longer plan back to the same file rather than asking for a name again.
+            unsaved = true
         }
         // **Through the same settle `closePlan` uses, not `open = false`.** Closing has a second half — a
         // narration parked at the open end has to be told there is no more — and a `final` batch that merely
@@ -352,6 +402,10 @@ class Walkthrough {
         open = false
         outline = PlanOutline.of(revalidated)
         language = prev.language
+        // The walkthrough comes back as the save it was, or as unsaved as it was — Undo restores the whole
+        // snapshot, its identity included, so Save on it writes where Save wrote before.
+        savedAs = prev.savedAs
+        unsaved = prev.unsaved
         stepIndex = prev.stepIndex.coerceIn(-1, revalidated.steps.size - 1)
         status = if (revalidated.steps.isEmpty()) STATUS_IDLE else STATUS_PAUSED
         firePlan(getState())
@@ -360,10 +414,46 @@ class Walkthrough {
         return true
     }
 
+    /**
+     * End the walkthrough. Its save identity goes with it: a stopped walkthrough is no longer the one Save
+     * would write, and whatever it held unsaved was asked about before the stop (`Saving.md` D), so there is
+     * nothing left for a later prompt to ask about either.
+     */
     @Synchronized
     fun stop() {
         status = STATUS_STOPPED
+        savedAs = null
+        unsaved = false
         fireStatus(status)
+    }
+
+    // ── Save identity (`Saving.md` C) ──
+
+    /**
+     * **[saved] was written to the file [name]** — the plan is now that save, and clean. Returns false, and
+     * changes nothing, when the plan showing is no longer [saved]: a save reads a snapshot and writes it
+     * outside this lock, and in between a new plan may have landed or steps been appended. Marking *that*
+     * plan clean would claim a file holds what it does not, so the test is identity, not equality.
+     */
+    @Synchronized
+    fun markSaved(name: String, saved: Plan): Boolean {
+        if (plan !== saved) return false
+        savedAs = name
+        unsaved = false
+        fireSaveState(getState())
+        return true
+    }
+
+    /**
+     * **The user chose "Don't save"** — drop the unsaved mark and keep everything else, identity included
+     * (a walkthrough saved earlier keeps its file whatever was chosen). It exists so the next prompt does not
+     * ask again about the same walkthrough: closing a second project, or a second generation.
+     */
+    @Synchronized
+    fun discardUnsaved() {
+        if (!unsaved) return
+        unsaved = false
+        fireSaveState(getState())
     }
 
     // ── Navigation ──

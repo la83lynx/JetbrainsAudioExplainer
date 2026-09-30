@@ -39,6 +39,9 @@
                                  displayName="Audio Explainer"
                                  instance="com.audioexplainer.HighlightSettingsConfigurable"/>
         <notificationGroup id="Audio Explainer" displayType="BALLOON"/>
+        <!-- Saving.md D: an unsaved walkthrough is asked about before the project closes. The vetoable hook,
+             so Cancel keeps the project open. -->
+        <projectCloseHandler implementation="com.audioexplainer.UnsavedWalkthroughCloseHandler"/>
     </extensions>
 
     <actions>

@@ -22,6 +22,13 @@ let state = {
 	 * what there will be.
 	 */
 	streaming: false,
+	/**
+	 * **Which saved walkthrough this is** (`Saving.md` C) — the file stem Save writes without asking — or
+	 * null when it was never saved, and Save asks for a name.
+	 */
+	savedAs: null,
+	/** The plan holds content no file does: never saved, or appended to since. Only the tooltip reads it. */
+	unsaved: false,
 	/** What Now Playing shows for that step (a `StepView`), or null: title, explanation, ttsText, location. */
 	now: null,
 	status: "idle",
@@ -40,6 +47,9 @@ function outlineSteps() {
 	}
 	return out;
 }
+
+/** Where walkthroughs are saved (from the plugin's `settings` message), for the Save tooltip; "" until known. */
+let walkthroughsDir = "";
 
 /** Cached saved-walkthrough list (from the plugin's `saved_list` message); rendered/filtered client-side. */
 /** @type {{name: string, title: string, langCode?: string, langTag?: string, langName?: string}[]} */
@@ -732,6 +742,33 @@ function maybeRepaintOnViewChange(view) {
 	}
 }
 
+/**
+ * The Save split button's state (`Saving.md` C): disabled while the plan is still being written, and a
+ * tooltip that says which file Save writes — so the one-click, no-dialog Save of a saved walkthrough is
+ * never a surprise. Called from render() and when the save directory arrives.
+ */
+function renderSaveButton() {
+	const save = document.getElementById("btn-save");
+	const caret = document.getElementById("btn-save-menu");
+	if (!save || !caret) return;
+	const disabled = saveDisabled();
+	save.setAttribute("aria-disabled", disabled ? "true" : "false");
+	caret.setAttribute("aria-disabled", disabled ? "true" : "false");
+	if (disabled) setSaveMenuOpen(false);
+	let tip;
+	if (disabled) {
+		tip = "Still being written — Save enables itself when the walkthrough is complete";
+	} else if (state.savedAs) {
+		tip = state.unsaved
+			? `Save changes to “${state.savedAs}”`
+			: `Saved as “${state.savedAs}” — Save writes it again`;
+	} else {
+		tip = walkthroughsDir ? `Save walkthrough in ${walkthroughsDir}` : "Save Walkthrough";
+	}
+	setTip(save, tip);
+	setTip(caret, disabled ? tip : "More save options");
+}
+
 function render() {
 	const idleView = document.getElementById("idle-view");
 	const activeView = document.getElementById("active-view");
@@ -762,6 +799,7 @@ function render() {
 	// Title + language badge
 	document.getElementById("walkthrough-title").textContent = state.title;
 	renderLanguageBadge();
+	renderSaveButton();
 
 	// Now playing — the frame this step is about, and the one place a file and a line still belong. The
 	// outline says *which step*; this says *where the code is*, and it is clickable.
@@ -1377,8 +1415,39 @@ document.getElementById("btn-restart").addEventListener("click", () => {
 	vscode.postMessage({ type: "restart" });
 });
 
+// The Save split button (`Saving.md` C). The dialogs are the plugin's; this side only says which half was
+// pressed, and refuses both while the plan is still being written.
+function saveDisabled() {
+	return state.streaming === true;
+}
+function setSaveMenuOpen(open) {
+	const menu = document.getElementById("save-menu");
+	const caret = document.getElementById("btn-save-menu");
+	if (!menu || !caret) return;
+	menu.style.display = open ? "" : "none";
+	caret.setAttribute("aria-expanded", open ? "true" : "false");
+}
 document.getElementById("btn-save").addEventListener("click", () => {
+	setSaveMenuOpen(false);
+	if (saveDisabled()) return;
 	vscode.postMessage({ type: "save" });
+});
+document.getElementById("btn-save-menu").addEventListener("click", (e) => {
+	e.stopPropagation(); // or the document handler below closes it again on the same click
+	if (saveDisabled()) return;
+	setSaveMenuOpen(document.getElementById("save-menu").style.display === "none");
+});
+document.getElementById("btn-save-as").addEventListener("click", () => {
+	setSaveMenuOpen(false);
+	if (saveDisabled()) return;
+	vscode.postMessage({ type: "save_as" });
+});
+document.addEventListener("click", (e) => {
+	const split = document.getElementById("save-split");
+	if (split && !split.contains(/** @type {Node} */ (e.target))) setSaveMenuOpen(false);
+});
+document.addEventListener("keydown", (e) => {
+	if (e.key === "Escape") setSaveMenuOpen(false);
 });
 
 // Saved-list filter (client-side "contains") + "Delete all" (confirmed plugin-side, then re-pushed).
@@ -1644,8 +1713,8 @@ window.addEventListener("message", (event) => {
 			// "Saved Walkthroughs" label (Phase 7.5 #14 task 5). Only override the static titles when the
 			// plugin actually sent a directory (i.e. this project has a workspace root).
 			if (msg.walkthroughsDir) {
-				const save = document.getElementById("btn-save");
-				if (save) setTip(save, `Save walkthrough in ${msg.walkthroughsDir}`);
+				walkthroughsDir = msg.walkthroughsDir;
+				renderSaveButton();
 				const savedTitle = document.getElementById("saved-list-title");
 				if (savedTitle) setTip(savedTitle, `Walkthroughs are saved in ${msg.walkthroughsDir}`);
 			}
@@ -1704,6 +1773,8 @@ window.addEventListener("message", (event) => {
 				currentStep: typeof msg.currentStep === "number" ? msg.currentStep : -1,
 				stepCount: msg.stepCount || 0,
 				streaming: msg.streaming === true,
+				savedAs: typeof msg.savedAs === "string" ? msg.savedAs : null,
+				unsaved: msg.unsaved === true,
 				now: msg.now || null,
 				status: msg.status,
 				language: msg.language || "en",

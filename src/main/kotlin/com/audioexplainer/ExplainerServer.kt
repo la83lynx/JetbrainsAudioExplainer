@@ -31,6 +31,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 
+/** What [ExplainerServer.saveCurrentWalkthrough] wrote: the name it answers to, and the file. */
+data class SavedWalkthrough(val name: String, val filePath: String)
+
 /**
  * Loopback HTTP server, port + auth token published to `~/.claude-explainer-{port,token}` for discovery.
  * It began as a byte-for-byte port of code-explainer's `vscode-extension/src/server.ts`; the `set_plan`
@@ -124,20 +127,29 @@ class ExplainerServer {
     // ── In-process helpers for the sidebar (Phase 4) — same storage the HTTP routes use ──
 
     /**
-     * Save the current walkthrough. `name` overrides the file stem (else the title is slugified).
-     * Returns the absolute file path, or null if there is no workspace storage / no active walkthrough.
+     * Save the current walkthrough. `name` overrides the file stem (else the title is slugified), and the
+     * walkthrough becomes that save (`Saving.md` C) — the next Save writes the same file without asking.
+     * Returns what was written, or null if there is no workspace storage, no active walkthrough, or the plan
+     * is still being written: a snapshot of a streaming plan holds fewer steps than the reader will hear.
      */
-    fun saveCurrentWalkthrough(name: String?): String? {
+    fun saveCurrentWalkthrough(name: String?): SavedWalkthrough? {
         val storage = this.storage ?: return null
         val state = walkthrough.getState()
-        if (state.title.isEmpty() || state.plan.frames.isEmpty()) return null
+        if (state.title.isEmpty() || state.plan.frames.isEmpty() || state.streaming) return null
+        val stem = WalkthroughStorage.slugify(name ?: state.title)
         return try {
-            storage.save(state.plan, name)
+            val filePath = storage.save(state.plan, stem)
+            walkthrough.markSaved(stem, state.plan)
+            SavedWalkthrough(stem, filePath)
         } catch (e: Exception) {
             log.warn("sidebar save failed", e)
             null
         }
     }
+
+    /** Whether saving under [name] would replace a file already in `.walkthroughs` (false with no storage). */
+    fun savedWalkthroughExists(name: String): Boolean =
+        storage?.let { try { it.exists(name) } catch (_: Exception) { false } } ?: false
 
     /** List saved walkthroughs for the current workspace (empty if none / no storage). */
     fun listSavedWalkthroughs(): List<WalkthroughEntry> =
@@ -150,7 +162,7 @@ class ExplainerServer {
     fun loadSavedWalkthrough(name: String): Boolean {
         val storage = this.storage ?: return false
         val data = storage.load(name) ?: return false
-        walkthrough.setPlan(data)
+        walkthrough.setPlan(data, savedAs = WalkthroughStorage.slugify(name))
         return true
     }
 
@@ -369,12 +381,15 @@ class ExplainerServer {
             }
             name = stringField(parsed as? JsonObject, "name")
         }
+        val stem = WalkthroughStorage.slugify(name ?: state.title)
         val filePath = try {
-            storage.save(state.plan, name)
+            storage.save(state.plan, stem)
         } catch (e: Exception) {
             log.warn("save failed", e)
             sendJson(ex, 500, error("Failed to save walkthrough")); return
         }
+        // The same identity the sidebar's Save gives it: an agent that saved the walkthrough has saved it.
+        walkthrough.markSaved(stem, state.plan)
         sendJson(ex, 200, buildJsonObject { put("ok", true); put("filePath", filePath) })
     }
 
@@ -421,7 +436,7 @@ class ExplainerServer {
         if (data == null) {
             sendJson(ex, 404, error("Walkthrough not found")); return
         }
-        val resolved = walkthrough.setPlan(data)
+        val resolved = walkthrough.setPlan(data, savedAs = WalkthroughStorage.slugify(name))
         sendJson(ex, 200, buildJsonObject {
             put("ok", true)
             put("title", data.title)

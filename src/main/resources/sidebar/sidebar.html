@@ -63,11 +63,24 @@
                         <path d="M13.65 2.35A7.96 7.96 0 008 0C3.58 0 .01 3.58.01 8S3.58 16 8 16c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 018 14c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L9 8h7V1l-3.35 1.35z"/>
                     </svg>
                 </button>
-                <button id="btn-save" class="icon-btn" title="Save Walkthrough">
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                        <path d="M13.354 4.354l-3.708-3.708A.5.5 0 009.293.5H2.5A1.5 1.5 0 001 2v12a1.5 1.5 0 001.5 1.5h11A1.5 1.5 0 0015 14V4.707a.5.5 0 00-.146-.353zM12 14H4V9h8v5zm1-7H3V2h6.293L13 5.707V7z"/>
-                    </svg>
-                </button>
+                <!-- Saving.md C: a split button. Save writes the file this walkthrough already is (or asks once);
+                     the caret opens Save As…. Both are aria-disabled while the plan is still streaming —
+                     aria-, not the disabled attribute, so the hover tooltip saying why still shows. -->
+                <div class="split-btn" id="save-split">
+                    <button id="btn-save" class="icon-btn" title="Save Walkthrough">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M13.354 4.354l-3.708-3.708A.5.5 0 009.293.5H2.5A1.5 1.5 0 001 2v12a1.5 1.5 0 001.5 1.5h11A1.5 1.5 0 0015 14V4.707a.5.5 0 00-.146-.353zM12 14H4V9h8v5zm1-7H3V2h6.293L13 5.707V7z"/>
+                        </svg>
+                    </button>
+                    <button id="btn-save-menu" class="icon-btn split-caret" title="More save options" aria-haspopup="menu" aria-expanded="false">
+                        <svg width="8" height="14" viewBox="0 0 8 16" fill="currentColor">
+                            <path d="M1 6.5h6L4 10z"/>
+                        </svg>
+                    </button>
+                    <div id="save-menu" class="split-menu" role="menu" style="display:none;">
+                        <button id="btn-save-as" class="split-menu-item" role="menuitem">Save As&#8230;</button>
+                    </div>
+                </div>
                 <button id="btn-close" class="icon-btn" title="Close walkthrough">
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                         <path d="M8 8.707l3.646 3.647.708-.708L8.707 8l3.647-3.646-.708-.708L8 7.293 4.354 3.646l-.708.708L7.293 8l-3.647 3.646.708.708L8 8.707z"/>
