@@ -48,6 +48,12 @@ JetBrains re-signs on upload; the signature only proves integrity/authorship. To
 
 ## Also open
 
+- **The source check's disk path is not judged in a sandbox.** `PlanSourceCheck` is asserted in `PlanProbe`
+  over in-memory files, and four headless runs used it through a mock server. But `ProjectSourceLines` (VFS
+  refresh plus a document read under a read action on the HTTP thread) has only been compiled. One
+  synthetic `set_plan` with a planted bad token, POSTed into a sandbox, closes it. Also untested: whether the
+  "do not write a validator" prompt line holds at `high`/`xhigh`, the only effort that ever wrote one.
+  Plan: `git show 2d3d4df:SourceCheck.md`.
 - **The effort/depth/model knobs, the "Explain This with…" dialog and the diagnostics are built but not
   judged in a sandbox.** Everything pure about them is asserted — `probes/EffortProbe.java`, 49 checks,
   including the 14 that hold the Standard-depth prompt byte-identical to what shipped before depth existed —

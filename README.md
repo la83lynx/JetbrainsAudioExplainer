@@ -27,6 +27,9 @@ ships to users.
   **`Saving.md` too** — the plan for the saved list's filter, the plan directory outside the project, save
   identity and the unsaved prompt, cited from `SaveFlow`, `Walkthrough`, `WalkthroughStorage`,
   `ExplainPrompt`, `ClaudeExplainer`, the sidebar and both probes: `git show 4a54373:Saving.md`.
+  **`SourceCheck.md` as well** — the plan for checking a plan against the code in the POST reply, and the
+  measurement that found no time to save at `medium`. Cited from `ExplainPrompt`, `Speed.md` and
+  `PlanProbe`: `git show 2d3d4df:SourceCheck.md`.
   `Speed.md` stays in the tree, because its ranked candidates are work nobody has done yet.
 - `build.gradle.kts` / `settings.gradle.kts` — Gradle + IntelliJ Platform Gradle Plugin 2.x, targeting Rider 2026.1.4 (branch 261).
 - `src/main/resources/META-INF/plugin.xml` — tool window, context-menu action, startup activity, app service.
