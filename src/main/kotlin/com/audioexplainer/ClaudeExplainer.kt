@@ -19,6 +19,7 @@ import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.util.text.StringUtil
 import com.intellij.openapi.wm.ToolWindowManager
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -105,6 +106,10 @@ class ClaudeExplainer {
                 return
             }
 
+            log.info(
+                "explain run started: ${request.displayName} (${request.scope.name.lowercase()}), " +
+                    "effort=${effort.ifBlank { "inherited" }}, depth=$depth, model=${model.ifBlank { "default" }}",
+            )
             indicator.text = "Claude is reading ${request.displayName} and planning the walkthrough…"
             tracker.progress("Reading ${request.displayName} and planning…")
             val result = try {
@@ -180,6 +185,7 @@ class ClaudeExplainer {
         val stderr = StringBuilder()
         val finalText = AtomicReference<String?>(null)
         val isError = AtomicBoolean(false)
+        val timeline = RunTimeline()
 
         handler.addProcessListener(object : ProcessListener {
             override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
@@ -194,7 +200,7 @@ class ClaudeExplainer {
                     while (nl >= 0) {
                         val line = lineBuf.substring(0, nl)
                         lineBuf.delete(0, nl + 1)
-                        processStreamLine(line, indicator, finalText, isError, onActivity)
+                        processStreamLine(line, indicator, finalText, isError, timeline, onActivity)
                         nl = lineBuf.indexOf("\n")
                     }
                 }
@@ -206,6 +212,7 @@ class ClaudeExplainer {
             if (indicator.isCanceled) {
                 handler.destroyProcess()
                 handler.waitFor(2000)
+                log.info("explain run cancelled at ${timeline.at()} after ${timeline.tools} tool call(s)")
                 return RunResult(-1, null, isError = false, cancelled = true, stderrTail = tail(synchronized(lock) { stderr.toString() }))
             }
         }
@@ -220,12 +227,40 @@ class ClaudeExplainer {
         )
     }
 
+    /**
+     * **One run's timeline, written to `idea.log`** — a line per tool call with its elapsed time, and a closing
+     * line with the run's own accounting.
+     *
+     * It exists because a sandbox round could not answer the two questions `Speed.md` keeps asking: how long
+     * the run took, and what it spent the time on (did it write a validator, did it re-POST). The headless
+     * bench answers them from `stream-json`; this is the same reading, kept where a round can see it. INFO,
+     * so it reaches `idea.log` and stays out of the `runIde` console.
+     *
+     * Touched only under the stream lock in [runClaude], so the counters need no synchronisation of their own.
+     */
+    private class RunTimeline {
+        private val started = System.nanoTime()
+        var tools = 0
+
+        fun at(): String = "%.1fs".format((System.nanoTime() - started) / 1e9)
+    }
+
+    /** What a tool call acted on, short enough for one log line: its file, command or pattern. */
+    private fun toolTarget(input: JsonObject?): String {
+        if (input == null) return ""
+        val raw = sequenceOf("file_path", "command", "pattern", "path")
+            .mapNotNull { input[it]?.jsonPrimitive?.contentOrNull }
+            .firstOrNull() ?: return ""
+        return ": " + StringUtil.shortenTextWithEllipsis(raw.trim().replace('\n', ' '), 160, 60)
+    }
+
     /** Parse one `stream-json` event line: surface activity as progress, capture the final result. */
     private fun processStreamLine(
         line: String,
         indicator: ProgressIndicator,
         finalText: AtomicReference<String?>,
         isError: AtomicBoolean,
+        timeline: RunTimeline,
         onActivity: (String) -> Unit,
     ) {
         val trimmed = line.trim()
@@ -239,6 +274,8 @@ class ClaudeExplainer {
                     val b = runCatching { block.jsonObject }.getOrNull() ?: continue
                     when (b["type"]?.jsonPrimitive?.contentOrNull) {
                         "tool_use" -> b["name"]?.jsonPrimitive?.contentOrNull?.let {
+                            timeline.tools++
+                            log.info("explain run +${timeline.at()} $it${toolTarget(runCatching { b["input"]?.jsonObject }.getOrNull())}")
                             val activity = "Claude: $it…"
                             indicator.text2 = activity
                             onActivity(activity)
@@ -251,7 +288,27 @@ class ClaudeExplainer {
                     }
                 }
             }
+            // **A tool's result is back, so the model is working again** — and that is where a run's time goes:
+            // the plan `Write` arrives only once the whole JSON is generated, so the label used to sit on
+            // "Claude: Read…" for the ~50 s after a 0.3 s read and read as though reading were the slow part.
+            "user" -> {
+                val content = obj["message"]?.jsonObject?.get("content") ?: return
+                val blocks = runCatching { content.jsonArray }.getOrNull() ?: return
+                if (blocks.any { runCatching { it.jsonObject["type"]?.jsonPrimitive?.contentOrNull }.getOrNull() == "tool_result" }) {
+                    val activity = "Claude: thinking…"
+                    indicator.text2 = activity
+                    onActivity(activity)
+                }
+            }
             "result" -> {
+                fun num(key: String) = obj[key]?.jsonPrimitive?.contentOrNull
+                val usage = runCatching { obj["usage"]?.jsonObject }.getOrNull()
+                log.info(
+                    "explain run finished at ${timeline.at()}: ${timeline.tools} tool call(s), " +
+                        "${num("num_turns")} turn(s), api ${num("duration_api_ms")} ms, " +
+                        "${usage?.get("output_tokens")?.jsonPrimitive?.contentOrNull} output token(s), " +
+                        "cost \$${num("total_cost_usd")}, ${num("subtype")}",
+                )
                 finalText.set(obj["result"]?.jsonPrimitive?.contentOrNull)
                 val subtype = obj["subtype"]?.jsonPrimitive?.contentOrNull
                 val flagged = (obj["is_error"]?.jsonPrimitive?.contentOrNull == "true")
