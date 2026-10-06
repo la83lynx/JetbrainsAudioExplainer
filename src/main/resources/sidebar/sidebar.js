@@ -1619,10 +1619,14 @@ window.addEventListener("message", (event) => {
 				spinner.style.display = "";
 				collapse.style.display = "";
 				dismiss.style.display = "none";
-				title.textContent = msg.displayName
+				const pct = typeof msg.fraction === "number" ? Math.floor(msg.fraction * 100) : null;
+				title.textContent = (msg.displayName
 					? `Generating: ${msg.displayName}`
-					: "Generating walkthrough…";
+					: "Generating walkthrough…") + (pct !== null ? ` — ${pct}%` : "");
 				activity.textContent = msg.activity || "";
+				const bar = document.getElementById("gen-bar");
+				bar.style.display = pct !== null ? "" : "none";
+				if (pct !== null) document.getElementById("gen-bar-fill").style.width = `${msg.fraction * 100}%`;
 			} else if (msg.phase === "failed") {
 				banner.style.display = "";
 				banner.classList.add("failed");
@@ -1632,6 +1636,7 @@ window.addEventListener("message", (event) => {
 				dismiss.style.display = "";
 				title.textContent = "Generation failed";
 				activity.textContent = msg.message || "";
+				document.getElementById("gen-bar").style.display = "none";
 			} else {
 				// idle
 				banner.style.display = "none";

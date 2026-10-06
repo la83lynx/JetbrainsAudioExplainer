@@ -16,6 +16,8 @@ data class ExplainSessionState(
     val displayName: String = "",
     /** Latest activity line (mirrors `ClaudeExplainer`'s `indicator.text2`). */
     val activity: String = "",
+    /** How far the run has got, 0..1 ([ExplainProgress]), or null before the estimate starts. */
+    val fraction: Double? = null,
     /** Failure detail (FAILED only). */
     val message: String = "",
 )
@@ -46,9 +48,10 @@ class ExplainSessionTracker {
         set(ExplainSessionState(ExplainPhase.GENERATING, displayName, activity = "Starting…"))
 
     /** Update the activity line — no-op unless a generation is in progress (ignores late/stray pings). */
-    fun progress(activity: String) {
+    @JvmOverloads
+    fun progress(activity: String, fraction: Double? = null) {
         val s = state.get()
-        if (s.phase == ExplainPhase.GENERATING) set(s.copy(activity = activity))
+        if (s.phase == ExplainPhase.GENERATING) set(s.copy(activity = activity, fraction = fraction ?: s.fraction))
     }
 
     /** Generation done (the plan, if any, arrives via the walkthrough) — clear the banner. */

@@ -306,7 +306,7 @@ class ExplainerServer {
      */
     private fun dispatchAgentMessage(obj: JsonObject): ResolvedPlan? {
         when (obj["type"]!!.jsonPrimitive.content) {
-            "set_plan" -> return walkthrough.setPlan(json.decodeFromJsonElement<Plan>(obj))
+            "set_plan" -> return walkthrough.setPlanUnlessShowing(json.decodeFromJsonElement<Plan>(obj))
             "goto" -> {
                 // `frameId` is the name since Phase 2; `segmentId` is still read as an alias, because an
                 // agent holding an old prompt spells it that way. Both resolve the same: the **first step**
@@ -410,6 +410,23 @@ class ExplainerServer {
                 putJsonArray("issues") { issues.forEach { add(it.toString()) } }
             }
         })
+    }
+
+    /**
+     * **Load a plan the agent has written but not yet POSTed** — `ClaudeExplainer.EarlyPlan`'s way in, so it goes
+     * through the same validation and the same source check a POST would.
+     *
+     * Returns the loaded plan, or null when it was not loaded: not a `set_plan`, not decodable, empty, or carrying
+     * anything above `[info]` — a reply the agent would act on by fixing the plan and POSTing again, so showing
+     * this one first would only swap a broken walkthrough for a fixed one in front of the reader.
+     */
+    fun preload(body: String): ResolvedPlan? {
+        val obj = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
+        if (!validateAgentMessage(obj) || obj["type"]?.jsonPrimitive?.content != "set_plan") return null
+        val plan = runCatching { json.decodeFromJsonElement<Plan>(obj) }.getOrNull() ?: return null
+        val resolved = PlanLoader.resolve(plan)
+        if (resolved.isEmpty() || replyIssues(resolved).any { it.level != IssueLevel.INFO }) return null
+        return walkthrough.setPlanUnlessShowing(plan)
     }
 
     /**

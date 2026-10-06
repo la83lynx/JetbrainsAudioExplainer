@@ -221,6 +221,23 @@ class Walkthrough {
         return resolvedPlan
     }
 
+    /**
+     * [setPlan], unless [newPlan] is the plan already showing — then nothing happens and the showing one's
+     * [ResolvedPlan] comes back for the reply.
+     *
+     * It exists for the plan an explain run loads from the agent's `Write` before the agent POSTs it
+     * (`ClaudeExplainer.EarlyPlan`): the POST that follows carries the same plan, and a reload would put the
+     * reader back on step 0 — mid-sentence, if they had already pressed Play — and offer to "undo" a
+     * replacement of the walkthrough by itself. Equality is the decoded [Plan]'s, so a byte-identical file and
+     * a reformatted one both count.
+     */
+    @Synchronized
+    fun setPlanUnlessShowing(newPlan: Plan): ResolvedPlan {
+        val showing = resolved
+        if (showing != null && newPlan == plan) return showing
+        return setPlan(newPlan)
+    }
+
     /** Whether a replaced walkthrough is retained for [restorePrevious] (Phase 7.5 #5 "Undo"). */
     @Synchronized
     fun hasPrevious(): Boolean = previous != null

@@ -51,6 +51,10 @@ object ExplainPrompt {
         add("-p"); add(prompt)
         add("--output-format"); add("stream-json")
         add("--verbose") // required alongside stream-json in print mode
+        // **The run's progress bar reads these** ([ExplainProgress]): the plan `Write` streams in as it is
+        // generated instead of arriving whole at the end, which is the one band of a run with a real numerator.
+        // Output only — what the model is asked and how it answers are unchanged.
+        add("--include-partial-messages")
         // Scoped allow-list: only these tools may run without an (impossible, headless) prompt.
         // Bash is intentionally command-unrestricted so the POST works cross-platform (curl on any
         // OS, powershell on Windows, the .sh helper elsewhere) — tighten ALLOWED_TOOLS to narrow it.

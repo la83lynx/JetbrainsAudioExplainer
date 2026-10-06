@@ -112,8 +112,10 @@ class ClaudeExplainer {
             )
             indicator.text = "Claude is reading ${request.displayName} and planning the walkthrough…"
             tracker.progress("Reading ${request.displayName} and planning…")
+            val progress = ExplainProgress(effort, depth)
+            val early = EarlyPlan(project, tracker)
             val result = try {
-                runClaude(cmd, indicator, tracker::progress)
+                runClaude(cmd, indicator, progress, tracker::progress, early::offer)
             } catch (e: Exception) {
                 log.warn("claude invocation failed", e)
                 tracker.fail(e.message ?: "Claude invocation failed.")
@@ -121,7 +123,7 @@ class ClaudeExplainer {
                 return
             }
 
-            keepPlanDir = !reportResult(project, request, result, tracker)
+            keepPlanDir = !reportResult(project, request, result, tracker, announced = early.loaded)
         } finally {
             disposePlanDir(planDir, keepPlanDir)
         }
@@ -178,7 +180,13 @@ class ClaudeExplainer {
         val stderrTail: String,
     )
 
-    private fun runClaude(cmd: GeneralCommandLine, indicator: ProgressIndicator, onActivity: (String) -> Unit): RunResult {
+    private fun runClaude(
+        cmd: GeneralCommandLine,
+        indicator: ProgressIndicator,
+        progress: ExplainProgress,
+        onActivity: (String, Double?) -> Unit,
+        onPlanWritten: (String) -> Unit,
+    ): RunResult {
         val handler = OSProcessHandler(cmd)
         val lock = Any()
         val lineBuf = StringBuilder()
@@ -200,15 +208,30 @@ class ClaudeExplainer {
                     while (nl >= 0) {
                         val line = lineBuf.substring(0, nl)
                         lineBuf.delete(0, nl + 1)
-                        processStreamLine(line, indicator, finalText, isError, timeline, onActivity)
+                        processStreamLine(line, finalText, isError, timeline, progress, onPlanWritten)
                         nl = lineBuf.indexOf("\n")
                     }
                 }
             }
         })
 
+        // **One place moves the bar**, on a 200 ms beat: the stream can deliver hundreds of deltas a second,
+        // and the time-driven bands have to advance when nothing is streaming at all.
+        indicator.isIndeterminate = false
+        var shown: Pair<Int, String>? = null
+        fun publish() {
+            val (fraction, activity) = synchronized(lock) { progress.fraction() to progress.activity() }
+            val now = (fraction * 100).toInt() to activity
+            if (now == shown) return
+            shown = now
+            indicator.fraction = fraction
+            indicator.text2 = activity
+            onActivity(activity, fraction)
+        }
+
         handler.startNotify()
         while (!handler.waitFor(200)) {
+            publish()
             if (indicator.isCanceled) {
                 handler.destroyProcess()
                 handler.waitFor(2000)
@@ -217,6 +240,7 @@ class ClaudeExplainer {
             }
         }
 
+        publish()
         val exit = handler.exitCode ?: -1
         return RunResult(
             exitCode = exit,
@@ -254,50 +278,37 @@ class ClaudeExplainer {
         return ": " + StringUtil.shortenTextWithEllipsis(raw.trim().replace('\n', ' '), 160, 60)
     }
 
-    /** Parse one `stream-json` event line: surface activity as progress, capture the final result. */
+    /**
+     * Parse one `stream-json` event line: feed the progress estimate, log the timeline, hand a written plan to
+     * [onPlanWritten], capture the final result. The activity label is [ExplainProgress]'s now.
+     */
     private fun processStreamLine(
         line: String,
-        indicator: ProgressIndicator,
         finalText: AtomicReference<String?>,
         isError: AtomicBoolean,
         timeline: RunTimeline,
-        onActivity: (String) -> Unit,
+        progress: ExplainProgress,
+        onPlanWritten: (String) -> Unit,
     ) {
         val trimmed = line.trim()
         if (trimmed.isEmpty()) return
         val obj = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull() ?: return
+        progress.onEvent(obj)
         when (obj["type"]?.jsonPrimitive?.contentOrNull) {
             "assistant" -> {
                 val content = obj["message"]?.jsonObject?.get("content") ?: return
                 val blocks = runCatching { content.jsonArray }.getOrNull() ?: return
                 for (block in blocks) {
                     val b = runCatching { block.jsonObject }.getOrNull() ?: continue
-                    when (b["type"]?.jsonPrimitive?.contentOrNull) {
-                        "tool_use" -> b["name"]?.jsonPrimitive?.contentOrNull?.let {
-                            timeline.tools++
-                            log.info("explain run +${timeline.at()} $it${toolTarget(runCatching { b["input"]?.jsonObject }.getOrNull())}")
-                            val activity = "Claude: $it…"
-                            indicator.text2 = activity
-                            onActivity(activity)
-                        }
-                        "text" -> b["text"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }?.let {
-                            val activity = "Claude: " + StringUtil.shortenTextWithEllipsis(it.trim().replace('\n', ' '), 80, 0)
-                            indicator.text2 = activity
-                            onActivity(activity)
-                        }
+                    if (b["type"]?.jsonPrimitive?.contentOrNull != "tool_use") continue
+                    val name = b["name"]?.jsonPrimitive?.contentOrNull ?: continue
+                    timeline.tools++
+                    val input = runCatching { b["input"]?.jsonObject }.getOrNull()
+                    log.info("explain run +${timeline.at()} $name${toolTarget(input)}")
+                    // The whole plan, the moment it is generated — 10-15 s before the agent's POST lands.
+                    if (name == "Write" && input?.get("file_path")?.jsonPrimitive?.contentOrNull?.endsWith(".json") == true) {
+                        input["content"]?.jsonPrimitive?.contentOrNull?.let(onPlanWritten)
                     }
-                }
-            }
-            // **A tool's result is back, so the model is working again** — and that is where a run's time goes:
-            // the plan `Write` arrives only once the whole JSON is generated, so the label used to sit on
-            // "Claude: Read…" for the ~50 s after a 0.3 s read and read as though reading were the slow part.
-            "user" -> {
-                val content = obj["message"]?.jsonObject?.get("content") ?: return
-                val blocks = runCatching { content.jsonArray }.getOrNull() ?: return
-                if (blocks.any { runCatching { it.jsonObject["type"]?.jsonPrimitive?.contentOrNull }.getOrNull() == "tool_result" }) {
-                    val activity = "Claude: thinking…"
-                    indicator.text2 = activity
-                    onActivity(activity)
                 }
             }
             "result" -> {
@@ -323,7 +334,13 @@ class ClaudeExplainer {
      * Report how the run ended. Returns true when it did not fail — a plan arrived, or the user cancelled —
      * which is what decides whether its plan directory is evidence worth keeping.
      */
-    private fun reportResult(project: Project, request: ExplainRequest, result: RunResult, tracker: ExplainSessionTracker): Boolean {
+    private fun reportResult(
+        project: Project,
+        request: ExplainRequest,
+        result: RunResult,
+        tracker: ExplainSessionTracker,
+        announced: Boolean,
+    ): Boolean {
         if (result.cancelled) {
             tracker.finish() // clear the banner; the balloon reports the cancellation
             notify(project, NotificationType.INFORMATION, "Explain This cancelled", "The walkthrough request was cancelled.")
@@ -351,13 +368,7 @@ class ClaudeExplainer {
 
         if (planLoaded) {
             tracker.finish() // plan arrived via set_plan → walkthrough; the banner's job is done
-            activateSidebar(project)
-            notify(
-                project, NotificationType.INFORMATION, "Walkthrough ready",
-                "<b>${StringUtil.escapeXmlEntities(state.title)}</b> — ${state.plan.frames.size} frame(s), " +
-                    "${state.plan.steps.size} step(s). " +
-                    "Open the <b>Audio Explainer</b> tool window and press Play.",
-            )
+            if (!announced) announceReady(project, state)
             return true
         } else {
             // Claude reported success but no plan reached the server.
@@ -371,6 +382,52 @@ class ClaudeExplainer {
             )
         }
         return false
+    }
+
+    private fun announceReady(project: Project, state: WalkthroughSnapshot) {
+        activateSidebar(project)
+        notify(
+            project, NotificationType.INFORMATION, "Walkthrough ready",
+            "<b>${StringUtil.escapeXmlEntities(state.title)}</b> — ${state.plan.frames.size} frame(s), " +
+                "${state.plan.steps.size} step(s). " +
+                "Open the <b>Audio Explainer</b> tool window and press Play.",
+        )
+    }
+
+    /**
+     * **The plan, loaded the moment the agent writes it** rather than when its POST lands.
+     *
+     * The `Write` that holds the plan is in the stream as soon as it is generated, and the agent then spends
+     * 10-15 s on a shell call to POST the same file and a closing summary — time the reader spent looking at a
+     * spinner over a walkthrough that already existed (`Speed.md`, bench2 and bench3). So the plugin takes it
+     * from the stream and loads it through the server's own validation.
+     *
+     * **Only a clean plan loads early** ([ExplainerServer.preload]): one whose reply would carry an `[error]` or
+     * a `[warn]` is one the agent is about to fix and re-POST, and showing it first would put a broken
+     * walkthrough on screen and then swap it. The agent's POST of the same file is then a no-op
+     * ([Walkthrough.setPlanUnlessShowing]) — no reload, no "replaced" banner, the reader's position kept.
+     */
+    private inner class EarlyPlan(private val project: Project, private val tracker: ExplainSessionTracker) {
+        @Volatile
+        var loaded = false
+            private set
+
+        fun offer(content: String) {
+            ApplicationManager.getApplication().executeOnPooledThread {
+                val resolved = runCatching { service<ExplainerServerService>().server.preload(content) }
+                    .onFailure { log.warn("explain run: loading the written plan early failed", it) }
+                    .getOrNull()
+                if (resolved == null) {
+                    log.info("explain run: the written plan is not clean, so it waits for the agent's POST")
+                    return@executeOnPooledThread
+                }
+                log.info("explain run: plan loaded from its Write — ${resolved.frames.size} frame(s), ${resolved.steps.size} step(s)")
+                if (loaded) return@executeOnPooledThread
+                loaded = true
+                tracker.finish()
+                announceReady(project, service<ExplainerServerService>().server.walkthrough.getState())
+            }
+        }
     }
 
     private fun activateSidebar(project: Project) {

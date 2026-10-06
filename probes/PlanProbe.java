@@ -219,6 +219,28 @@ public final class PlanProbe {
         w.setPlan(new Plan("", "en", savingPlan("x", 1).getFrames(), savingPlan("x", 1).getSteps()));
         check("identity: an unsaved plan with no title is NOT worth asking about (Save would refuse it)",
                 w.getState().getUnsaved() && !w.getState().getWorthAsking());
+
+        // **The early-loaded plan and its own POST** (`ClaudeExplainer.EarlyPlan`): the same plan again changes
+        // nothing — not the position, not the undo slot, no listener call — and a different one still loads.
+        Walkthrough e = new Walkthrough();
+        PlanCounting plans = new PlanCounting();
+        e.setPlan(savingPlan("Early", 3));
+        e.addListener(plans);
+        e.navigateToStep(2);
+        plans.n = 0; // navigating fires onPlan too
+        ResolvedPlan again = e.setPlanUnlessShowing(savingPlan("Early", 3));
+        check("early: the same plan POSTed again keeps the reader on step 3, fires nothing, offers no undo",
+                Integer.valueOf(2).equals(e.currentStepIndex()) && plans.n == 0 && !e.hasPrevious()
+                        && again == e.getResolvedPlan());
+        e.setPlanUnlessShowing(savingPlan("Fixed", 3));
+        check("  control: a different plan through the same door loads, back on step 1, with an undo",
+                Integer.valueOf(0).equals(e.currentStepIndex()) && plans.n == 1 && e.hasPrevious()
+                        && "Fixed".equals(e.getState().getTitle()));
+    }
+
+    static final class PlanCounting implements WalkthroughListener {
+        int n;
+        @Override public void onPlan(WalkthroughSnapshot state) { n++; }
     }
 
     /** A root frame carrying relations — the only thing section 14 varies. */

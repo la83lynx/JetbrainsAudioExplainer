@@ -357,6 +357,7 @@ class AudioExplainerSidebar(
             put("phase", state.phase.name.lowercase())
             put("displayName", state.displayName)
             put("activity", state.activity)
+            state.fraction?.let { put("fraction", it) }
             put("message", state.message)
         })
     }

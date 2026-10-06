@@ -4,6 +4,7 @@ import com.audioexplainer.DiagnosticCheck;
 import com.audioexplainer.DiagnosticContext;
 import com.audioexplainer.DiagnosticResult;
 import com.audioexplainer.ExplainerDiagnostics;
+import com.audioexplainer.ExplainProgress;
 import com.audioexplainer.ExplainPrompt;
 import com.audioexplainer.ExplainRequest;
 import com.audioexplainer.ExplainScope;
@@ -195,6 +196,104 @@ public final class EffortProbe {
         int n = 0, i = haystack.indexOf(needle);
         while (i >= 0) { n++; i = haystack.indexOf(needle, i + needle.length()); }
         return n;
+    }
+
+    static kotlinx.serialization.json.JsonObject ev(String json) {
+        return kotlinx.serialization.json.JsonElementKt.getJsonObject(
+                kotlinx.serialization.json.Json.Default.parseToJsonElement(json));
+    }
+
+    /** One JSON string literal's worth of escaping. */
+    static String esc(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    static String delta(String part) {
+        return "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"index\":1,"
+                + "\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"" + esc(part) + "\"}}}";
+    }
+
+    static String toolUse(String name, String inputJson) {
+        return "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"" + name
+                + "\",\"input\":" + inputJson + "}]}}";
+    }
+
+    static String blockStart(int index, String name) {
+        return "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":" + index
+                + ",\"content_block\":{\"type\":\"tool_use\",\"name\":\"" + name + "\",\"input\":{}}}}";
+    }
+
+    static final String TOOL_RESULT = "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\"}]}}";
+    static final String MESSAGE_START = "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\"}}";
+
+    /**
+     * **The run's progress bar** (`ExplainProgress`), fed a synthetic run on a hand-stepped clock. The plan
+     * `Write` arrives in 3-character deltas, so **no delta holds a whole key** — asserted, as the control, because
+     * that is what bench3 recorded (1 key of 13 whole) and what a per-delta count gets wrong.
+     */
+    static void progress() {
+        List<String> argv = ExplainPrompt.INSTANCE.buildArgs("P", "medium", "", PLAN_DIR);
+        check("progress: the argv asks for partial messages, once, before the variadic --add-dir",
+                argv.indexOf("--include-partial-messages") >= 0
+                        && argv.indexOf("--include-partial-messages") == argv.lastIndexOf("--include-partial-messages")
+                        && argv.indexOf("--include-partial-messages") < argv.indexOf("--add-dir"));
+
+        double[] clock = {0};
+        ExplainProgress p = new ExplainProgress("medium", "standard", () -> clock[0]);
+        List<Double> seen = new ArrayList<>();
+        java.util.function.Consumer<String> feed = j -> { p.onEvent(ev(j)); seen.add(p.fraction()); };
+
+        feed.accept("{\"type\":\"system\",\"subtype\":\"init\"}");
+        clock[0] = 3;
+        double starting = p.fraction();
+        seen.add(starting);
+        check("progress: starting is time-driven and stays inside its band", starting > 0 && starting < 0.06);
+        feed.accept(MESSAGE_START);
+        feed.accept(toolUse("Read", "{\"file_path\":\"C:/src/Tracker.cs\"}"));
+        check("progress: a Read names its file", "Reading Tracker.cs…".equals(p.activity()));
+        feed.accept(TOOL_RESULT);
+        clock[0] = 10;
+        double timeOnly = p.fraction();
+        feed.accept("{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens_delta\":1000}");
+        check("progress: thinking tokens move the planning band with the clock standing still",
+                p.fraction() > timeOnly && p.fraction() < 0.50);
+
+        // The third step's prose says "keep" and "ttsText" — unescaped quotes there would count; escaped ones don't.
+        String plan = "{\"frames\":[{\"keep\":[]},{\"keep\":[]}],\"steps\":[{\"ttsText\":\"a\"},{\"ttsText\":\"b\"},"
+                + "{\"ttsText\":\"say \\\"keep\\\" and ttsText\"}]}";
+        String input = "{\"file_path\": \"p.json\", \"content\": \"" + esc(plan) + "\"}";
+        clock[0] = 20;
+        feed.accept(MESSAGE_START);
+        feed.accept(blockStart(1, "Write"));
+        check("progress: the plan Write starts the writing band at 50 %", Math.abs(p.fraction() - 0.50) < 1e-9);
+        int whole = 0;
+        boolean sawFrame2 = false;
+        for (int i = 0; i < input.length(); i += 3) {
+            String part = input.substring(i, Math.min(input.length(), i + 3));
+            if (part.contains("\\\"keep\\\"") || part.contains("\\\"ttsText\\\"")) whole++;
+            feed.accept(delta(part));
+            sawFrame2 |= p.activity().endsWith("frame 2…");
+        }
+        check("  control: no delta held a whole key", whole == 0);
+        check("progress: frames counted as they stream, then steps — 2 frames, 3 steps, the prose ignored",
+                sawFrame2 && "Writing the walkthrough — step 3…".equals(p.activity()));
+        feed.accept("{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_stop\",\"index\":1}}");
+        check("progress: the Write's end is checking and sending, at 88 %",
+                p.getBand() == ExplainProgress.Band.SENDING && Math.abs(p.fraction() - 0.88) < 1e-9);
+        feed.accept(toolUse("PowerShell", "{\"command\":\"powershell -File explainer.ps1 plan p.json\"}"));
+        feed.accept(TOOL_RESULT);
+        check("progress: the POST's reply is finishing", p.getBand() == ExplainProgress.Band.FINISHING);
+        feed.accept(MESSAGE_START);
+        feed.accept(blockStart(0, "Write"));
+        check("progress: a second Write (a fix) relabels and does not refill",
+                "Fixing the walkthrough…".equals(p.activity()) && p.getBand() == ExplainProgress.Band.FINISHING);
+        clock[0] = 600;
+        check("  and time alone never finishes the bar", p.fraction() < 1.0);
+        feed.accept("{\"type\":\"result\",\"subtype\":\"success\"}");
+        check("progress: the result line is 100 %", p.fraction() == 1.0);
+        boolean monotone = true;
+        for (int i = 1; i < seen.size(); i++) monotone &= seen.get(i) >= seen.get(i - 1);
+        check("progress: never decreased over " + seen.size() + " samples", monotone);
     }
 
     public static void main(String[] args) throws Exception {
@@ -435,6 +534,8 @@ public final class EffortProbe {
         check("  and not one of them belongs to the other platform",
                 names(results).stream().noneMatch(otherPlatform::contains));
         System.out.println("      (verdicts on this machine, reported not asserted: " + verdicts(results) + ")");
+
+        progress();
 
         System.out.println();
         System.out.println(pass + " pass / " + fail + " fail");

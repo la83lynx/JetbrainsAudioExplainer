@@ -112,7 +112,8 @@ class AudioExplainerSwingSidebar(
         ApplicationManager.getApplication().invokeLater {
             when (gen.phase) {
                 ExplainPhase.GENERATING -> {
-                    genLabel.text = "⏳ Generating${if (gen.displayName.isNotEmpty()) ": ${gen.displayName}" else "…"}"
+                    genLabel.text = "⏳ Generating${if (gen.displayName.isNotEmpty()) ": ${gen.displayName}" else "…"}" +
+                        (gen.fraction?.let { " — ${(it * 100).toInt()}%" } ?: "")
                     genLabel.isVisible = true
                 }
                 ExplainPhase.FAILED -> {
