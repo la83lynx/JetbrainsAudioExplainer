@@ -112,7 +112,8 @@ class ClaudeExplainer {
             )
             indicator.text = "Claude is reading ${request.displayName} and planning the walkthrough…"
             tracker.progress("Reading ${request.displayName} and planning…")
-            val progress = ExplainProgress(effort, depth)
+            val timings = ExplainTimings.getInstance()
+            val progress = ExplainProgress(timings.expected(effort, depth, model))
             val early = EarlyPlan(project, tracker)
             val result = try {
                 runClaude(cmd, indicator, progress, tracker::progress, early::offer)
@@ -121,6 +122,11 @@ class ClaudeExplainer {
                 tracker.fail(e.message ?: "Claude invocation failed.")
                 notify(project, NotificationType.ERROR, "Explain This failed", errorHtml(e.message))
                 return
+            }
+            if (!result.cancelled) {
+                log.info("explain run shape ${ExplainTimings.key(effort, depth, model)}: ${progress.report()}")
+                // Only a run that finished cleanly teaches the bar what this combination takes.
+                if (!result.isError) progress.observed()?.let { timings.record(effort, depth, model, it) }
             }
 
             keepPlanDir = !reportResult(project, request, result, tracker, announced = early.loaded)
@@ -216,7 +222,7 @@ class ClaudeExplainer {
         })
 
         // **One place moves the bar**, on a 200 ms beat: the stream can deliver hundreds of deltas a second,
-        // and the time-driven bands have to advance when nothing is streaming at all.
+        // and the bar has to advance when nothing is streaming at all.
         indicator.isIndeterminate = false
         var shown: Pair<Int, String>? = null
         fun publish() {

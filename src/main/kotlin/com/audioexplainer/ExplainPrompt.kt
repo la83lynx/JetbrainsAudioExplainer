@@ -52,7 +52,7 @@ object ExplainPrompt {
         add("--output-format"); add("stream-json")
         add("--verbose") // required alongside stream-json in print mode
         // **The run's progress bar reads these** ([ExplainProgress]): the plan `Write` streams in as it is
-        // generated instead of arriving whole at the end, which is the one band of a run with a real numerator.
+        // generated instead of arriving whole at the end, and the thinking reports its token count as it goes.
         // Output only — what the model is asked and how it answers are unchanged.
         add("--include-partial-messages")
         // Scoped allow-list: only these tools may run without an (impossible, headless) prompt.

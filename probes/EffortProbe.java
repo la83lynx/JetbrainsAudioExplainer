@@ -5,6 +5,7 @@ import com.audioexplainer.DiagnosticContext;
 import com.audioexplainer.DiagnosticResult;
 import com.audioexplainer.ExplainerDiagnostics;
 import com.audioexplainer.ExplainProgress;
+import com.audioexplainer.RunShape;
 import com.audioexplainer.ExplainPrompt;
 import com.audioexplainer.ExplainRequest;
 import com.audioexplainer.ExplainScope;
@@ -226,10 +227,22 @@ public final class EffortProbe {
     static final String TOOL_RESULT = "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\"}]}}";
     static final String MESSAGE_START = "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\"}}";
 
+    static String thinkingTokens(int n) {
+        return "{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens_delta\":" + n + "}";
+    }
+
+    static final String THINKING_START = "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\","
+            + "\"index\":0,\"content_block\":{\"type\":\"thinking\"}}}";
+
+    static String pct(double v) {
+        return String.format(java.util.Locale.ROOT, "%.1f%%", v * 100);
+    }
+
     /**
-     * **The run's progress bar** (`ExplainProgress`), fed a synthetic run on a hand-stepped clock. The plan
-     * `Write` arrives in 3-character deltas, so **no delta holds a whole key** — asserted, as the control, because
-     * that is what bench3 recorded (1 key of 13 whole) and what a per-delta count gets wrong.
+     * **The run's progress bar** (`ExplainProgress`), fed a synthetic run on a hand-stepped clock that goes
+     * exactly as its `RunShape` expects — so an even bar is the right answer at every sample. The plan `Write`
+     * arrives in 3-character deltas, so **no delta holds a whole key** — asserted, as the control, because that is
+     * what bench3 recorded (1 key of 13 whole) and what a per-delta count gets wrong.
      */
     static void progress() {
         List<String> argv = ExplainPrompt.INSTANCE.buildArgs("P", "medium", "", PLAN_DIR);
@@ -238,62 +251,138 @@ public final class EffortProbe {
                         && argv.indexOf("--include-partial-messages") == argv.lastIndexOf("--include-partial-messages")
                         && argv.indexOf("--include-partial-messages") < argv.indexOf("--add-dir"));
 
-        double[] clock = {0};
-        ExplainProgress p = new ExplainProgress("medium", "standard", () -> clock[0]);
-        List<Double> seen = new ArrayList<>();
-        java.util.function.Consumer<String> feed = j -> { p.onEvent(ev(j)); seen.add(p.fraction()); };
-
-        feed.accept("{\"type\":\"system\",\"subtype\":\"init\"}");
-        clock[0] = 3;
-        double starting = p.fraction();
-        seen.add(starting);
-        check("progress: starting is time-driven and stays inside its band", starting > 0 && starting < 0.06);
-        feed.accept(MESSAGE_START);
-        feed.accept(toolUse("Read", "{\"file_path\":\"C:/src/Tracker.cs\"}"));
-        check("progress: a Read names its file", "Reading Tracker.cs…".equals(p.activity()));
-        feed.accept(TOOL_RESULT);
-        clock[0] = 10;
-        double timeOnly = p.fraction();
-        feed.accept("{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens_delta\":1000}");
-        check("progress: thinking tokens move the planning band with the clock standing still",
-                p.fraction() > timeOnly && p.fraction() < 0.50);
+        // ── the expectation: seeded per effort and depth, learned from runs ──
+        RunShape xhighDeep = RunShape.Companion.seed("xhigh", "deep");
+        RunShape mediumStd = RunShape.Companion.seed("medium", "standard");
+        RunShape mediumBrief = RunShape.Companion.seed("medium", "brief");
+        check("progress: the seeds order by effort and depth — xhigh/deep thinks longest, medium/brief least",
+                xhighDeep.getPreSeconds() > 4 * mediumStd.getPreSeconds()
+                        && mediumStd.getPreSeconds() > mediumBrief.getPreSeconds()
+                        && xhighDeep.getWriteChars() > mediumStd.getWriteChars()
+                        && mediumStd.getWriteChars() > mediumBrief.getWriteChars());
+        RunShape learnt = mediumStd.learn(new RunShape(52, 6000, 300, 1));
+        check("progress: a seed learns 3/4 of the way to its first run",
+                Math.abs(learnt.getPreSeconds() - (32 + 0.75 * 20)) < 1e-9 && learnt.getRuns() == 1);
+        RunShape again = learnt.learn(new RunShape(27, 6000, 300, 1));
+        check("  and 40 % toward each later one",
+                Math.abs(again.getPreSeconds() - (learnt.getPreSeconds() + 0.4 * (27 - learnt.getPreSeconds()))) < 1e-9
+                        && again.getRuns() == 2);
+        RunShape stored = RunShape.Companion.parse(learnt.encode());
+        check("progress: a shape survives its stored form",
+                stored != null && Math.abs(stored.getPreSeconds() - learnt.getPreSeconds()) < 0.06
+                        && stored.getRuns() == learnt.getRuns());
+        check("  control: a damaged stored form is no shape, so the seed is used",
+                RunShape.Companion.parse("pre=abc;chars=1") == null
+                        && RunShape.Companion.parse("pre=-1;chars=5;rate=5") == null);
 
         // The third step's prose says "keep" and "ttsText" — unescaped quotes there would count; escaped ones don't.
         String plan = "{\"frames\":[{\"keep\":[]},{\"keep\":[]}],\"steps\":[{\"ttsText\":\"a\"},{\"ttsText\":\"b\"},"
                 + "{\"ttsText\":\"say \\\"keep\\\" and ttsText\"}]}";
         String input = "{\"file_path\": \"p.json\", \"content\": \"" + esc(plan) + "\"}";
-        clock[0] = 20;
+
+        // 30 s to the Write, then the input over 10 s, then the tail: an even bar is t / (40 + TAIL).
+        double total = 40 + ExplainProgress.TAIL;
+        double[] clock = {0};
+        ExplainProgress p = new ExplainProgress(new RunShape(30, input.length(), input.length() / 10.0, 1), () -> clock[0]);
+        List<Double> seen = new ArrayList<>();
+        java.util.function.Consumer<String> feed = j -> { p.onEvent(ev(j)); seen.add(p.fraction()); };
+        java.util.function.DoubleUnaryOperator at = t -> { clock[0] = t; double f = p.fraction(); seen.add(f); return f; };
+
+        feed.accept("{\"type\":\"system\",\"subtype\":\"init\"}");
+        check("progress: it starts by saying Claude is starting", "Starting Claude…".equals(p.activity()));
+        double worst = 0;
+        for (double t = 1; t <= 4; t++) worst = Math.max(worst, Math.abs(at.applyAsDouble(t) - t / total));
+        feed.accept(MESSAGE_START);
+        feed.accept(THINKING_START);
+        check("progress: a thinking block says so", "Thinking it through…".equals(p.activity()));
+        feed.accept(toolUse("Read", "{\"file_path\":\"" + esc("C:\\Users\\me\\.claude\\skills\\audio-explainer\\docs\\plan-schema.md") + "\"}"));
+        check("progress: reading the skill's own docs is reading the instructions, backslashes or not",
+                "Reading the explainer's instructions…".equals(p.activity()));
+        feed.accept(TOOL_RESULT);
+        feed.accept(toolUse("Read", "{\"file_path\":\"C:/src/Tracker.cs\"}"));
+        check("progress: a Read of the code names its file", "Reading Tracker.cs…".equals(p.activity()));
+        feed.accept(toolUse("Grep", "{\"pattern\":\"Tracker\"}"));
+        check("progress: a search says so", "Searching the code…".equals(p.activity()));
+        feed.accept(TOOL_RESULT);
+        check("progress: a tool's result hands back to thinking", "Thinking it through…".equals(p.activity()));
+        feed.accept(thinkingTokens(150));
+        check("progress: a thinking heartbeat puts its running count in the label — the one live sign of a long think",
+                "Thinking it through — 150 tokens…".equals(p.activity()));
+        feed.accept(thinkingTokens(1050));
+        check("  in thousands past a thousand", "Thinking it through — 1.2k tokens…".equals(p.activity()));
+        for (double t = 5; t < 30; t++) worst = Math.max(worst, Math.abs(at.applyAsDouble(t) - t / total));
+        clock[0] = 30;
+        double beforeWrite = p.fraction();
         feed.accept(MESSAGE_START);
         feed.accept(blockStart(1, "Write"));
-        check("progress: the plan Write starts the writing band at 50 %", Math.abs(p.fraction() - 0.50) < 1e-9);
+        double afterWrite = p.fraction();
+        check("progress: the Write starting is not a jump — " + pct(beforeWrite) + " before, " + pct(afterWrite) + " after",
+                Math.abs(afterWrite - beforeWrite) < 1e-9);
+        check("  and stands where an even bar would, " + pct(30 / total), Math.abs(afterWrite - 30 / total) < 0.01);
         int whole = 0;
         boolean sawFrame2 = false;
-        for (int i = 0; i < input.length(); i += 3) {
+        int parts = (input.length() + 2) / 3;
+        for (int i = 0, k = 0; i < input.length(); i += 3, k++) {
             String part = input.substring(i, Math.min(input.length(), i + 3));
             if (part.contains("\\\"keep\\\"") || part.contains("\\\"ttsText\\\"")) whole++;
+            clock[0] = 30 + 10.0 * (k + 1) / parts;
             feed.accept(delta(part));
+            if (clock[0] > 33) worst = Math.max(worst, Math.abs(seen.get(seen.size() - 1) - clock[0] / total));
             sawFrame2 |= p.activity().endsWith("frame 2…");
         }
         check("  control: no delta held a whole key", whole == 0);
         check("progress: frames counted as they stream, then steps — 2 frames, 3 steps, the prose ignored",
                 sawFrame2 && "Writing the walkthrough — step 3…".equals(p.activity()));
         feed.accept("{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_stop\",\"index\":1}}");
-        check("progress: the Write's end is checking and sending, at 88 %",
-                p.getBand() == ExplainProgress.Band.SENDING && Math.abs(p.fraction() - 0.88) < 1e-9);
+        check("progress: the Write's end is checking, near the top — " + pct(p.fraction()),
+                p.getPhase() == ExplainProgress.Phase.CHECKING && "Checking the walkthrough…".equals(p.activity())
+                        && Math.abs(p.fraction() - 40 / total) < 0.02);
+        check("progress: a run that goes as expected fills evenly — worst " + pct(worst) + " off an even bar",
+                worst < 0.03);
         feed.accept(toolUse("PowerShell", "{\"command\":\"powershell -File explainer.ps1 plan p.json\"}"));
+        check("progress: the POST is sending", "Sending the walkthrough…".equals(p.activity()));
         feed.accept(TOOL_RESULT);
-        check("progress: the POST's reply is finishing", p.getBand() == ExplainProgress.Band.FINISHING);
+        check("  and its reply is finishing", "Finishing…".equals(p.activity()));
+        double beforeFix = p.fraction();
         feed.accept(MESSAGE_START);
         feed.accept(blockStart(0, "Write"));
         check("progress: a second Write (a fix) relabels and does not refill",
-                "Fixing the walkthrough…".equals(p.activity()) && p.getBand() == ExplainProgress.Band.FINISHING);
+                "Fixing the walkthrough…".equals(p.activity()) && p.getPhase() == ExplainProgress.Phase.CHECKING
+                        && p.fraction() >= beforeFix);
         clock[0] = 600;
         check("  and time alone never finishes the bar", p.fraction() < 1.0);
+        RunShape observed = p.observed();
+        check("progress: the run's own shape is what it did — Write at 30 s, " + input.length() + " chars in 10 s",
+                observed != null && Math.abs(observed.getPreSeconds() - 30) < 1e-9
+                        && observed.getWriteChars() == input.length()
+                        && Math.abs(observed.getWriteRate() - input.length() / 10.0) < 1e-6);
         feed.accept("{\"type\":\"result\",\"subtype\":\"success\"}");
         check("progress: the result line is 100 %", p.fraction() == 1.0);
+        check("progress: the report says when the Write came against the expectation",
+                p.report().startsWith("plan Write at 30.0s (expected 30.0s)"));
         boolean monotone = true;
         for (int i = 1; i < seen.size(); i++) monotone &= seen.get(i) >= seen.get(i - 1);
         check("progress: never decreased over " + seen.size() + " samples", monotone);
+
+        // ── a think that runs long: slows, never pins ──
+        double[] c2 = {0};
+        ExplainProgress slow = new ExplainProgress(new RunShape(30, 3000, 300, 1), () -> c2[0]);
+        double[] f = new double[5];
+        double[] ts = {30, 60, 120, 240, 480};
+        for (int i = 0; i < ts.length; i++) { c2[0] = ts[i]; f[i] = slow.fraction(); }
+        boolean creeping = true;
+        for (int i = 1; i < f.length; i++) creeping &= f[i] > f[i - 1] + 0.003;
+        check("progress: a think 16x past its expectation still moves the bar at every sample ("
+                + pct(f[0]) + ", " + pct(f[1]) + ", " + pct(f[2]) + ", " + pct(f[3]) + ", " + pct(f[4]) + ")",
+                creeping && f[4] < 0.9);
+
+        // ── a stream without partial messages: the Write arrives whole ──
+        double[] c3 = {0};
+        ExplainProgress whole3 = new ExplainProgress(mediumStd, () -> c3[0]);
+        c3[0] = 20;
+        whole3.onEvent(ev(toolUse("Write", "{\"file_path\":\"p.json\",\"content\":\"{}\"}")));
+        check("progress: without partial messages a whole Write still moves it on, and teaches nothing",
+                whole3.getPhase() == ExplainProgress.Phase.CHECKING && whole3.observed() == null);
     }
 
     public static void main(String[] args) throws Exception {

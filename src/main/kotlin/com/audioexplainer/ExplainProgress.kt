@@ -6,71 +6,118 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlin.math.exp
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 
 /**
- * **How far an explain run has got, estimated from what the run streams** — no cooperation from the agent.
+ * **What one kind of run usually takes** — the expectation [ExplainProgress] divides by, one per
+ * effort/depth/model ([ExplainTimings] keeps them).
  *
- * The agent cannot report its own progress: almost all of a run is one model turn (think, then emit the plan
- * `Write`) with no tool call inside it, and a model has no idea how long its own turn will take. What the
- * plugin *can* see, with `--include-partial-messages`, is enough to fill a bar honestly:
- *
- * | Band | Fraction | Driven by |
- * |---|---|---|
- * | starting | 0 – 6 % | time, until the model's first message |
- * | reading and planning | 6 – 50 % | time **and** the thinking-token heartbeats, against what this effort usually thinks |
- * | writing the plan | 50 – 88 % | the bytes of the `Write` streamed so far, against what this depth usually writes |
- * | checking and sending | 88 – 96 % | time, from the end of the `Write` to the POST's reply |
- * | finishing | 96 – 99.5 % | time, until the result line |
- *
- * The bands are `Speed.md`'s measured medium/Standard timeline (`bench2`/`bench3`): ~8 s to the first read,
- * ~25 s reading and thinking, ~30 s writing ~9.5 KB, ~5 s to the POST, ~8 s of closing summary. Writing is the
- * one band with a real numerator, which is lucky, because it is also the longest.
- *
- * **Never goes backwards.** A re-POST after an `[error]` reply is a second `Write`, which the bar spends inside
- * the band it is already in rather than refilling.
- *
- * [now] is seconds on any monotonic clock, injected so a recorded run can be replayed at its own timestamps.
+ * Two numbers carry a run: how long until the plan `Write` starts (reading, searching, thinking — almost all
+ * of it the model thinking, which effort sets), and how big that `Write` is (which depth sets) at a speed that
+ * barely varies (bench3: 299-333 chars/s across six runs).
  */
-class ExplainProgress(effort: String, depth: String, private val now: () -> Double = { System.nanoTime() / 1e9 }) {
-
-    enum class Band(val from: Double, val to: Double) {
-        STARTING(0.00, 0.06),
-        PREPARING(0.06, 0.50),
-        WRITING(0.50, 0.88),
-        SENDING(0.88, 0.96),
-        FINISHING(0.96, 0.995),
-        DONE(1.0, 1.0),
-    }
-
-    private val expectedThinking = when (effort.trim()) {
-        AudioExplainerSettings.EFFORT_LOW -> 600.0
-        AudioExplainerSettings.EFFORT_MEDIUM -> 1_500.0 // bench3: 1 150-2 000 estimated before the plan `Write`
-        AudioExplainerSettings.EFFORT_HIGH -> 4_000.0
-        AudioExplainerSettings.EFFORT_XHIGH -> 7_000.0
-        AudioExplainerSettings.EFFORT_MAX -> 10_000.0
-        else -> 4_000.0 // inherited from the user's own settings, which are usually above medium
-    }
+data class RunShape(
+    /** Seconds from launch until the plan `Write` starts streaming. */
+    val preSeconds: Double,
+    /** Characters of the `Write`'s streamed input — the plan as a JSON string, so its own quotes count twice. */
+    val writeChars: Double,
+    /** How fast that input streams, characters per second. */
+    val writeRate: Double,
+    /** How many finished runs taught it; 0 for a [seed]. */
+    val runs: Int = 0,
+) {
+    val writeSeconds: Double get() = writeChars / writeRate
 
     /**
-     * Characters of `input_json_delta` — the `Write`'s input as JSON, so the plan's own quotes count twice.
-     * Standard is bench3's 8 305 and 8 596 (4 frames, 12-13 steps); the other two are scaled from it.
+     * This expectation moved toward one more run's [observed] shape. **A seed is a guess and a run is a
+     * measurement**, so the first run moves it three quarters of the way; after that each run moves it 40 %,
+     * which follows a change of model or habit within two or three runs without one slow run owning it.
      */
-    private val expectedWriteChars = when (depth) {
-        AudioExplainerSettings.DEPTH_BRIEF -> 3_500.0
-        AudioExplainerSettings.DEPTH_DEEP -> 14_000.0
-        else -> 8_500.0
+    fun learn(observed: RunShape): RunShape {
+        val a = if (runs == 0) 0.75 else 0.4
+        fun mix(old: Double, new: Double) = old + a * (new - old)
+        return RunShape(
+            mix(preSeconds, observed.preSeconds), mix(writeChars, observed.writeChars),
+            mix(writeRate, observed.writeRate), runs + 1,
+        )
     }
 
-    private val started = now()
-    private var bandStarted = started
-    private var floor = 0.0
+    fun encode(): String =
+        String.format(Locale.ROOT, "pre=%.1f;chars=%.0f;rate=%.0f;runs=%d", preSeconds, writeChars, writeRate, runs)
 
-    var band = Band.STARTING
+    companion object {
+        fun parse(text: String): RunShape? = runCatching {
+            val m = text.split(';').associate { it.substringBefore('=').trim() to it.substringAfter('=').trim() }
+            RunShape(m.getValue("pre").toDouble(), m.getValue("chars").toDouble(), m.getValue("rate").toDouble(), m["runs"]?.toInt() ?: 1)
+        }.getOrNull()?.takeIf { it.preSeconds > 0 && it.writeChars > 0 && it.writeRate > 0 }
+
+        /**
+         * The guess before a combination has run here. Medium/Standard is bench3 (six runs: the `Write` starts
+         * at 27-48 s, ~8 000 chars at ~320/s); the rest is the 2026-10-13 sandbox round (medium/Brief ~15 s,
+         * high/Standard ~28 s, xhigh/Deep ~206 s) and `Speed.md`'s xhigh/Standard (~165 s).
+         */
+        fun seed(effort: String, depth: String): RunShape {
+            val pre = when (effort.trim()) {
+                AudioExplainerSettings.EFFORT_LOW -> 22.0
+                AudioExplainerSettings.EFFORT_MEDIUM -> 32.0
+                AudioExplainerSettings.EFFORT_HIGH -> 40.0
+                AudioExplainerSettings.EFFORT_XHIGH -> 150.0
+                AudioExplainerSettings.EFFORT_MAX -> 200.0
+                else -> 40.0 // inherited from the user's own settings
+            }
+            return when (depth) {
+                AudioExplainerSettings.DEPTH_BRIEF -> RunShape(pre * 0.5, 3_000.0, 320.0)
+                AudioExplainerSettings.DEPTH_DEEP -> RunShape(pre * 1.35, 11_000.0, 320.0)
+                else -> RunShape(pre, 8_000.0, 320.0)
+            }
+        }
+    }
+}
+
+/**
+ * **How far an explain run has got, estimated from what the run streams** — no cooperation from the agent.
+ *
+ * The agent cannot report its own progress: most of a run is one model turn (think, then emit the plan
+ * `Write`) with no tool call inside it, and the thinking itself streams blank — `--include-partial-messages`
+ * gives a token count every ~1.2 s, never the text. So the bar is **time spent over time spent plus time
+ * left**, with time left from [expected]:
+ *
+ * | Phase | Time left |
+ * |---|---|
+ * | preparing — reading, searching, thinking | the rest of [RunShape.preSeconds], then the whole `Write`, then [TAIL] |
+ * | writing the plan | the `Write`'s unstreamed characters at the speed it is streaming now, then [TAIL] |
+ * | checking — `Write` done | [TAIL]; the bar eases toward the end from wherever it is |
+ *
+ * A run that goes as expected fills the bar at an even pace, and **a phase change is never a jump to a fixed
+ * mark**: it only changes the estimate of what is left. A phase that overruns its expectation slows the bar
+ * without ever pinning it ([overrun]). The end is small on purpose: the plan loads from its `Write`, so what
+ * follows is usually never on screen.
+ *
+ * The bar glides toward its target over [GLIDE] seconds and **never goes backwards**. [now] is seconds on any
+ * monotonic clock, injected so a recorded run can be replayed at its own timestamps.
+ */
+class ExplainProgress(private val expected: RunShape, private val now: () -> Double = { System.nanoTime() / 1e9 }) {
+
+    enum class Phase { PREPARING, WRITING, CHECKING, DONE }
+
+    private val started = now()
+    var phase = Phase.PREPARING
         private set
+    private var writeStarted = Double.NaN
+    private var writeEnded = Double.NaN
+    private var finished = Double.NaN
+    private var shown = 0.0
+    private var lastSample = started
+    private var barAtWriteStart = Double.NaN
+    private var barAtWriteEnd = Double.NaN
+    private var writeFullAt = Double.NaN
+    private var checkFrom = 0.0
+
     private var thinkingTokens = 0
+    private var thinking = false
+    private var tools = 0
     private var writeChars = 0
     private var writeFrames = 0
     private var writeCarry = ""
@@ -86,46 +133,63 @@ class ExplainProgress(effort: String, depth: String, private val now: () -> Doub
             "stream_event" -> onStreamEvent(obj["event"] as? JsonObject ?: return)
             "system" -> if (obj.str("subtype") == "thinking_tokens") {
                 thinkingTokens += obj["estimated_tokens_delta"]?.jsonPrimitive?.intOrNull ?: 0
+                if (thinking) activity = thinkingLabel()
             }
             "assistant" -> for (block in obj.blocks()) {
                 if (block.str("type") != "tool_use") continue
                 val name = block.str("name")
                 val input = block["input"] as? JsonObject
-                if (band < Band.WRITING) {
-                    enter(Band.PREPARING)
-                    activity = when (name) {
-                        "Read" -> "Reading ${input?.str("file_path")?.substringAfterLast('/')?.substringAfterLast('\\') ?: "the code"}…"
-                        "Grep", "Glob" -> "Searching the code…"
-                        "Task" -> "Exploring the code around it…"
-                        else -> "Planning the walkthrough…"
+                when {
+                    // A stream without partial messages never showed the `Write` start: it begins and ends here.
+                    name == "Write" && writes == 0 -> {
+                        writes = 1
+                        writeStarted = now(); writeEnded = writeStarted
+                        barAtWriteStart = shown; barAtWriteEnd = shown
+                        checkFrom = max(shown, target(writeEnded))
+                        phase = Phase.CHECKING
+                        thinking = false
+                        activity = "Checking the walkthrough…"
                     }
-                } else if ((name == "Bash" || name == "PowerShell") && input?.str("command")?.let(::isPost) == true) {
-                    postPending = true
-                    activity = "Sending the walkthrough…"
+                    phase == Phase.PREPARING -> {
+                        tools++
+                        thinking = false
+                        activity = toolLabel(name, input)
+                    }
+                    (name == "Bash" || name == "PowerShell") && input?.str("command")?.let(POST::containsMatchIn) == true -> {
+                        postPending = true
+                        activity = "Sending the walkthrough…"
+                    }
                 }
             }
             "user" -> if (obj.blocks().any { it.str("type") == "tool_result" }) {
                 when {
-                    postPending -> { postPending = false; enter(Band.FINISHING); activity = "Finishing…" }
-                    band < Band.WRITING -> activity = "Planning the walkthrough…"
+                    postPending -> { postPending = false; activity = "Finishing…" }
+                    phase == Phase.PREPARING -> { thinking = true; activity = thinkingLabel() }
                 }
             }
-            "result" -> { enter(Band.DONE); activity = "Done" }
+            "result" -> {
+                phase = Phase.DONE
+                finished = now()
+                activity = "Done"
+            }
         }
     }
 
     private fun onStreamEvent(ev: JsonObject) {
         when (ev.str("type")) {
-            "message_start" -> { writeBlock = -1; enter(Band.PREPARING) }
+            "message_start" -> if (phase != Phase.WRITING) writeBlock = -1
             "content_block_start" -> {
                 val block = ev["content_block"] as? JsonObject ?: return
                 when (block.str("type")) {
-                    "thinking" -> if (band < Band.WRITING) activity = "Planning the walkthrough…"
+                    "thinking" -> if (phase == Phase.PREPARING) { thinking = true; activity = thinkingLabel() }
                     "tool_use" -> if (block.str("name") == "Write") {
-                        writeBlock = ev["index"]?.jsonPrimitive?.intOrNull ?: -1
                         writes++
-                        if (writes == 1) {
-                            enter(Band.WRITING)
+                        if (writes == 1 && phase == Phase.PREPARING) {
+                            writeBlock = ev["index"]?.jsonPrimitive?.intOrNull ?: -1
+                            writeStarted = now()
+                            barAtWriteStart = shown
+                            phase = Phase.WRITING
+                            thinking = false
                             activity = "Writing the walkthrough…"
                         } else {
                             activity = "Fixing the walkthrough…"
@@ -134,7 +198,7 @@ class ExplainProgress(effort: String, depth: String, private val now: () -> Doub
                 }
             }
             "content_block_delta" -> {
-                if (ev["index"]?.jsonPrimitive?.intOrNull != writeBlock || writes != 1) return
+                if (phase != Phase.WRITING || ev["index"]?.jsonPrimitive?.intOrNull != writeBlock) return
                 val delta = ev["delta"] as? JsonObject ?: return
                 val part = delta.str("partial_json") ?: return
                 writeChars += part.length
@@ -154,45 +218,111 @@ class ExplainProgress(effort: String, depth: String, private val now: () -> Doub
                     else -> activity
                 }
             }
-            "content_block_stop" -> if (ev["index"]?.jsonPrimitive?.intOrNull == writeBlock) {
-                writeBlock = -1
-                if (writes == 1) {
-                    enter(Band.SENDING)
-                    activity = "Checking the walkthrough…"
-                }
+            "content_block_stop" -> if (phase == Phase.WRITING && ev["index"]?.jsonPrimitive?.intOrNull == writeBlock) {
+                writeEnded = now()
+                barAtWriteEnd = fraction()
+                checkFrom = max(shown, target(writeEnded))
+                phase = Phase.CHECKING
+                activity = "Checking the walkthrough…"
             }
         }
     }
 
-    /** The bar's position, 0..1. Never decreases between calls. */
+    /** The bar's position, 0..1. Never decreases between calls; 1 only once the run has ended. */
     fun fraction(): Double {
         val t = now()
-        val p = when (band) {
-            Band.STARTING -> ease(t - bandStarted, 5.0)
-            Band.PREPARING -> 1 - exp(-((t - bandStarted) / 30.0 + thinkingTokens / expectedThinking))
-            Band.WRITING -> {
-                val r = writeChars / expectedWriteChars
-                // Linear while the plan is the usual size; a longer one creeps toward the end of the band.
-                if (r < 0.9) r else 0.9 + 0.1 * (1 - exp(-(r - 0.9) * 5))
-            }
-            Band.SENDING, Band.FINISHING -> ease(t - bandStarted, 5.0)
-            Band.DONE -> 1.0
+        if (phase == Phase.DONE) {
+            shown = 1.0
+        } else {
+            val target = target(t)
+            if (target > shown) shown += (target - shown) * min(1.0, (t - lastSample) / GLIDE)
+            shown = min(shown, CAP)
         }
-        floor = max(floor, band.from + (band.to - band.from) * min(p, 1.0))
-        return floor
+        lastSample = t
+        return shown
     }
+
+    private fun target(t: Double): Double {
+        val elapsed = t - started
+        if (elapsed <= 0) return 0.0
+        return when (phase) {
+            Phase.PREPARING -> {
+                val whole = expected.preSeconds + expected.writeSeconds + TAIL
+                if (elapsed <= expected.preSeconds) elapsed / whole
+                else overrun(expected.preSeconds / whole, (elapsed - expected.preSeconds) / expected.preSeconds)
+            }
+            Phase.WRITING -> {
+                val left = expected.writeChars - writeChars
+                if (left >= 0) {
+                    // The speed it is actually streaming at, once there is enough of it to measure.
+                    val spent = t - writeStarted
+                    val rate = if (spent >= 2 && writeChars >= 400) writeChars / spent else expected.writeRate
+                    elapsed / (elapsed + left / rate + TAIL)
+                } else {
+                    if (writeFullAt.isNaN()) writeFullAt = elapsed
+                    overrun(writeFullAt / (writeFullAt + TAIL), -left / expected.writeChars)
+                }
+            }
+            Phase.CHECKING -> overrun(checkFrom, (t - writeEnded) / CHECK_SECONDS)
+            Phase.DONE -> 1.0
+        }
+    }
+
+    /**
+     * **Past the expectation**: from [from], two thirds of the way to the end, approached as `x / (1 + x)` —
+     * half of it once the phase has run twice its expected length, three quarters at four times. That keeps
+     * moving long after an exponential would have pinned, and the phase that follows starts close to where
+     * this one has got to (bench3 b2's 48 s think against 32 s expected: 63 % here, 63 % as its `Write` starts).
+     */
+    private fun overrun(from: Double, x: Double) = from + (1 - from) * (2.0 / 3) * (x / (1 + x))
 
     fun activity(): String = activity
 
-    private fun enter(next: Band) {
-        if (next <= band) return
-        band = next
-        bandStarted = now()
+    /** This run's own shape, to learn from — null unless a plan `Write` streamed start to end. */
+    fun observed(): RunShape? {
+        if (writeStarted.isNaN() || writeEnded.isNaN() || writeEnded <= writeStarted || writeChars == 0) return null
+        return RunShape(writeStarted - started, writeChars.toDouble(), writeChars / (writeEnded - writeStarted), 1)
     }
 
-    private fun ease(seconds: Double, tau: Double) = 1 - exp(-seconds / tau)
+    /**
+     * One log line on how the run went against [expected], and **how honest the bar was**: where it stood at the
+     * `Write`'s start and end, beside where a perfectly even bar would have stood for this run's real length.
+     */
+    fun report(): String {
+        val total = (if (finished.isNaN()) now() else finished) - started
+        if (writeStarted.isNaN()) return "no plan Write; ${thinkingTokens} thinking token(s), $tools tool call(s)"
+        fun pct(v: Double) = if (v.isNaN()) "?" else "%.0f%%".format(Locale.ROOT, v * 100)
+        val pre = writeStarted - started
+        val write = if (writeEnded.isNaN()) Double.NaN else writeEnded - writeStarted
+        return String.format(
+            Locale.ROOT,
+            "plan Write at %.1fs (expected %.1fs), %,d chars in %.1fs (expected %,.0f at %.0f/s), %,d thinking token(s), " +
+                "%d tool call(s) before it; bar at the Write %s (even %s), at its end %s (even %s)",
+            pre, expected.preSeconds, writeChars, write, expected.writeChars, expected.writeRate, thinkingTokens, tools,
+            pct(barAtWriteStart), pct(pre / total), pct(barAtWriteEnd), pct((pre + write) / total),
+        )
+    }
 
-    private fun isPost(command: String) = POST.containsMatchIn(command)
+    /** With its running token count — the one live sign of a long think, which streams no text. */
+    private fun thinkingLabel() = when {
+        thinkingTokens <= 0 -> "Thinking it through…"
+        thinkingTokens < 1_000 -> "Thinking it through — $thinkingTokens tokens…"
+        else -> String.format(Locale.ROOT, "Thinking it through — %.1fk tokens…", thinkingTokens / 1000.0)
+    }
+
+    private fun toolLabel(name: String?, input: JsonObject?): String {
+        val path = input?.str("file_path")?.replace('\\', '/')
+        return when (name) {
+            "Read" -> when {
+                path == null -> "Reading the code…"
+                SKILL_DOCS in path -> "Reading the explainer's instructions…"
+                else -> "Reading ${path.substringAfterLast('/')}…"
+            }
+            "Grep", "Glob" -> "Searching the code…"
+            "Task" -> "Exploring the code around it…"
+            else -> "Planning the walkthrough…"
+        }
+    }
 
     private fun JsonObject.str(key: String): String? = (this[key] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
 
@@ -200,6 +330,14 @@ class ExplainProgress(effort: String, depth: String, private val now: () -> Doub
         runCatching { this["message"]!!.jsonObject["content"]!!.jsonArray.mapNotNull { it as? JsonObject } }.getOrDefault(emptyList())
 
     companion object {
+        /** Seconds from the `Write`'s end until the plan is on screen — loaded from the `Write` itself, usually. */
+        const val TAIL = 3.0
+        /** After the `Write`: the bar is halfway from there to the end this long after it, if anyone still sees it. */
+        private const val CHECK_SECONDS = 10.0
+        /** Seconds the bar takes to close most of the way to a new target. */
+        const val GLIDE = 1.0
+        private const val CAP = 0.995
+        private const val SKILL_DOCS = "/skills/audio-explainer/"
         private val FRAME_KEY = Regex(Regex.escape("\\\"keep\\\""))
         private val STEP_KEY = Regex(Regex.escape("\\\"ttsText\\\""))
         private const val CARRY = 10 // one less than the longest key above, `\"ttsText\"`
