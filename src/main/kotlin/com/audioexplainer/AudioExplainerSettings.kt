@@ -222,6 +222,13 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
          */
         @JvmField var treeStepFold: String = DEF_TREE_STEP_FOLD
 
+        /**
+         * How much of a frame's `keep` a step folds away for itself: `OFF` / `ANCESTORS` / `LINKS` / `STEP` —
+         * see [com.audioexplainer.tree.StepCondense]. Like [treeStepFold], a property of the reader's screen,
+         * not of the plan.
+         */
+        @JvmField var treeCondense: String = DEF_TREE_CONDENSE
+
         /** How much of a node's path its caption shows: `FULL` / `PROJECT_RELATIVE` / `BASENAME`. */
         @JvmField var treePath: String = DEF_TREE_PATH
 
@@ -430,6 +437,8 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         const val DEF_TREE_LEADER = "BRACE"
         const val DEF_TREE_CHEVRON = "BOTTOM_BORDER"
         const val DEF_TREE_STEP_FOLD = "ALWAYS"
+        // Not yet a verdict: the 2026-10-14 round asked for more folding, and `LINKS` is the middle of the four.
+        const val DEF_TREE_CONDENSE = "LINKS"
         const val DEF_TREE_PATH = "PROJECT_RELATIVE"
         const val DEF_TREE_DEEMPHASIS = "TINT"
         const val DEF_TREE_ELISION = "OPENABLE"

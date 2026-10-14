@@ -479,9 +479,28 @@ class CodeNodeView(
         resync(TRIGGER_ELISION)
     }
 
-    /** 0-based line runs *not* covered by [CodeNodeSpec.keep] — the complement, which is what gets folded. */
+    /**
+     * **This step's narrower window**, or null for the frame's own [CodeNodeSpec.keep] — what
+     * `TreePlanView.condense` sets for one step ([StepCondense]).
+     */
+    private var condensedKeep: List<IntRange>? = null
+
+    /**
+     * Show only [keep] (1-based ranges, inside [CodeNodeSpec.keep]) until called again, or the frame's own
+     * `keep` again with null. Re-elides only on a change, so a fold the reader opened by hand stays open for as
+     * long as the window does; true when it re-elided.
+     */
+    fun condense(keep: List<IntRange>?): Boolean {
+        val next = keep?.takeIf { it != spec.keep }
+        if (next == condensedKeep) return false
+        condensedKeep = next
+        applyElision()
+        return true
+    }
+
+    /** 0-based line runs *not* covered by the kept window — the complement, which is what gets folded. */
     private fun gapsOutsideKeep(lastLine: Int): List<IntRange> {
-        val keep = spec.keep
+        val keep = (condensedKeep ?: spec.keep)
             .map { (it.first - 1).coerceIn(0, lastLine)..(it.last - 1).coerceIn(0, lastLine) }
             .sortedBy { it.first }
         val gaps = mutableListOf<IntRange>()

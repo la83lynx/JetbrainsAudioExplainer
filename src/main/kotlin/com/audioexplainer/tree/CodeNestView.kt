@@ -1989,6 +1989,8 @@ data class NestStyle(
      * every nesting open through every step regardless of what the step was about.
      */
     val stepFold: StepFold = StepFold.ALWAYS,
+    /** **What of an open frame's `keep` a step folds for itself** — see [StepCondense] and `TreePlanView.condense`. */
+    val condense: StepCondense = StepCondense.LINKS,
     /** Space between the nested frame and the host's next line of code. Also the drag grip's band — `GRIP_H`. */
     val gapBelow: Int = 6,
     /**
@@ -2090,6 +2092,7 @@ data class NestStyle(
         leader: NestLeader = this.leader,
         chevron: ChevronStyle = this.chevron,
         stepFold: StepFold = this.stepFold,
+        condense: StepCondense = this.condense,
         gapBelow: Int = this.gapBelow,
         growHosts: Boolean = this.growHosts,
         gap: Int = this.gap,
@@ -2098,6 +2101,7 @@ data class NestStyle(
         boxPadBelow: Int = this.boxPadBelow,
         nodeSlack: Boolean = this.nodeSlack,
     ) = NestStyle(
-        leader, chevron, stepFold, gapBelow, growHosts, gap, inset, bottomSlack, boxPadBelow, nodeSlack,
+        leader, chevron, stepFold, condense, gapBelow, growHosts, gap, inset, bottomSlack, boxPadBelow,
+        nodeSlack,
     )
 }

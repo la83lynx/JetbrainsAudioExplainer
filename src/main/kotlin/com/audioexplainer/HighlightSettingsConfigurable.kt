@@ -5,6 +5,7 @@ import com.audioexplainer.tree.NestLeader
 import com.audioexplainer.tree.NodeDeemphasis
 import com.audioexplainer.tree.NodeElision
 import com.audioexplainer.tree.NodePath
+import com.audioexplainer.tree.StepCondense
 import com.audioexplainer.tree.StepFold
 import com.audioexplainer.tree.TreePreview
 import com.audioexplainer.tree.TreeStyle
@@ -156,6 +157,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     private lateinit var treeMaxHeightSpinner: JBIntSpinner
     private lateinit var treeGrowCheck: JBCheckBox
     private lateinit var treeGrowHostsCheck: JBCheckBox
+    private lateinit var treeCondenseCombo: ComboBox<String>
 
     /**
      * **The still frame above the Code-tree controls** — five of that section's dropdowns choose a *shape*,
@@ -574,6 +576,19 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                     "budget</b> is what shipped before. Never while the step is inside it, and stepping back " +
                     "into a folded one opens it. No still frame here — it is a behaviour over time.",
             )
+            row("Fold code a step does not use:") {
+                treeCondenseCombo = comboBox(TREE_CONDENSES)
+                    .bindItem(
+                        { state.treeCondense },
+                        { state.treeCondense = it ?: AudioExplainerSettings.DEF_TREE_CONDENSE },
+                    )
+                    .applyToComponent { renderer = SimpleListCellRenderer.create("") { treeCondenseLabel(it) } }
+                    .component
+            }.rowComment(
+                "Inside the frames that stay open: what of each frame's lines the current step folds behind " +
+                    "<code>⋯ N lines ⋯</code> for itself. Headers, call lines, link ends and the step's own " +
+                    "lines always stay; a fold opens on a click, and the next step shows the frame as it needs it.",
+            )
             row("File path in captions:") {
                 treePathCombo = comboBox(TREE_PATHS)
                     .bindItem(
@@ -723,6 +738,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 treeMaxHeightSpinner.value = AudioExplainerSettings.DEF_TREE_MAX_HEIGHT
                 treeGrowCheck.isSelected = false
                 treeGrowHostsCheck.isSelected = true
+                treeCondenseCombo.selectedItem = AudioExplainerSettings.DEF_TREE_CONDENSE
                 // `ColorPanel.setSelectedColor` notifies nobody, so the two frames are told by hand rather
                 // than left showing the palette this button just replaced.
                 refreshAppearancePreview()
@@ -1127,6 +1143,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         private val TREE_LEADERS = NestLeader.entries.map { it.name }
         private val TREE_CHEVRONS = ChevronStyle.entries.map { it.name }
         private val TREE_STEP_FOLDS = StepFold.entries.map { it.name }
+        private val TREE_CONDENSES = StepCondense.entries.map { it.name }
         private val TREE_PATHS = NodePath.entries.map { it.name }
         private val TREE_DEEMPHASIS = NodeDeemphasis.entries.map { it.name }
         private val TREE_ELISIONS = NodeElision.entries.map { it.name }
@@ -1151,6 +1168,16 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 "VERTICAL" to "Chevron beside the box — ˅ to expand, ˄ to collapse",
                 "BOTTOM_BORDER" to "A thickened bottom edge on the box while collapsed, no chevron",
                 "NONE" to "Nothing — the box still toggles on a click",
+            ),
+        )
+
+        private fun treeCondenseLabel(name: String?): String = label(
+            name,
+            mapOf(
+                "OFF" to "Nothing — every frame shows all it keeps",
+                "ANCESTORS" to "The frames above a nested step",
+                "LINKS" to "Those, and the stretch between a long link's ends",
+                "STEP" to "Everything the step does not touch",
             ),
         )
 

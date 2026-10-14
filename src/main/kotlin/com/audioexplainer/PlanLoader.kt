@@ -645,11 +645,21 @@ object PlanLoader {
                     if (ep.line <= 0) continue
                     val owner = ownerOf(ep, f, frames) ?: continue
                     if (owner.shows(ep.line)) continue
+                    // The likely cause, when there is one: the line IS kept, by a frame that is never on screen
+                    // with this one.
+                    val elsewhere = frames.firstOrNull {
+                        it.scene != f.scene && sameFilePath(owner.file, it.file) && it.shows(ep.line)
+                    }
                     issues += PlanIssue(
                         IssueLevel.WARN, "relation.endpoint-not-kept",
                         "$where puts its `$end` on line ${ep.line} of frame ${owner.id}, which frame " +
                             "${owner.id} does not keep; that end lands on a `⋯ N lines ⋯` placeholder and " +
-                            "reads as a link into nothing. Keep line ${ep.line}, or move the endpoint",
+                            "reads as a link into nothing. " +
+                            (elsewhere?.let {
+                                "Frame ${it.id} keeps that line, but it is in scene ${it.scene}, and a link " +
+                                    "cannot reach another scene. Keep line ${ep.line} in frame ${owner.id}, " +
+                                    "or drop the relation"
+                            } ?: "Keep line ${ep.line}, or move the endpoint"),
                     )
                 }
                 var drawn = false
@@ -699,10 +709,16 @@ object PlanLoader {
      *
      * Null when a real path matches no frame, which is **not** a defect: a plan may legitimately point at code
      * it never made a frame for, and that end becomes a callout line rather than a drawn one.
+     *
+     * **Only frames of [own]'s scene**, because that is all the tree searches (`TreePlanView.frameOwning` looks
+     * at the mounted nodes). Searching the whole plan found a frame in *another* scene that keeps the line,
+     * called the endpoint fine, and the tree meanwhile drew it into this scene's frame on that file — onto a
+     * `⋯ N lines ⋯` placeholder (2026-10-14, `xhigh-deep-1`: a link from `CancelRequest.cs` to
+     * `ObjectPool.cs:88`, kept only by scene 1's frame).
      */
     private fun ownerOf(ep: Endpoint, own: ResolvedFrame, frames: List<ResolvedFrame>): ResolvedFrame? {
         val path = ep.file?.trim()?.takeIf { it.isNotEmpty() } ?: return own
-        val onFile = frames.filter { sameFilePath(path, it.file) }
+        val onFile = frames.filter { it.scene == own.scene && sameFilePath(path, it.file) }
         if (onFile.size <= 1 || ep.line <= 0) return onFile.firstOrNull()
         if (onFile.any { it.id == own.id } && own.shows(ep.line)) return own
         return onFile.firstOrNull { it.shows(ep.line) } ?: onFile.first()

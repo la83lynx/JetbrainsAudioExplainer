@@ -11,6 +11,7 @@ import com.audioexplainer.LinkJoin
 import com.audioexplainer.ResolvedFrame
 import com.audioexplainer.ResolvedPlan
 import com.audioexplainer.FrameRole
+import com.audioexplainer.inStepBand
 import com.audioexplainer.ResolvedStep
 import com.audioexplainer.SpotlightRenderer
 import com.audioexplainer.StepPaint
@@ -409,6 +410,8 @@ class TreePlanView(
         // across one costs a rebuild — which is the whole of the scene model's runtime behaviour.
         plan.sceneOfStep(index)?.let { mountScene(it) }
         stepIndex = index
+        // Before painting, so every highlight, link half and call box is laid out against this step's folds.
+        condense(step)
 
         val primaryId = step.primaryFrameId
         val touched = step.frames.map { it.frame }.toSet()
@@ -578,6 +581,108 @@ class TreePlanView(
                     (if (forLinks > 0) ", $forLinks holding a link end" else "") + ")",
             )
         }
+    }
+
+    /**
+     * **Fold, for this step, the part of each open frame it does not use** — [StepCondense], from the 2026-10-14
+     * round: *"all generated walkthroughs make much less use of code collapsing, showing quite a lot of
+     * unrelevant code"*. [foldUntouched] folds whole nestings, and can never fold an ancestor of the frame it
+     * narrates; this folds *lines*, inside the frames that stay open.
+     *
+     * **What always stays**, in any frame it touches: the first line of each `keep` range (the class and member
+     * headers, by the schema's own advice on writing them), every call line a child hangs from — a call line
+     * folded away would bury the child, `PlanLoader.dropUnkeptCallSites`'s whole reason — the step's own ranges,
+     * and the ends of the links this step draws, so no link points into a fold.
+     *
+     * - **Ancestors** of the step's frame ([StepCondense.ANCESTORS] and up) fold everything else.
+     * - **The step's frame** folds the stretch between a long link's ends ([StepCondense.LINKS]), or everything
+     *   else ([StepCondense.STEP]), keeping a line either side of what stays.
+     *
+     * Every other node gets its whole `keep` back. Runs on a re-render too, which changes nothing unless the
+     * setting did: [CodeNodeView.condense] re-elides only on a change, so a fold the reader opened by hand stays
+     * open for as long as the step does.
+     */
+    private fun condense(step: ResolvedStep) {
+        val mode = nest.style.condense
+        val primary = nodeIndexOf[step.primaryFrameId]?.let { nest.nodes.getOrNull(it) }
+        val wanted = HashMap<CodeNodeView, List<IntRange>>()
+        if (mode != StepCondense.OFF && primary != null) {
+            val links = drawnLinks(step)
+            fun anchorsOf(frameId: Int, node: CodeNodeView): Set<Int> {
+                val frame = plan.frame(frameId) ?: return emptySet()
+                val out = HashSet<Int>()
+                frame.keep.forEach { out += it.lines().first }
+                nest.nestings.filter { it.parent === node }.forEach { n -> n.callLine?.let { out += it } }
+                step.rangesIn(frameId).forEach { out += it.lines() }
+                for ((from, to) in links) {
+                    if (from?.first == frameId) out += from.second
+                    if (to?.first == frameId) out += to.second
+                }
+                return out
+            }
+            for (nesting in nest.nestingsAbove(primary)) {
+                val host = nesting.parent
+                val frameId = frameIdOf(host) ?: continue
+                val frame = plan.frame(frameId) ?: continue
+                wanted[host] = StepCondense.window(frame.keep.map { it.lines() }, anchorsOf(frameId, host), { true }, 0)
+            }
+            val frameId = step.primaryFrameId
+            val frame = plan.frame(frameId)
+            if (frame != null && mode >= StepCondense.LINKS) {
+                val zone: (Int) -> Boolean = if (mode == StepCondense.STEP) {
+                    { true }
+                } else {
+                    // The stretches between the two ends of a long link inside this frame.
+                    val spans = links
+                        .mapNotNull { (from, to) ->
+                            if (from?.first != frameId || to?.first != frameId) return@mapNotNull null
+                            minOf(from.second, to.second) + 1 until maxOf(from.second, to.second)
+                        }
+                        .filter { span -> span.count { frame.shows(it) } >= StepCondense.LONG_LINK }
+                    ({ line -> spans.any { line in it } })
+                }
+                val window = StepCondense.window(frame.keep.map { it.lines() }, anchorsOf(frameId, primary), zone, 1)
+                wanted[primary] = window
+            }
+        }
+        var changed = 0
+        for (node in nest.nodes) if (node.condense(wanted[node])) changed++
+        if (changed > 0) {
+            log.info(
+                "step $stepIndex: condense $mode re-elided $changed node(s); " +
+                    wanted.entries.joinToString(", ") { (node, rs) ->
+                        "frame ${frameIdOf(node)} shows ${rs.sumOf { it.count() }} line(s)"
+                    },
+            )
+        }
+    }
+
+    private fun frameIdOf(node: CodeNodeView): Int? =
+        nodeIndexOf.entries.firstOrNull { nest.nodes.getOrNull(it.value) === node }?.key
+
+    /**
+     * The links [step] draws, each as `(frame, line)` at both ends — the rule [paintLinkPairs] draws by (a
+     * relation shows while the step's first range in its frame holds one of its ends) and [frameOwning] places
+     * by. An end in no mounted frame is null: it has no row in this tree to keep, while the other end does.
+     */
+    private fun drawnLinks(step: ResolvedStep): List<Pair<Pair<Int, Int>?, Pair<Int, Int>?>> {
+        val out = mutableListOf<Pair<Pair<Int, Int>?, Pair<Int, Int>?>>()
+        for ((ownerId, _) in nodeIndexOf) {
+            val owner = plan.frame(ownerId) ?: continue
+            val band = step.rangesIn(ownerId).firstOrNull()?.lines() ?: continue
+            for (r in owner.frame.relations) {
+                if (!r.from.inStepBand(band.first, band.last, owner.file) &&
+                    !r.to.inStepBand(band.first, band.last, owner.file)
+                ) continue
+                fun place(ep: Endpoint): Pair<Int, Int>? {
+                    if (ep.line <= 0) return null
+                    val path = ep.file?.trim()?.takeIf { it.isNotEmpty() } ?: return ownerId to ep.line
+                    return frameOwning(path, ep.line, prefer = ownerId)?.let { it to ep.line }
+                }
+                out += place(r.from) to place(r.to)
+            }
+        }
+        return out
     }
 
     /**

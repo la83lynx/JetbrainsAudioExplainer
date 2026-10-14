@@ -786,6 +786,39 @@ public final class PlanProbe {
         // OVER_BUDGET leave a small walkthrough fully expanded. Named here so the round can send it back.
         check("settings: the step fold ships as ALWAYS, which K3 asked for and no round has judged",
                 fromSettings.getStepFold() == StepFold.ALWAYS);
+        check("settings: a step's own folding ships as LINKS, in the settings and the style alike — not yet judged",
+                fromSettings.getCondense() == StepCondense.LINKS
+                        && TreeStyle.INSTANCE.builtinNest().getCondense() == StepCondense.LINKS);
+        AudioExplainerSettings.State noCondense = new AudioExplainerSettings.State();
+        noCondense.treeCondense = "off";
+        check("  control: switching it off reaches the style",
+                TreeStyle.INSTANCE.nest(noCondense).getCondense() == StepCondense.OFF);
+
+        // ── StepCondense.window, on the two cases the 2026-10-14 round named ──
+        // xhigh-deep-1, steps 6-7: the child plays under frame 0, which keeps 6-10, 21-31, 33-65 and hangs it
+        // from line 62. Condensed it is its three headers and the call line — 4 rows instead of 49.
+        List<kotlin.ranges.IntRange> ancestor = StepCondense.Companion.window(
+                Arrays.asList(new kotlin.ranges.IntRange(6, 10), new kotlin.ranges.IntRange(21, 31), new kotlin.ranges.IntRange(33, 65)),
+                new java.util.HashSet<>(Arrays.asList(6, 21, 33, 62)), l -> true, 0);
+        check("condense: an ancestor keeps its headers and the call line — " + ancestor,
+                ancestor.toString().equals("[6..6, 21..21, 33..33, 62..62]"));
+        // high-standard-real-1 frame 0: a link from line 62 back up to 8, with 51 kept lines between. Folding the
+        // stretch between, except the headers, the step (61-62) and a line either side, leaves 4 rows of it.
+        List<kotlin.ranges.IntRange> keep0 = Arrays.asList(
+                new kotlin.ranges.IntRange(6, 16), new kotlin.ranges.IntRange(18, 31), new kotlin.ranges.IntRange(33, 65));
+        List<kotlin.ranges.IntRange> linked = StepCondense.Companion.window(keep0,
+                new java.util.HashSet<>(Arrays.asList(6, 18, 33, 61, 62, 8)), l -> l > 8 && l < 62, 1);
+        check("condense: a long link's stretch folds to what the step touches — " + linked,
+                linked.toString().equals("[6..9, 18..19, 33..34, 60..65]"));
+        check("  control: with no long link the zone is empty and the frame is its whole keep",
+                StepCondense.Companion.window(keep0, new java.util.HashSet<>(Arrays.asList(6, 18, 33)), l -> false, 1)
+                        .toString().equals("[6..16, 18..31, 33..65]"));
+        // A run shorter than MIN_FOLD with code on both sides stays: a placeholder would cost a row to save four.
+        List<kotlin.ranges.IntRange> shortRun = StepCondense.Companion.window(
+                Collections.singletonList(new kotlin.ranges.IntRange(10, 30)),
+                new java.util.HashSet<>(Arrays.asList(10, 15, 30)), l -> true, 0);
+        check("condense: a short run between kept lines stays, a long one folds — " + shortRun,
+                shortRun.toString().equals("[10..15, 30..30]"));
 
         // Every DEF_TREE_* must NAME a real constant. It degrades silently otherwise — the tree would draw
         // correctly and only Reset-to-defaults would misbehave, by selecting an item the combo does not hold.
@@ -797,6 +830,7 @@ public final class PlanProbe {
             NodeDeemphasis.valueOf(AudioExplainerSettings.DEF_TREE_DEEMPHASIS);
             NodeElision.valueOf(AudioExplainerSettings.DEF_TREE_ELISION);
             StepFold.valueOf(AudioExplainerSettings.DEF_TREE_STEP_FOLD);
+            StepCondense.valueOf(AudioExplainerSettings.DEF_TREE_CONDENSE);
         } catch (IllegalArgumentException e) {
             namesReal = false;
         }
@@ -935,6 +969,20 @@ public final class PlanProbe {
                 Collections.singletonList(step(0, ctx(1, 8)))));
         check("relation: and a line no window on that file holds is still reported",
                 has(relSplitGone, "relation.endpoint-not-kept"));
+
+        // **Only the endpoint's own scene counts**, because the tree only searches the mounted nodes. Frame 1
+        // keeps line 30 but sits in scene 1, so in scene 0 the endpoint lands on frame 0's fold — the
+        // 2026-10-14 `xhigh-deep-1` portal into a `⋯ 55 lines ⋯` placeholder, which the whole-plan lookup
+        // called fine.
+        ResolvedPlan relOtherScene = PlanLoader.INSTANCE.resolve(plan(
+                Arrays.asList(
+                        relFrame(0, "A.cs", ctx(1, 12), rel(Relation.KIND_FLOW, at(5), atFile("A.cs", 30))),
+                        new Frame(1, "A.cs", "F1", "", 1, null, 0, null, 1,
+                                Collections.singletonList(ctx(20, 40)), Collections.emptyList())),
+                Arrays.asList(step(0, ctx(1, 8)), step(1, ctx(20, 30)))));
+        check("relation: an endpoint kept only by a frame in ANOTHER scene is reported, and the message says so",
+                has(relOtherScene, "relation.endpoint-not-kept")
+                        && relOtherScene.getIssues().stream().anyMatch(i -> i.getMessage().contains("in scene 1")));
 
         // The predicate itself, at both edges: `shows` decides which window owns a line, so an off-by-one
         // here moves a link's far half to the wrong node rather than merely mis-wording an issue.

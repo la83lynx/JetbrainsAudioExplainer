@@ -46,6 +46,7 @@ object TreeStyle {
         leader = enumOr(state.treeLeader, NestLeader.entries, builtinNest().leader),
         chevron = enumOr(state.treeChevron, ChevronStyle.entries, builtinNest().chevron),
         stepFold = enumOr(state.treeStepFold, StepFold.entries, builtinNest().stepFold),
+        condense = enumOr(state.treeCondense, StepCondense.entries, builtinNest().condense),
         growHosts = state.treeGrowHosts,
     )
 
