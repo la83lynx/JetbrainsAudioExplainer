@@ -365,6 +365,165 @@ public final class PlanProbe {
         return false;
     }
 
+    /** LazyDotIde's Services/BuildService.cs, whole - for StepCondense.chain. */
+    private static final String POOL = """
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+
+namespace DotNetIDE;
+
+public record BuildDiagnostic(
+    string FilePath,
+    int Line,
+    int Column,
+    string Code,
+    string Severity,
+    string Message);
+
+public class BuildResult
+{
+    public bool Success { get; init; }
+    public List<BuildDiagnostic> Diagnostics { get; init; } = new();
+}
+
+public class BuildService
+{
+    private static readonly Regex DiagnosticPattern = new(
+        @"^(.+?)\((\d+),(\d+)\):\s+(error|warning)\s+([A-Z0-9]+):\s+(.+)$",
+        RegexOptions.Compiled);
+
+    private Process? _currentProcess;
+    private readonly object _lock = new();
+
+    public async Task<BuildResult> BuildAsync(string target, Action<string> onLine, CancellationToken ct)
+        => await RunDotnetAsync("build", target, ["--nologo"], onLine, ct);
+
+    public async Task<BuildResult> TestAsync(string target, Action<string> onLine, CancellationToken ct)
+        => await RunDotnetAsync("test", target, ["--nologo", "--logger", "console;verbosity=normal"], onLine, ct);
+
+    public async Task RunAsync(string executable, string[] args, Action<string> onLine, CancellationToken ct, string? workingDirectory = null)
+    {
+        var psi = new ProcessStartInfo(executable, args)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        if (!string.IsNullOrEmpty(workingDirectory))
+            psi.WorkingDirectory = workingDirectory;
+
+        using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        lock (_lock) { _currentProcess = process; }
+
+        try
+        {
+            process.Start();
+            var stdoutTask = ReadStreamAsync(process.StandardOutput, onLine, ct);
+            var stderrTask = ReadStreamAsync(process.StandardError, onLine, ct);
+            await Task.WhenAll(stdoutTask, stderrTask);
+            await process.WaitForExitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { } // Best effort — process may have already exited
+        }
+        finally
+        {
+            lock (_lock) { _currentProcess = null; }
+        }
+    }
+
+    public void Cancel()
+    {
+        lock (_lock)
+        {
+            try { _currentProcess?.Kill(entireProcessTree: true); }
+            catch { } // Best effort — process may have already exited
+        }
+    }
+
+    private async Task<BuildResult> RunDotnetAsync(
+        string command,
+        string? target,
+        string[] extraArgs,
+        Action<string> onLine,
+        CancellationToken ct)
+    {
+        var allArgs = new List<string> { command };
+        if (target != null) allArgs.Add(target);
+        allArgs.AddRange(extraArgs);
+
+        var psi = new ProcessStartInfo("dotnet", allArgs)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        var diagnostics = new List<BuildDiagnostic>();
+        bool success = false;
+
+        using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        lock (_lock) { _currentProcess = process; }
+
+        try
+        {
+            process.Start();
+
+            var stdoutTask = ReadStreamAsync(process.StandardOutput, line =>
+            {
+                onLine(line);
+                var match = DiagnosticPattern.Match(line);
+                if (match.Success)
+                {
+                    diagnostics.Add(new BuildDiagnostic(
+                        FilePath: match.Groups[1].Value.Trim(),
+                        Line: int.TryParse(match.Groups[2].Value, out var l) ? l : 0,
+                        Column: int.TryParse(match.Groups[3].Value, out var c) ? c : 0,
+                        Severity: match.Groups[4].Value,
+                        Code: match.Groups[5].Value,
+                        Message: match.Groups[6].Value.Trim()));
+                }
+            }, ct);
+
+            var stderrTask = ReadStreamAsync(process.StandardError, onLine, ct);
+
+            await Task.WhenAll(stdoutTask, stderrTask);
+            await process.WaitForExitAsync(ct);
+
+            success = process.ExitCode == 0;
+        }
+        catch (OperationCanceledException)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { } // Best effort — process may have already exited
+            success = false;
+        }
+        finally
+        {
+            lock (_lock) { _currentProcess = null; }
+        }
+
+        return new BuildResult { Success = success, Diagnostics = diagnostics };
+    }
+
+    private static async Task ReadStreamAsync(StreamReader reader, Action<string> onLine, CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var line = await reader.ReadLineAsync(ct);
+                if (line == null) break;
+                onLine(line);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+}
+""";
+
     public static void main(String[] args) throws Exception {
         // ── 1. The happy chain: 3 frames, depth 0/1/2, nothing wrong ──
         ResolvedPlan good = PlanLoader.INSTANCE.resolve(plan(
@@ -819,6 +978,58 @@ public final class PlanProbe {
                 new java.util.HashSet<>(Arrays.asList(10, 15, 30)), l -> true, 0);
         check("condense: a short run between kept lines stays, a long one folds — " + shortRun,
                 shortRun.toString().equals("[10..15, 30..30]"));
+
+        // ── StepCondense.chain: the headers of the blocks a line sits in (the 2026-10-15 round) ──
+        // xhigh-deep-1's pool, lines 1-102 as they are in LazyDotIde. The "Exhaustion signal" step (80-82) sits in
+        // the `if` at 70-71, in Get (67-68), in the class (21-22).
+        String[] pool = POOL.split("\n", -1);
+        kotlin.jvm.functions.Function1<Integer, String> poolText = l -> l >= 1 && l <= pool.length ? pool[l - 1] : null;
+        check("chain: a step inside an `if` keeps the `if`, its brace, the method and the class — "
+                        + StepCondense.Companion.chain(80, poolText),
+                StepCondense.Companion.chain(80, poolText).toString().equals("[71, 70, 68, 67, 22, 21]"));
+        // STEP on that step, frame 2 (keep 21, 23-31, 67-102): before the chain, 69-78 folded as "10 lines" and
+        // took the `if` with it; with it, the `if` and its brace stay and only its first branch (72-78) folds.
+        List<kotlin.ranges.IntRange> keep2 = Arrays.asList(new kotlin.ranges.IntRange(21, 21),
+                new kotlin.ranges.IntRange(23, 31), new kotlin.ranges.IntRange(67, 102));
+        java.util.Set<Integer> placed2 = new java.util.HashSet<>(Arrays.asList(21, 23, 67, 80));
+        java.util.Set<Integer> chains2 = new java.util.HashSet<>();
+        for (int l : placed2) chains2.addAll(StepCondense.Companion.chain(l, poolText));
+        java.util.Set<Integer> anchors2 = new java.util.HashSet<>(Arrays.asList(21, 23, 67, 80, 81, 82));
+        List<kotlin.ranges.IntRange> stepped = StepCondense.Companion.window(keep2, anchors2, l -> true, 1, chains2);
+        check("condense: STEP keeps the `if` a step sits in — " + stepped,
+                stepped.toString().equals("[21..21, 23..24, 67..71, 79..83]"));
+        check("  control: without the chain, 69-78 folds and the `if` with it",
+                StepCondense.Companion.window(keep2, anchors2, l -> true, 1, java.util.Collections.emptySet())
+                        .toString().equals("[21..21, 23..24, 67..68, 79..83]"));
+        // The ancestor case again: above the call line 62, CreateItem's signature and brace now stay.
+        java.util.Set<Integer> chains0 = new java.util.HashSet<>();
+        for (int l : Arrays.asList(6, 21, 33, 62)) chains0.addAll(StepCondense.Companion.chain(l, poolText));
+        List<kotlin.ranges.IntRange> ancestorChained = StepCondense.Companion.window(
+                Arrays.asList(new kotlin.ranges.IntRange(6, 10), new kotlin.ranges.IntRange(21, 31), new kotlin.ranges.IntRange(33, 65)),
+                new java.util.HashSet<>(Arrays.asList(6, 21, 33, 62)), l -> true, 0, chains0);
+        check("condense: an ancestor shows which method the call line is in — " + ancestorChained,
+                ancestorChained.toString().equals("[6..6, 21..22, 33..33, 59..62]"));
+        // K&R, a multi-line condition, `} else {`, a comment and a lone closer at a lesser indent.
+        String[] kr = {
+                "class A {",
+                "    void m() {",
+                "        if (a &&",
+                "            b) {",
+                "            x();",
+                "        } else {",
+                "            y();",
+                "        }",
+                "    }",
+        };
+        kotlin.jvm.functions.Function1<Integer, String> krText = l -> l >= 1 && l <= kr.length ? kr[l - 1] : null;
+        check("chain: `} else {` opens the block it is in, then the method and the class — "
+                        + StepCondense.Companion.chain(7, krText),
+                StepCondense.Companion.chain(7, krText).toString().equals("[6, 2, 1]"));
+        String[] py = {"def f():", "# stray", "    if x:", "        pass", "    });", "        y = 1"};
+        kotlin.jvm.functions.Function1<Integer, String> pyText = l -> l >= 1 && l <= py.length ? py[l - 1] : null;
+        check("chain: comments and lone closers are no headers — " + StepCondense.Companion.chain(6, pyText),
+                StepCondense.Companion.chain(6, pyText).toString().equals("[3, 1]"));
+        check("  control: a blank line has no chain", StepCondense.Companion.chain(2, l -> "").isEmpty());
 
         // Every DEF_TREE_* must NAME a real constant. It degrades silently otherwise — the tree would draw
         // correctly and only Reset-to-defaults would misbehave, by selecting an item the combo does not hold.

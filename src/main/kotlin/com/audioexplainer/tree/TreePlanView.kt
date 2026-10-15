@@ -592,7 +592,9 @@ class TreePlanView(
      * **What always stays**, in any frame it touches: the first line of each `keep` range (the class and member
      * headers, by the schema's own advice on writing them), every call line a child hangs from — a call line
      * folded away would bury the child, `PlanLoader.dropUnkeptCallSites`'s whole reason — the step's own ranges,
-     * and the ends of the links this step draws, so no link points into a fold.
+     * and the ends of the links this step draws, so no link points into a fold. And above each of those, the
+     * headers of the blocks it sits in ([StepCondense.chain]) — the 2026-10-15 round: *"it would be best if
+     * this method would try to leave the nesting chain visible"*, for a step and for a link's far end alike.
      *
      * - **Ancestors** of the step's frame ([StepCondense.ANCESTORS] and up) fold everything else.
      * - **The step's frame** folds the stretch between a long link's ends ([StepCondense.LINKS]), or everything
@@ -608,23 +610,30 @@ class TreePlanView(
         val wanted = HashMap<CodeNodeView, List<IntRange>>()
         if (mode != StepCondense.OFF && primary != null) {
             val links = drawnLinks(step)
-            fun anchorsOf(frameId: Int, node: CodeNodeView): Set<Int> {
-                val frame = plan.frame(frameId) ?: return emptySet()
+            // What stays in [node]'s frame: the anchors, with the margin, and the chain of block headers above
+            // each line the step places — without one, so the `if` a step sits in stays and its body folds.
+            fun anchorsOf(frameId: Int, node: CodeNodeView): Pair<Set<Int>, Set<Int>> {
+                val frame = plan.frame(frameId) ?: return emptySet<Int>() to emptySet()
                 val out = HashSet<Int>()
-                frame.keep.forEach { out += it.lines().first }
-                nest.nestings.filter { it.parent === node }.forEach { n -> n.callLine?.let { out += it } }
-                step.rangesIn(frameId).forEach { out += it.lines() }
+                val placed = HashSet<Int>()
+                frame.keep.forEach { placed += it.lines().first }
+                nest.nestings.filter { it.parent === node }.forEach { n -> n.callLine?.let { placed += it } }
+                step.rangesIn(frameId).forEach { out += it.lines(); placed += it.lines().first }
                 for ((from, to) in links) {
-                    if (from?.first == frameId) out += from.second
-                    if (to?.first == frameId) out += to.second
+                    if (from?.first == frameId) placed += from.second
+                    if (to?.first == frameId) placed += to.second
                 }
-                return out
+                out += placed
+                val chains = HashSet<Int>()
+                placed.forEach { chains += StepCondense.chain(it, node::lineText) }
+                return out to chains
             }
             for (nesting in nest.nestingsAbove(primary)) {
                 val host = nesting.parent
                 val frameId = frameIdOf(host) ?: continue
                 val frame = plan.frame(frameId) ?: continue
-                wanted[host] = StepCondense.window(frame.keep.map { it.lines() }, anchorsOf(frameId, host), { true }, 0)
+                val (anchors, chains) = anchorsOf(frameId, host)
+                wanted[host] = StepCondense.window(frame.keep.map { it.lines() }, anchors, { true }, 0, chains)
             }
             val frameId = step.primaryFrameId
             val frame = plan.frame(frameId)
@@ -641,7 +650,8 @@ class TreePlanView(
                         .filter { span -> span.count { frame.shows(it) } >= StepCondense.LONG_LINK }
                     ({ line -> spans.any { line in it } })
                 }
-                val window = StepCondense.window(frame.keep.map { it.lines() }, anchorsOf(frameId, primary), zone, 1)
+                val (anchors, chains) = anchorsOf(frameId, primary)
+                val window = StepCondense.window(frame.keep.map { it.lines() }, anchors, zone, 1, chains)
                 wanted[primary] = window
             }
         }

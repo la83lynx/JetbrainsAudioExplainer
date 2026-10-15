@@ -498,6 +498,13 @@ class CodeNodeView(
         return true
     }
 
+    /** The text of 1-based [line] of the file, null past its end — for [StepCondense.chain]. */
+    fun lineText(line: Int): String? {
+        val doc = editor.document
+        if (line < 1 || line > doc.lineCount) return null
+        return doc.charsSequence.subSequence(doc.getLineStartOffset(line - 1), doc.getLineEndOffset(line - 1)).toString()
+    }
+
     /** 0-based line runs *not* covered by the kept window — the complement, which is what gets folded. */
     private fun gapsOutsideKeep(lastLine: Int): List<IntRange> {
         val keep = (condensedKeep ?: spec.keep)

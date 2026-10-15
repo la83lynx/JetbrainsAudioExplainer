@@ -45,12 +45,20 @@ enum class StepCondense {
          * The window to show: [keep]'s lines minus the foldable runs — lines in [zone] further than [margin] from
          * every [anchors] line. A run is consecutive *on screen*, so it may span a gap `keep` already elides.
          * It folds when it is at least [MIN_FOLD] rows, or when it touches a fold that is already there: then
-         * it only grows that placeholder, which costs no row of its own. 1-based, as contiguous ranges.
+         * it only grows that placeholder, which costs no row of its own. [exact] lines stay without a margin —
+         * a [chain]. 1-based, as contiguous ranges.
          */
-        fun window(keep: List<IntRange>, anchors: Set<Int>, zone: (Int) -> Boolean, margin: Int): List<IntRange> {
+        @JvmOverloads
+        fun window(
+            keep: List<IntRange>,
+            anchors: Set<Int>,
+            zone: (Int) -> Boolean,
+            margin: Int,
+            exact: Set<Int> = emptySet(),
+        ): List<IntRange> {
             val kept = keep.flatMap { it.toList() }.toSortedSet().toList()
             if (kept.isEmpty()) return emptyList()
-            val near = HashSet<Int>()
+            val near = HashSet<Int>(exact)
             for (a in anchors) for (l in a - margin..a + margin) near += l
             val folded = HashSet<Int>()
             var i = 0
@@ -68,6 +76,72 @@ enum class StepCondense {
                 i = j + 1
             }
             return runs(kept.filter { it !in folded })
+        }
+
+        /**
+         * **The lines that say where 1-based [line] sits** — the header of each block around it, innermost
+         * first in the walk: the `if (…)` and its `{`, the method's signature and its `{`, the class's — the
+         * 2026-10-15 round: a fold that keeps a step but hides the `if` it is inside, or keeps a link's end but
+         * not even the method it lands in, leaves the reader to guess where they are.
+         *
+         * By indentation, not by a parser, so it is one rule for every language a frame can be in (and Rider's
+         * frontend has no C# tree to ask). Walking up, the first line indented less than the current one opens
+         * the block; when that line is a lone `{` (Allman), the statement it opens — the nearest line above at
+         * its indent or less — comes too. Blank lines, comments, directives and lone closers (`}`, `});`) are
+         * skipped: a closer at a lesser indent ends a sibling block, not ours. [text] gives a line, null past the
+         * document; a blank [line] has no chain.
+         */
+        fun chain(line: Int, text: (Int) -> String?): Set<Int> {
+            val out = LinkedHashSet<Int>()
+            var indent = text(line)?.let(::indentOf) ?: return out
+            var k = line - 1
+            while (indent > 0 && k >= 1) {
+                val s = text(k)
+                val i = s?.let(::indentOf)
+                if (s == null || i == null || i >= indent || skipped(s)) {
+                    k--
+                    continue
+                }
+                out += k
+                indent = i
+                if (s.trimStart().startsWith("{")) {
+                    var h = k - 1
+                    while (h >= 1) {
+                        val t = text(h)
+                        val ti = t?.let(::indentOf)
+                        if (t != null && ti != null && ti <= i && !skipped(t)) break
+                        h--
+                    }
+                    if (h >= 1) {
+                        out += h
+                        indent = indentOf(text(h)!!)!!
+                        k = h
+                    }
+                }
+                k--
+            }
+            return out
+        }
+
+        /** Columns of leading whitespace, a tab as 4; null for a blank line. */
+        private fun indentOf(s: String): Int? {
+            var col = 0
+            for (c in s) {
+                when (c) {
+                    ' ' -> col++
+                    '\t' -> col += 4
+                    else -> return col
+                }
+            }
+            return null
+        }
+
+        private val CLOSER = Regex("""^[}\])][}\])\s;,]*$""")
+
+        private fun skipped(s: String): Boolean {
+            val t = s.trim()
+            return t.startsWith("//") || t.startsWith("/*") || t.startsWith("*") || t.startsWith("#") ||
+                CLOSER.matches(t)
         }
 
         /** Sorted 1-based lines as contiguous ranges. */
