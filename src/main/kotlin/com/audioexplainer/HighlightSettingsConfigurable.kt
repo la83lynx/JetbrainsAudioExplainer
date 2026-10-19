@@ -1177,6 +1177,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 "OFF" to "Nothing — every frame shows all it keeps",
                 "ANCESTORS" to "The frames above a nested step",
                 "LINKS" to "Those, and the stretch between a long link's ends",
+                "MEMBER" to "Those, and the members the step is not in",
                 "STEP" to "Everything the step does not touch",
             ),
         )

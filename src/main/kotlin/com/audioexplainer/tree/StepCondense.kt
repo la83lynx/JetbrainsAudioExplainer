@@ -31,6 +31,15 @@ enum class StepCondense {
      */
     LINKS,
 
+    /**
+     * And in the step's own frame, **the members the step is not in** fold: the method the step narrates
+     * stays whole, the frame's other methods go. The 2026-10-19 round's shape — 11 of 14 saved plans put one
+     * 50-60-line frame per scene and step through it ~6 lines at a time, so at any step most of the frame
+     * is other steps' members. A member is the outermost block around a step line that does not hold the
+     * whole `keep` ([member]); the class does, so it is never the one kept.
+     */
+    MEMBER,
+
     /** And the step's own frame shows only what the step touches: its ranges, headers, call lines, link ends. */
     STEP;
 
@@ -122,6 +131,69 @@ enum class StepCondense {
             }
             return out
         }
+
+        /**
+         * **The lines of the block 1-based [header] opens**, by indentation like [chain]: the lines below it
+         * indented deeper, an Allman `{` at its indent before them, and the closer at its indent after them. A
+         * header with no deeper line under it is a block of itself.
+         */
+        fun block(header: Int, text: (Int) -> String?): IntRange {
+            val indent = text(header)?.let(::indentOf) ?: return header..header
+            var last = header
+            var body = false
+            var k = header + 1
+            while (true) {
+                val s = text(k) ?: break
+                val i = indentOf(s)
+                if (i == null || (i > indent && skipped(s) && !CLOSER.matches(s.trim()))) {
+                    k++
+                    continue
+                }
+                val t = s.trim()
+                when {
+                    i > indent -> { body = true; last = k }
+                    !body && t.startsWith("{") -> last = k
+                    body && t.startsWith("}") -> { last = k; break }
+                    else -> break
+                }
+                k++
+            }
+            return header..last
+        }
+
+        /**
+         * **The member 1-based [line] is in** — the outermost of its own block and its [chain]'s blocks below
+         * the first type or namespace header ([TYPE_HEADER]) and below any block holding every [kept] line;
+         * null when [line] is such a header itself. Outermost, so a step on one statement keeps the whole
+         * method; below the type, so the class is never the member even when the frame also keeps the
+         * interfaces above it — which "below the block holding everything" alone got wrong on hig-standard-1.
+         */
+        fun member(line: Int, kept: Collection<Int>, text: (Int) -> String?): IntRange? {
+            val lo = kept.minOrNull() ?: return null
+            val hi = kept.maxOrNull() ?: return null
+            var best: IntRange? = null
+            for (h in listOf(line) + chain(line, text)) {
+                val s = text(h) ?: continue
+                // An Allman `{` is not a header: its block misses the signature above it, which is next in the chain.
+                if (s.trimStart().startsWith("{")) continue
+                if (isTypeHeader(s)) break
+                val b = block(h, text)
+                if (b.first <= lo && b.last >= hi) break
+                best = b
+            }
+            return best
+        }
+
+        /**
+         * A class, interface, namespace… declaration: modifiers, the keyword, a name. Read before the first `(`
+         * or `=`, so `where T : class` and a variable called `record` are not one. Kotlin's `object` only as a
+         * capitalised name or a companion, since C# fields are declared `object _lock`.
+         */
+        private val TYPE_HEADER = Regex(
+            """^\s*(?:[\w@\[\]]+\s+)*?(?:(?:class|struct|interface|record|enum|namespace|trait|impl|module|protocol|extension)\s+[A-Za-z_]|object\s+[A-Z]|companion\s+object\b)""",
+        )
+
+        fun isTypeHeader(s: String): Boolean = TYPE_HEADER.containsMatchIn(s.substringBefore('(').substringBefore('='))
 
         /** Columns of leading whitespace, a tab as 4; null for a blank line. */
         private fun indentOf(s: String): Int? {

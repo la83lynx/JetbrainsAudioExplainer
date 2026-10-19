@@ -597,8 +597,9 @@ class TreePlanView(
      * this method would try to leave the nesting chain visible"*, for a step and for a link's far end alike.
      *
      * - **Ancestors** of the step's frame ([StepCondense.ANCESTORS] and up) fold everything else.
-     * - **The step's frame** folds the stretch between a long link's ends ([StepCondense.LINKS]), or everything
-     *   else ([StepCondense.STEP]), keeping a line either side of what stays.
+     * - **The step's frame** folds the stretch between a long link's ends ([StepCondense.LINKS]), and the
+     *   members the step is not in ([StepCondense.MEMBER]), or everything else ([StepCondense.STEP]), keeping
+     *   a line either side of what stays.
      *
      * Every other node gets its whole `keep` back. Runs on a re-render too, which changes nothing unless the
      * setting did: [CodeNodeView.condense] re-elides only on a change, so a fold the reader opened by hand stays
@@ -648,7 +649,17 @@ class TreePlanView(
                             minOf(from.second, to.second) + 1 until maxOf(from.second, to.second)
                         }
                         .filter { span -> span.count { frame.shows(it) } >= StepCondense.LONG_LINK }
-                    ({ line -> spans.any { line in it } })
+                    if (mode == StepCondense.MEMBER) {
+                        // And every line outside the members the step's lines are in.
+                        val kept = frame.keep.flatMap { it.lines().toList() }
+                        val members = step.rangesIn(frameId)
+                            .flatMap { it.lines().toList() }
+                            .mapNotNull { StepCondense.member(it, kept, primary::lineText) }
+                            .distinct()
+                        ({ line -> members.none { line in it } || spans.any { line in it } })
+                    } else {
+                        ({ line -> spans.any { line in it } })
+                    }
                 }
                 val (anchors, chains) = anchorsOf(frameId, primary)
                 val window = StepCondense.window(frame.keep.map { it.lines() }, anchors, zone, 1, chains)

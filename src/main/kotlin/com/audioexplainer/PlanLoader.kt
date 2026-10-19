@@ -272,9 +272,9 @@ object PlanLoader {
      * **Reported once per scene**, because a scene is exactly "the frames on screen at once". What changed
      * under it is that the fold no longer waits for this cap ([com.audioexplainer.tree.StepFold], K3): every
      * nesting a step does not use is collapsed anyway. So the lines this cap is really about are the ones a
-     * fold cannot reclaim — **the frames one step needs open together, which for a nested chain is all of
-     * them**, since keeping a child open keeps every ancestor open with it. Depth spends the budget; breadth
-     * borrows it one sibling at a time.
+     * fold cannot reclaim — **the frames one step needs open together**. That was all of a nested chain
+     * until [com.audioexplainer.tree.StepCondense] (2026-10-14) folded a nested step's ancestors to their
+     * headers and the call line; the count still sums them, so a chain is the one shape it overstates.
      */
     const val LINE_BUDGET: Int = 60
 

@@ -1031,6 +1031,48 @@ public class BuildService
                 StepCondense.Companion.chain(6, pyText).toString().equals("[3, 1]"));
         check("  control: a blank line has no chain", StepCondense.Companion.chain(2, l -> "").isEmpty());
 
+        // ── StepCondense.member: the method a step is in, for MEMBER (the 2026-10-19 round) ──
+        check("block: Get runs from its signature through its closing brace — " + StepCondense.Companion.block(67, poolText),
+                StepCondense.Companion.block(67, poolText).toString().equals("67..86"));
+        check("block: the `if` in it, brace to brace — " + StepCondense.Companion.block(70, poolText),
+                StepCondense.Companion.block(70, poolText).toString().equals("70..83"));
+        check("  control: an attribute line is a block of itself", StepCondense.Companion.block(58, poolText).toString().equals("58..58"));
+        java.util.List<Integer> kept2 = new java.util.ArrayList<>();
+        for (kotlin.ranges.IntRange r : keep2) for (int l = r.getFirst(); l <= r.getLast(); l++) kept2.add(l);
+        check("member: a statement deep in Get is in Get, not in the class — " + StepCondense.Companion.member(80, kept2, poolText),
+                String.valueOf(StepCondense.Companion.member(80, kept2, poolText)).equals("67..86"));
+        java.util.Set<Integer> outsideGet = new java.util.HashSet<>();
+        for (int l : kept2) if (l < 67 || l > 86) outsideGet.add(l);
+        List<kotlin.ranges.IntRange> member = StepCondense.Companion.window(keep2, anchors2, outsideGet::contains, 1, chains2);
+        check("condense: MEMBER keeps Get whole and folds Return — " + member,
+                member.toString().equals("[21..21, 23..24, 67..86]"));
+        // A frame that is one method plus its class header: the method holds every kept line but the header, so
+        // it is the member, and there is nothing else to fold.
+        check("  control: a frame of one method has it as the member",
+                String.valueOf(StepCondense.Companion.member(80, Arrays.asList(21, 67, 70, 80, 86), poolText)).equals("67..86"));
+        check("  control: a frame that is only the step line has no member",
+                StepCondense.Companion.member(80, Arrays.asList(80), poolText) == null);
+        // hig-standard-1 frame 0 keeps the two interfaces above the class (6-16) as well as the class: no block
+        // holds every kept line, so "below the block holding everything" took the class as the member. The type
+        // header stops the walk instead.
+        java.util.List<Integer> kept0 = new java.util.ArrayList<>();
+        for (int[] r : new int[][]{{6, 16}, {18, 31}, {33, 65}}) for (int l = r[0]; l <= r[1]; l++) kept0.add(l);
+        check("member: with types above the class, a constructor line is in the constructor — "
+                        + StepCondense.Companion.member(38, kept0, poolText),
+                String.valueOf(StepCondense.Companion.member(38, kept0, poolText)).equals("36..44"));
+        check("member: a field is a member of itself — " + StepCondense.Companion.member(24, kept0, poolText),
+                String.valueOf(StepCondense.Companion.member(24, kept0, poolText)).equals("24..24"));
+        check("  control: the class header has no member", StepCondense.Companion.member(21, kept0, poolText) == null);
+        String[] types = {"public sealed class Pool<T> : IPool where T : class, new()", "class Foo:",
+                "@Serializable data class Foo(val a: Int)", "object Registry {", "pub struct Point {",
+                "export default interface Shape {", "namespace DotNetIDE;"};
+        String[] notTypes = {"    private object _lock = new();", "    var record = load();",
+                "    public void M<T>() where T : class", "    return new Foo();", "    // a class of its own"};
+        boolean typesOk = true;
+        for (String t : types) typesOk &= StepCondense.Companion.isTypeHeader(t);
+        for (String t : notTypes) typesOk &= !StepCondense.Companion.isTypeHeader(t);
+        check("type headers: declarations are, fields, generic constraints and statements are not", typesOk);
+
         // Every DEF_TREE_* must NAME a real constant. It degrades silently otherwise — the tree would draw
         // correctly and only Reset-to-defaults would misbehave, by selecting an item the combo does not hold.
         boolean namesReal = true;

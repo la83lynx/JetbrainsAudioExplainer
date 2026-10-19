@@ -166,6 +166,10 @@ Guidance:
   constant the member depends on.
 - **Keep the call line.** If another frame declares `parent: <this frame>` and `callLine: N`, then line `N`
   must be inside this frame's `keep` — see below.
+- **Start a member's range at its signature.** At each step the plugin folds the code that step does not
+  use (see **What a step folds** below), and keeps the lines that place it: the signature and the `if` / loop
+  headers around it. It can only show lines you kept, so a range starting mid-method leaves a step with
+  nothing above it.
 - **Do not list what you are not going to narrate.** A frame nobody's step names renders as structure with
   no narration; that is legal (and reported as `[info]`), but it is usually a leftover.
 
@@ -205,7 +209,7 @@ the plugin reports whenever you cross one.
 | **Parents per frame** | **exactly 1** | Not expressible: `parent` is a single field. Two call sites means two frames |
 | **Cycles** | **forbidden** | Frame A parented to B parented to A is rejected at load: the link that closes the loop is cut, that frame becomes top-level, and you get a `[warn]` |
 | **A step's ranges** | **inside its frame's `keep`** | The step highlights a **fold placeholder** — it renders, it is simply pointing at code the frame elided, and it reads as the plugin having dropped the highlight. `[warn]`, and there is nothing sensible the plugin can do at render time |
-| **Lines on screen** | **~60 per scene** | Nothing is clamped; it is a `[info]` on that scene. Every frame *of a scene* is on screen together, so this — not any single frame's size, and not the whole plan's total — is the budget that binds. **60 is a measured viewport**, not arithmetic: the tree renders in a tool window beside the sidebar, which shows 25–55 lines of code depending on the monitor and the zoom, and the cap sits at the top of that range. For reference, a three-frame chain keeping a header plus a ~25-line member each lands at ~66 — **just over this cap, and it is the shape to trim**: in a chain every frame is an ancestor of the next, so all three are on screen at every step. **The remedy is to keep less per frame**, or to split the scene where the nesting lets you. **Counted as: every line inside every `keep` range of every frame in the scene** — blank lines and comment lines included, because they occupy rows on screen. In a heavily commented file the doc comment above a member can be a third of what that frame spends |
+| **Lines on screen** | **~60 per scene** | Nothing is clamped; it is a `[info]` on that scene. Every frame *of a scene* is on screen together, so this — not any single frame's size, and not the whole plan's total — is the budget that binds. **60 is a measured viewport**, not arithmetic: the tree renders in a tool window beside the sidebar, which shows 25–55 lines of code depending on the monitor and the zoom, and the cap sits at the top of that range. For reference, a three-frame chain keeping a header plus a ~25-line member each lands at ~66, just over this cap — the one shape it overstates, since at a nested step the ancestors fold to their headers and the call line. **The remedy is to keep less per frame**, or to split the scene where the nesting lets you. **Counted as: every line inside every `keep` range of every frame in the scene** — blank lines and comment lines included, because they occupy rows on screen. In a heavily commented file the doc comment above a member can be a third of what that frame spends |
 | **Frames per scene** | **the depth, sibling and line caps above** | There is no separate number. A scene is one tree, so the tree's caps *are* the scene's caps |
 | **Scenes per plan** | **no cap** | Each crossing rebuilds the tree, which is cheap and measured. Cross scenes because the subject moved, not to be tidy |
 
@@ -214,17 +218,22 @@ step does not narrate collapses to a one-row stub, and stepping into one re-expa
 no `keep` range is second-guessed. A frame holding the far end of a `relations` link counts as used, so a
 relation never comes out with one end drawn and the other inside a stub.
 
-**Which is why the budget is about depth, not breadth.** Siblings fold, so six of them cost the reader
-whichever one the step is in. A **nested chain does not**: keeping a child open keeps every ancestor open with
-it, so a root plus two levels is all three frames' `keep` on screen at once, at every step in any of them.
-That is the total this cap is really counting, and the fold cannot help you with it.
+**What a step folds.** Inside the frames that stay open, the step folds lines too — never what it narrates,
+never a call line or a link end, never the headers of the blocks those sit in. The frames *above* a nested
+step shrink to their headers and the call line. In the step's own frame, a long link's stretch folds (and,
+at the reader's choice, the members the step is not in, or everything else). A reader can open any fold.
+
+**So the budget still counts every kept line, but depth costs less than it did.** At a nested step its
+ancestors are a few rows each, not their whole `keep`; at a step in the root, untouched children are stubs.
+What fills the screen is the frame a step is in — so keep each frame to what its steps need, and do not
+trim a callee out of a chain only to save its parent's lines.
 
 **Do not budget against pixels.** Frame heights are the plugin's business entirely: a nested frame is sized
 to its focus range, a top-level one grows to its content, and the reader can drag any of them. The caps you
 can actually control are **depth and ranges**.
 
-**Fold state is never in the plan.** You say which lines to *keep*; what else is folded is not yours to
-state (the IDE's own daemon adds 13–25 fold regions per frame on its own).
+**Fold state is never in the plan.** You say which lines to *keep*; what else is folded, at which step, is
+not yours to state (the IDE's own daemon adds 13–25 fold regions per frame on its own).
 
 ## Scenes — the frames on screen together
 
@@ -261,8 +270,8 @@ would not be.
 **How many, and where the boundary falls.** Every cap in this file converges on the same shape, so use it as
 the target rather than deriving it each time: **a scene is about three frames** — a root plus two levels of
 nesting — **each keeping a header and a ~18-line member**, which lands near 57. A ~25-line member each puts
-that same chain at ~66, just over the cap: in a three-deep chain, what each frame keeps is spent three times
-over. A walkthrough over twelve files is
+that same chain at ~66, just over the cap — which counts all three, though at a nested step its ancestors fold
+to a few rows each. A walkthrough over twelve files is
 therefore **four scenes of three**, not one tree of twelve; the latter is over every budget here at once, with
 no remedy that does not cut content.
 
@@ -511,7 +520,8 @@ Guidance:
   it flatters. **Where they start matters as much as how many**: five links leaving *one* line make that line
   grow to hold five separate routes, where five links leaving five different lines cost nothing at all. Spread
   them if the code lets you.
-- **Keep both ends close** when you want an arrow — same screenful, ideally within 40 lines.
+- **Keep both ends close** when you want an arrow — one frame, ideally within 40 lines. Farther apart in one
+  frame is fine: from ~12 lines the plugin folds the stretch between for that step.
 - **`note` is 2–5 words**, plain text, no markdown. It is drawn beside the link while it is hovered, so a
   sentence gets ellipsised.
 - **Get the line numbers right.** Two lines joined by a link that don't actually relate is worse than no
