@@ -155,12 +155,12 @@ object ExplainerDiagnostics {
 
         DiagnosticCheck(
             "MCP servers", CheckOs.ANY,
-            "Nothing to fix — this row reports rather than judges. None of these tools can be called in a " +
-                "walkthrough run (the allow-list is `${ExplainPrompt.ALLOWED_TOOLS}`), and removing them with " +
-                "`--strict-mcp-config` was measured worth about 2.3s of startup, so they are not why a run is slow.",
+            "Nothing to fix — this row reports rather than judges. A walkthrough run passes `--strict-mcp-config`, " +
+                "so none of these servers starts for it: none of their tools is on the allow-list " +
+                "(`${ExplainPrompt.ALLOWED_TOOLS}`), and loading them cost about 2.3s of startup.",
         ) { ctx ->
             val n = countMcpServers(ctx.projectPath)
-            Outcome(CheckStatus.INFO, "$n configured; none is on the plugin's allow-list")
+            Outcome(CheckStatus.INFO, "$n configured; a walkthrough run loads none of them")
         },
 
         DiagnosticCheck(

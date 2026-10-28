@@ -59,6 +59,9 @@ object ExplainPrompt {
         // Bash is intentionally command-unrestricted so the POST works cross-platform (curl on any
         // OS, powershell on Windows, the .sh helper elsewhere) — tighten ALLOWED_TOOLS to narrow it.
         add("--allowedTools"); add(ALLOWED_TOOLS)
+        // **No MCP server loads** — none is on the allow-list, so each was startup spent on tools the run cannot
+        // call. Speed.md measured it at ~2.3s of startup (3.3-4.4s with the dev machine's servers, 1.2-1.4s without).
+        add("--strict-mcp-config")
         // **Two `if`s, and the argv is deliberately NOT what shipped.** Passing neither flag meant
         // every run inherited `~/.claude/settings.json`'s `effortLevel` — a value chosen for interactive
         // coding, and the four-minute walkthrough Speed.md measured. Blank still means inherit, for the

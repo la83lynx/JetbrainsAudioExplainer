@@ -418,6 +418,10 @@ public final class EffortProbe {
                 !bare.contains("--effort") && !bare.contains("--model"));
         check("  control: the always-present flags are still there",
                 bare.contains("-p") && bare.contains("--output-format") && bare.contains("--allowedTools"));
+        check("every run loads no MCP server: one `--strict-mcp-config`, and no `--mcp-config` to load one from",
+                bare.indexOf("--strict-mcp-config") >= 0
+                        && bare.indexOf("--strict-mcp-config") == bare.lastIndexOf("--strict-mcp-config")
+                        && !bare.contains("--mcp-config"));
         int effortOk = 0;
         for (String level : AudioExplainerSettings.Companion.getEFFORT_LEVELS()) {
             List<String> a = ExplainPrompt.INSTANCE.buildArgs("P", level, "");
