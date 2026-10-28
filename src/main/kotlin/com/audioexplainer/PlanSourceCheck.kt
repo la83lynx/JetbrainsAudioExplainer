@@ -94,8 +94,12 @@ object PlanSourceCheck {
             }
         }
 
+        // The relations as AUTHORED, not as resolved: the loader drops one with an end on an elided line, and a
+        // miscounted line is the usual reason an end is elided — so the token check is the explanation for
+        // exactly the relations the resolved frame no longer carries.
         for (f in plan.frames) {
-            for ((i, r) in f.frame.relations.withIndex()) {
+            val authored = plan.plan.frames.firstOrNull { it.id == f.id }?.relations ?: f.frame.relations
+            for ((i, r) in authored.withIndex()) {
                 for ((end, ep) in listOf("from" to r.from, "to" to r.to)) {
                     if (ep.line <= 0) continue
                     val where = "relation ${i + 1} of frame ${f.id}: its `$end`"

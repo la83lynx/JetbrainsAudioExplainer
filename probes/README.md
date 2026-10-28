@@ -117,8 +117,8 @@ Two notes that cost a few minutes each:
 POST is a `ping`, which is side-effect-free by design — `set_plan` would have replaced whatever walkthrough
 you have loaded — so unlike `encoding_probe.py` it is safe to run against a live sandbox.
 
-Expected: `179 pass / 0 fail` from `PlanProbe`, `18 pass / 0 fail` from `TokenProbe`,
-`57 pass / 0 fail` from `EffortProbe`,
+Expected: `209 pass / 0 fail` from `PlanProbe`, `18 pass / 0 fail` from `TokenProbe`,
+`88 pass / 0 fail` from `EffortProbe`,
 `217 pass / 0 fail` from `LinkBench`, and `44 pass / 0 fail` from `ClockProbe`.
 
 `LinkBench` also prints a count of ends the room check rejected, and it is **0** at the mock node widths it

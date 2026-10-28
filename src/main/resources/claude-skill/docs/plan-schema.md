@@ -533,7 +533,7 @@ relation can fail to be **drawn**:
 
 | Code | What it caught |
 |---|---|
-| `relation.endpoint-not-kept` | an end on a line the frame elided — it lands on a `⋯ N lines ⋯` placeholder and reads as a link into nothing |
+| `relation.endpoint-not-kept` | an end on a line the frame elided, often one only another scene keeps. It would land on a `⋯ N lines ⋯` placeholder, so the plugin drops the relation and says so at `[info]` — nothing to re-send for |
 | `relation.no-step` | no step's **first** range holds either end, so the relation is never on screen at all |
 | `relation.step-exceeded` | more relations on one step than there are routing lanes; the ones past the cap are not drawn |
 | `relation.endpoint-unnamed` | an end with neither a `line` nor a `symbol` — nowhere to draw it and nothing to call it |

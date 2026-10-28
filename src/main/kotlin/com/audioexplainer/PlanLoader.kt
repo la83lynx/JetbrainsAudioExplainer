@@ -314,10 +314,10 @@ object PlanLoader {
 
         // After the steps, because half of what it reports is about which step draws a relation — and against
         // `relinked`, because a frame re-rooted by `dropUnkeptCallSites` keeps its relations and its keep.
-        checkRelations(relinked, steps, issues)
-        countSoftCaps(relinked, steps, issues)
+        val drawable = checkRelations(relinked, steps, issues)
+        countSoftCaps(drawable, steps, issues)
 
-        val resolved = ResolvedPlan(plan, relinked, steps, issues)
+        val resolved = ResolvedPlan(plan, drawable, steps, issues)
         report(resolved)
         return resolved
     }
@@ -607,93 +607,116 @@ object PlanLoader {
      *
      * The band rule is [inStepBand] and the path rule is [sameFilePath], both shared with the renderer that
      * draws these — see [inStepBand] for why a validator must not carry its own copy.
+     *
+     * **An end on an elided line drops the relation** rather than drawing it into the placeholder, and says so
+     * at `info`. It was a `warn` the author was asked to fix, and an agent sending the plan through a tool call
+     * fixed it by re-sending the whole plan — ~20s for one arrow (`Speed.md` #3). A link into nothing is
+     * worse than no link, so the plugin takes the author's cheaper fix itself. Returns the frames with only
+     * the relations left that can be drawn.
      */
     private fun checkRelations(
         frames: List<ResolvedFrame>,
         steps: List<ResolvedStep>,
         issues: MutableList<PlanIssue>,
-    ) {
+    ): List<ResolvedFrame> {
         // Counted across every frame, matching `TreePlanView`'s cap rather than the renderer's: the renderer
         // caps one frame's relations and the tree caps the step's, and it is the step's the reader meets.
         val perStep = IntArray(steps.size)
-        for (f in frames) {
-            for ((i, r) in f.frame.relations.withIndex()) {
-                val where = "relation ${i + 1} of frame ${f.id}"
-                val kind = r.kind.trim()
-                if (kind.isNotEmpty() &&
-                    !kind.equals(Relation.KIND_FLOW, ignoreCase = true) &&
-                    !kind.equals(Relation.KIND_BACKFORTH, ignoreCase = true)
-                ) {
-                    issues += PlanIssue(
-                        IssueLevel.INFO, "relation.unknown-kind",
-                        "$where has kind \"$kind\", which is neither \"${Relation.KIND_FLOW}\" nor " +
-                            "\"${Relation.KIND_BACKFORTH}\", so it is drawn as ${Relation.KIND_FLOW}. " +
-                            "A ${Relation.KIND_BACKFORTH} relation draws an arrowhead at BOTH ends, which " +
-                            "is what a typo here costs",
-                    )
-                }
-                for ((end, ep) in listOf("from" to r.from, "to" to r.to)) {
-                    if (ep.line <= 0 && ep.symbol.isNullOrBlank()) {
-                        issues += PlanIssue(
-                            IssueLevel.WARN, "relation.endpoint-unnamed",
-                            "$where gives a `$end` with no line and no symbol: there is nowhere to draw that " +
-                                "end and nothing to call it, so the relation is dropped. Give it a line, or " +
-                                "a symbol if it names something off screen",
-                        )
-                        continue
-                    }
-                    if (ep.line <= 0) continue
-                    val owner = ownerOf(ep, f, frames) ?: continue
-                    if (owner.shows(ep.line)) continue
-                    // The likely cause, when there is one: the line IS kept, by a frame that is never on screen
-                    // with this one.
-                    val elsewhere = frames.firstOrNull {
-                        it.scene != f.scene && sameFilePath(owner.file, it.file) && it.shows(ep.line)
-                    }
-                    issues += PlanIssue(
-                        IssueLevel.WARN, "relation.endpoint-not-kept",
-                        "$where puts its `$end` on line ${ep.line} of frame ${owner.id}, which frame " +
-                            "${owner.id} does not keep; that end lands on a `⋯ N lines ⋯` placeholder and " +
-                            "reads as a link into nothing. " +
-                            (elsewhere?.let {
-                                "Frame ${it.id} keeps that line, but it is in scene ${it.scene}, and a link " +
-                                    "cannot reach another scene. Keep line ${ep.line} in frame ${owner.id}, " +
-                                    "or drop the relation"
-                            } ?: "Keep line ${ep.line}, or move the endpoint"),
-                    )
-                }
-                var drawn = false
-                for ((s, step) in steps.withIndex()) {
-                    val band = step.frames.firstOrNull { it.frame == f.id }?.ranges?.firstOrNull()?.lines()
-                        ?: continue
-                    if (!r.from.inStepBand(band.first, band.last, f.file) &&
-                        !r.to.inStepBand(band.first, band.last, f.file)
-                    ) {
-                        continue
-                    }
-                    drawn = true
-                    perStep[s]++
-                }
-                if (!drawn) {
-                    issues += PlanIssue(
-                        IssueLevel.INFO, "relation.no-step",
-                        "$where is never drawn: a relation shows only while a step whose FIRST range holds " +
-                            "one of its ends is active, and no step of frame ${f.id} does. Move an end onto " +
-                            "a step's opening range, or drop the relation",
-                    )
-                }
+        return frames.map { f -> checkFrameRelations(f, frames, steps, perStep, issues) }.also {
+            for ((s, n) in perStep.withIndex()) {
+                if (n <= LinkArt.SLOTS) continue
+                issues += PlanIssue(
+                    IssueLevel.WARN, "relation.step-exceeded",
+                    "step ${s + 1} carries $n relations, past the ${LinkArt.SLOTS} routing lanes a step has; " +
+                        "the ones past the ${LinkArt.SLOTS}th are not drawn at all. Spread them over more steps " +
+                        "— and note that links leaving one line cost that line room, where links leaving " +
+                        "different lines cost nothing",
+                )
             }
         }
-        for ((s, n) in perStep.withIndex()) {
-            if (n <= LinkArt.SLOTS) continue
-            issues += PlanIssue(
-                IssueLevel.WARN, "relation.step-exceeded",
-                "step ${s + 1} carries $n relations, past the ${LinkArt.SLOTS} routing lanes a step has; " +
-                    "the ones past the ${LinkArt.SLOTS}th are not drawn at all. Spread them over more steps " +
-                    "— and note that links leaving one line cost that line room, where links leaving " +
-                    "different lines cost nothing",
-            )
+    }
+
+    private fun checkFrameRelations(
+        f: ResolvedFrame,
+        frames: List<ResolvedFrame>,
+        steps: List<ResolvedStep>,
+        perStep: IntArray,
+        issues: MutableList<PlanIssue>,
+    ): ResolvedFrame {
+        val kept = mutableListOf<Relation>()
+        for ((i, r) in f.frame.relations.withIndex()) {
+            val where = "relation ${i + 1} of frame ${f.id}"
+            val kind = r.kind.trim()
+            if (kind.isNotEmpty() &&
+                !kind.equals(Relation.KIND_FLOW, ignoreCase = true) &&
+                !kind.equals(Relation.KIND_BACKFORTH, ignoreCase = true)
+            ) {
+                issues += PlanIssue(
+                    IssueLevel.INFO, "relation.unknown-kind",
+                    "$where has kind \"$kind\", which is neither \"${Relation.KIND_FLOW}\" nor " +
+                        "\"${Relation.KIND_BACKFORTH}\", so it is drawn as ${Relation.KIND_FLOW}. " +
+                        "A ${Relation.KIND_BACKFORTH} relation draws an arrowhead at BOTH ends, which " +
+                        "is what a typo here costs",
+                )
+            }
+            var unkept = false
+            for ((end, ep) in listOf("from" to r.from, "to" to r.to)) {
+                if (ep.line <= 0 && ep.symbol.isNullOrBlank()) {
+                    issues += PlanIssue(
+                        IssueLevel.WARN, "relation.endpoint-unnamed",
+                        "$where gives a `$end` with no line and no symbol: there is nowhere to draw that " +
+                            "end and nothing to call it, so the relation is dropped. Give it a line, or " +
+                            "a symbol if it names something off screen",
+                    )
+                    continue
+                }
+                if (ep.line <= 0) continue
+                val owner = ownerOf(ep, f, frames) ?: continue
+                if (owner.shows(ep.line)) continue
+                // The likely cause, when there is one: the line IS kept, by a frame that is never on screen
+                // with this one.
+                val elsewhere = frames.firstOrNull {
+                    it.scene != f.scene && sameFilePath(owner.file, it.file) && it.shows(ep.line)
+                }
+                issues += PlanIssue(
+                    IssueLevel.INFO, "relation.endpoint-not-kept",
+                    "$where puts its `$end` on line ${ep.line} of frame ${owner.id}, which frame " +
+                        "${owner.id} does not keep, so the relation is dropped: that end would land on a " +
+                        "`⋯ N lines ⋯` placeholder and read as a link into nothing. " +
+                        (elsewhere?.let {
+                            "Frame ${it.id} keeps that line, but it is in scene ${it.scene}, and a link " +
+                                "cannot reach another scene. "
+                        } ?: "") +
+                        "Nothing to re-send for; next time keep line ${ep.line} in frame ${owner.id} to have it",
+                )
+                unkept = true
+                break
+            }
+            if (unkept) continue
+            kept += r
+            var drawn = false
+            for ((s, step) in steps.withIndex()) {
+                val band = step.frames.firstOrNull { it.frame == f.id }?.ranges?.firstOrNull()?.lines()
+                    ?: continue
+                if (!r.from.inStepBand(band.first, band.last, f.file) &&
+                    !r.to.inStepBand(band.first, band.last, f.file)
+                ) {
+                    continue
+                }
+                drawn = true
+                perStep[s]++
+            }
+            if (!drawn) {
+                issues += PlanIssue(
+                    IssueLevel.INFO, "relation.no-step",
+                    "$where is never drawn: a relation shows only while a step whose FIRST range holds " +
+                        "one of its ends is active, and no step of frame ${f.id} does. Move an end onto " +
+                        "a step's opening range, or drop the relation",
+                )
+            }
         }
+        if (kept.size == f.frame.relations.size) return f
+        return ResolvedFrame(f.frame.copy(relations = kept), f.parentId, f.depth, f.keep, f.focus)
     }
 
     /**

@@ -1200,6 +1200,20 @@ public class BuildService
                 Collections.singletonList(step(0, ctx(10, 20)))));
         check("relation: an endpoint on a line the frame does not keep is reported",
                 has(relUnkept, "relation.endpoint-not-kept"));
+        // **Dropped by the plugin, at info** (`Speed.md` #3): as a warn, an agent re-sent the whole plan to fix
+        // one arrow. The renderer must not get the relation, and the report must not read as "fix and re-send".
+        check("relation: and it is dropped from the frame, reported at info rather than warn",
+                relUnkept.frame(0).getFrame().getRelations().isEmpty()
+                        && relUnkept.getIssues().stream().filter(i -> i.getCode().equals("relation.endpoint-not-kept"))
+                                .allMatch(i -> i.getLevel() == IssueLevel.INFO));
+        check("relation: a kept one survives on the resolved frame", relOk.frame(0).getFrame().getRelations().size() == 1);
+        // One relation, both ends elided: one issue, because the first end already drops it.
+        ResolvedPlan relBothUnkept = PlanLoader.INSTANCE.resolve(plan(
+                Collections.singletonList(
+                        relFrame(0, "A.cs", ctx(10, 40), rel(Relation.KIND_FLOW, at(80), at(90)))),
+                Collections.singletonList(step(0, ctx(10, 20)))));
+        check("relation: both ends elided is ONE issue, and no relation.no-step on top of it",
+                relBothUnkept.getIssues().stream().filter(i -> i.getCode().startsWith("relation.")).count() == 1);
 
         // **Two frames over ONE file** — a `.cs` holding two classes, which is the ordinary shape and the one
         // a path-only owner lookup got wrong. Frame 1's window is 20..40, so an endpoint naming that file at
