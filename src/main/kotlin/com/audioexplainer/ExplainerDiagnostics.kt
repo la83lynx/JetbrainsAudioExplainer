@@ -157,10 +157,12 @@ object ExplainerDiagnostics {
             "MCP servers", CheckOs.ANY,
             "Nothing to fix — this row reports rather than judges. A walkthrough run passes `--strict-mcp-config`, " +
                 "so none of these servers starts for it: none of their tools is on the allow-list " +
-                "(`${ExplainPrompt.ALLOWED_TOOLS}`), and loading them cost about 2.3s of startup.",
+                "(`${ExplainPrompt.TOOL_ALLOWED_TOOLS}`), and loading them cost about 2.3s of startup. The one " +
+                "server it does load is the plugin's own `set_plan` endpoint, named on its command line and " +
+                "registered nowhere.",
         ) { ctx ->
             val n = countMcpServers(ctx.projectPath)
-            Outcome(CheckStatus.INFO, "$n configured; a walkthrough run loads none of them")
+            Outcome(CheckStatus.INFO, "$n configured; a walkthrough run loads none of them, only its own")
         },
 
         DiagnosticCheck(

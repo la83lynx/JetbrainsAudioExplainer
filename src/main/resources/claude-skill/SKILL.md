@@ -9,7 +9,7 @@ Interactive code walkthrough. Scans the codebase for a feature, builds a plan of
 
 ## Plugin-triggered (headless) mode — READ FIRST
 
-If this run was launched by the **Audio Explainer IDE plugin** (a `claude -p` invocation whose prompt hands you a cursor-context JSON like `{"file":…, "caretLine":…, "selectionText":…}` and says it is a headless right-click "Explain This"), **do not run the interactive checklist below.** Instead read `docs/explain-at-cursor.md` and follow it exactly: you are fully autonomous (no `AskUserQuestion`, no waiting), you expand the symbol under the cursor yourself, generate a lean plan, POST `set_plan`, and stop. The rest of this file is for interactive sessions.
+If this run was launched by the **Audio Explainer IDE plugin** (a `claude -p` invocation whose prompt hands you a cursor-context JSON like `{"file":…, "caretLine":…, "selectionText":…}` and says it is a headless right-click "Explain This"), **do not run the interactive checklist below.** Instead read `docs/explain-at-cursor.md` and follow it exactly: you are fully autonomous (no `AskUserQuestion`, no waiting), you expand the symbol under the cursor yourself, generate a lean plan, send `set_plan`, and stop. The rest of this file is for interactive sessions.
 
 ## Models
 

@@ -124,6 +124,7 @@ class ExplainProgress(private val expected: RunShape, private val now: () -> Dou
     private var writeSteps = 0
     private var writes = 0
     private var writeBlock = -1
+    private var keys = WRITE_KEYS
     private var postPending = false
     private var activity = "Starting Claude…"
 
@@ -141,7 +142,7 @@ class ExplainProgress(private val expected: RunShape, private val now: () -> Dou
                 val input = block["input"] as? JsonObject
                 when {
                     // A stream without partial messages never showed the `Write` start: it begins and ends here.
-                    name == "Write" && writes == 0 -> {
+                    isPlan(name) && writes == 0 -> {
                         writes = 1
                         writeStarted = now(); writeEnded = writeStarted
                         barAtWriteStart = shown; barAtWriteEnd = shown
@@ -159,6 +160,8 @@ class ExplainProgress(private val expected: RunShape, private val now: () -> Dou
                         postPending = true
                         activity = "Sending the walkthrough…"
                     }
+                    // The tool's call is its send; its result is the reply, and the run's tail is all that is left.
+                    name == McpEndpoint.QUALIFIED_TOOL -> postPending = true
                 }
             }
             "user" -> if (obj.blocks().any { it.str("type") == "tool_result" }) {
@@ -182,10 +185,11 @@ class ExplainProgress(private val expected: RunShape, private val now: () -> Dou
                 val block = ev["content_block"] as? JsonObject ?: return
                 when (block.str("type")) {
                     "thinking" -> if (phase == Phase.PREPARING) { thinking = true; activity = thinkingLabel() }
-                    "tool_use" -> if (block.str("name") == "Write") {
+                    "tool_use" -> if (isPlan(block.str("name"))) {
                         writes++
                         if (writes == 1 && phase == Phase.PREPARING) {
                             writeBlock = ev["index"]?.jsonPrimitive?.intOrNull ?: -1
+                            keys = if (block.str("name") == "Write") WRITE_KEYS else TOOL_KEYS
                             writeStarted = now()
                             barAtWriteStart = shown
                             phase = Phase.WRITING
@@ -209,8 +213,8 @@ class ExplainProgress(private val expected: RunShape, private val now: () -> Dou
                 // the carry was counted last time.
                 val scan = writeCarry + part
                 val fresh = writeCarry.length
-                writeFrames += FRAME_KEY.findAll(scan).count { it.range.last >= fresh }
-                writeSteps += STEP_KEY.findAll(scan).count { it.range.last >= fresh }
+                writeFrames += keys.first.findAll(scan).count { it.range.last >= fresh }
+                writeSteps += keys.second.findAll(scan).count { it.range.last >= fresh }
                 writeCarry = scan.takeLast(CARRY)
                 activity = when {
                     writeSteps > 0 -> "Writing the walkthrough — step $writeSteps…"
@@ -324,6 +328,9 @@ class ExplainProgress(private val expected: RunShape, private val now: () -> Dou
         }
     }
 
+    /** The block that carries the plan: a `Write` of it, or the `set_plan` tool's call. */
+    private fun isPlan(name: String?) = name == "Write" || name == McpEndpoint.QUALIFIED_TOOL
+
     private fun JsonObject.str(key: String): String? = (this[key] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
 
     private fun JsonObject.blocks(): List<JsonObject> =
@@ -338,8 +345,12 @@ class ExplainProgress(private val expected: RunShape, private val now: () -> Dou
         const val GLIDE = 1.0
         private const val CAP = 0.995
         private const val SKILL_DOCS = "/skills/audio-explainer/"
-        private val FRAME_KEY = Regex(Regex.escape("\\\"keep\\\""))
-        private val STEP_KEY = Regex(Regex.escape("\\\"ttsText\\\""))
+        private val WRITE_KEYS = Regex(Regex.escape("\\\"keep\\\"")) to Regex(Regex.escape("\\\"ttsText\\\""))
+        /**
+         * The tool's input is the plan as plain JSON, so its keys arrive unescaped — and the same word quoted in
+         * the prose arrives *escaped*, which is what the look-behind leaves out.
+         */
+        private val TOOL_KEYS = Regex("""(?<!\\)"keep"""") to Regex("""(?<!\\)"ttsText"""")
         private const val CARRY = 10 // one less than the longest key above, `\"ttsText\"`
         private val POST = Regex("""explainer\.(ps1|sh)|/api/message""", RegexOption.IGNORE_CASE)
     }

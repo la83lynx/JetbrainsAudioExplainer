@@ -36,9 +36,13 @@ import java.util.concurrent.atomic.AtomicReference
  * Turns an [ExplainRequest] into an audio walkthrough by shelling out to a headless `claude -p`
  * (cwd = project root) with a prompt that carries the cursor context and triggers the bundled
  * `audio-explainer` skill's explain-at-cursor flow. Claude expands the symbol under the cursor,
- * builds a `set_plan`, and POSTs it to this plugin's loopback server ([ExplainerServer]) — which
- * drives the walkthrough, editor spotlight, and sidebar. The C# symbol is NOT resolved in-plugin
- * (decision 2); that's Claude's job.
+ * builds a `set_plan`, and sends it with the run's own `set_plan` MCP tool ([McpEndpoint]) to this
+ * plugin's loopback server ([ExplainerServer]) — which drives the walkthrough, editor spotlight, and
+ * sidebar. The C# symbol is NOT resolved in-plugin (decision 2); that's Claude's job.
+ *
+ * **When the tool does not connect, the run is started again the old way** — the agent `Write`s the plan
+ * and POSTs it with a helper script. The tool is ~12 s faster (`Speed.md` #3), but the POST is the path
+ * that needs nothing from the CLI's MCP support or the user's policy on it.
  *
  * Runs on the background thread of [ExplainThisAction]'s `Task.Backgroundable`, streaming Claude's
  * `stream-json` events into the progress indicator and honouring cancellation.
@@ -85,53 +89,95 @@ class ClaudeExplainer {
         val effort = request.effort ?: state.explainEffort
         val model = state.explainModel // no per-run model control — see Effort.md's dialog table
         val depth = request.depth ?: state.explainDepth
-        // The run's own directory for the JSON it POSTs (`Saving.md` B), so no payload lands in the project.
+        // The run's own directory (`Saving.md` B): the plans it sends are kept there, and the JSON it POSTs
+        // when it has to, so no payload lands in the project.
         val planDir = createPlanDir()
         // **Kept unless the run succeeds**: a failed run's payloads are the evidence of what it sent.
         var keepPlanDir = true
+        val server = service<ExplainerServerService>().server
+        val early = EarlyPlan(project, tracker)
+        var tool = planDir?.let { openTool(server, it, early) }
         try {
-            val prompt = ExplainPrompt.buildPrompt(
-                request, skillDir, resolveLanguage(), depth, request.extraInstructions, planDir,
-            )
-            val cmd = try {
-                GeneralCommandLine(claudeExe.toString())
-                    .withParameters(ExplainPrompt.buildArgs(prompt, effort, model, planDir))
-                    .withWorkDirectory(workDir)
-                    .withCharset(StandardCharsets.UTF_8)
-                    .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
-            } catch (e: Exception) {
-                log.warn("failed to build claude command line", e)
-                tracker.fail(e.message ?: "Failed to start Claude.")
-                notify(project, NotificationType.ERROR, "Explain This failed", errorHtml(e.message))
-                return
+            fun attempt(tool: ToolRoute?): RunResult? {
+                val prompt = ExplainPrompt.buildPrompt(
+                    request, skillDir, resolveLanguage(), depth, request.extraInstructions, planDir,
+                    viaTool = tool != null,
+                )
+                val cmd = try {
+                    GeneralCommandLine(claudeExe.toString())
+                        .withParameters(ExplainPrompt.buildArgs(prompt, effort, model, planDir, tool?.config))
+                        .withWorkDirectory(workDir)
+                        .withCharset(StandardCharsets.UTF_8)
+                        .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
+                } catch (e: Exception) {
+                    log.warn("failed to build claude command line", e)
+                    tracker.fail(e.message ?: "Failed to start Claude.")
+                    notify(project, NotificationType.ERROR, "Explain This failed", errorHtml(e.message))
+                    return null
+                }
+
+                log.info(
+                    "explain run started: ${request.displayName} (${request.scope.name.lowercase()}), " +
+                        "effort=${effort.ifBlank { "inherited" }}, depth=$depth, model=${model.ifBlank { "default" }}, " +
+                        "plan via ${if (tool != null) "the set_plan tool" else "POST"}",
+                )
+                indicator.text = "Claude is reading ${request.displayName} and planning the walkthrough…"
+                tracker.progress("Reading ${request.displayName} and planning…")
+                val timings = ExplainTimings.getInstance()
+                val progress = ExplainProgress(timings.expected(effort, depth, model))
+                val result = try {
+                    runClaude(cmd, indicator, progress, tracker::progress, early::offer, needsTool = tool != null)
+                } catch (e: Exception) {
+                    log.warn("claude invocation failed", e)
+                    tracker.fail(e.message ?: "Claude invocation failed.")
+                    notify(project, NotificationType.ERROR, "Explain This failed", errorHtml(e.message))
+                    return null
+                }
+                if (!result.cancelled && result.toolDown == null) {
+                    log.info("explain run shape ${ExplainTimings.key(effort, depth, model)}: ${progress.report()}")
+                    // Only a run that finished cleanly teaches the bar what this combination takes.
+                    if (!result.isError) progress.observed()?.let { timings.record(effort, depth, model, it) }
+                }
+                return result
             }
 
-            log.info(
-                "explain run started: ${request.displayName} (${request.scope.name.lowercase()}), " +
-                    "effort=${effort.ifBlank { "inherited" }}, depth=$depth, model=${model.ifBlank { "default" }}",
-            )
-            indicator.text = "Claude is reading ${request.displayName} and planning the walkthrough…"
-            tracker.progress("Reading ${request.displayName} and planning…")
-            val timings = ExplainTimings.getInstance()
-            val progress = ExplainProgress(timings.expected(effort, depth, model))
-            val early = EarlyPlan(project, tracker)
-            val result = try {
-                runClaude(cmd, indicator, progress, tracker::progress, early::offer)
-            } catch (e: Exception) {
-                log.warn("claude invocation failed", e)
-                tracker.fail(e.message ?: "Claude invocation failed.")
-                notify(project, NotificationType.ERROR, "Explain This failed", errorHtml(e.message))
-                return
+            var result = attempt(tool) ?: return
+            if (result.toolDown != null) {
+                log.info("explain run: the set_plan tool did not connect (${result.toolDown}); starting again with the POST")
+                tool?.close(server)
+                tool = null
+                result = attempt(null) ?: return
             }
-            if (!result.cancelled) {
-                log.info("explain run shape ${ExplainTimings.key(effort, depth, model)}: ${progress.report()}")
-                // Only a run that finished cleanly teaches the bar what this combination takes.
-                if (!result.isError) progress.observed()?.let { timings.record(effort, depth, model, it) }
-            }
-
             keepPlanDir = !reportResult(project, request, result, tracker, announced = early.loaded)
         } finally {
+            tool?.close(server)
             disposePlanDir(planDir, keepPlanDir)
+        }
+    }
+
+    /** A run's `set_plan` endpoint, and the `--mcp-config` file that points the CLI at it. */
+    private class ToolRoute(val run: McpRun, val config: Path) {
+        fun close(server: ExplainerServer) {
+            server.closeRun(run)
+            // The token is dead now, but a kept plan directory is evidence, and this file is not.
+            runCatching { Files.deleteIfExists(config) }
+        }
+    }
+
+    /**
+     * Open the run's endpoint and write its config into [planDir], or null — the run then POSTs, as every run did
+     * before the tool. Each plan the tool loads is offered to [early], so the reader hears "ready" as it lands.
+     */
+    private fun openTool(server: ExplainerServer, planDir: Path, early: EarlyPlan): ToolRoute? {
+        val run = server.openRun(planDir) { resolved, issues -> early.arrived(resolved, issues) }
+        return try {
+            val config = planDir.resolve("mcp.json")
+            Files.writeString(config, McpEndpoint.config(server.mcpUrl(run), run.token))
+            ToolRoute(run, config)
+        } catch (e: Exception) {
+            log.warn("could not write the run's MCP config; it will POST its plan", e)
+            server.closeRun(run)
+            null
         }
     }
 
@@ -178,12 +224,14 @@ class ClaudeExplainer {
 
     // ── Process execution ────────────────────────────────────────────────────
 
+    /** [toolDown] is why the run was stopped at its start: it needed the `set_plan` tool, and the tool did not connect. */
     private class RunResult(
         val exitCode: Int,
         val finalText: String?,
         val isError: Boolean,
         val cancelled: Boolean,
         val stderrTail: String,
+        val toolDown: String? = null,
     )
 
     private fun runClaude(
@@ -192,6 +240,7 @@ class ClaudeExplainer {
         progress: ExplainProgress,
         onActivity: (String, Double?) -> Unit,
         onPlanWritten: (String) -> Unit,
+        needsTool: Boolean,
     ): RunResult {
         val handler = OSProcessHandler(cmd)
         val lock = Any()
@@ -199,6 +248,7 @@ class ClaudeExplainer {
         val stderr = StringBuilder()
         val finalText = AtomicReference<String?>(null)
         val isError = AtomicBoolean(false)
+        val toolDown = AtomicReference<String?>(null)
         val timeline = RunTimeline()
 
         handler.addProcessListener(object : ProcessListener {
@@ -215,6 +265,7 @@ class ClaudeExplainer {
                         val line = lineBuf.substring(0, nl)
                         lineBuf.delete(0, nl + 1)
                         processStreamLine(line, finalText, isError, timeline, progress, onPlanWritten)
+                        if (needsTool && toolDown.get() == null) toolStatus(line)?.let(toolDown::set)
                         nl = lineBuf.indexOf("\n")
                     }
                 }
@@ -244,6 +295,13 @@ class ClaudeExplainer {
                 log.info("explain run cancelled at ${timeline.at()} after ${timeline.tools} tool call(s)")
                 return RunResult(-1, null, isError = false, cancelled = true, stderrTail = tail(synchronized(lock) { stderr.toString() }))
             }
+            // Stopped at its first event: a run asked to call a tool it does not have would only report that it
+            // has not, after reading the code and writing the plan.
+            toolDown.get()?.takeIf { it != CONNECTED }?.let { why ->
+                handler.destroyProcess()
+                handler.waitFor(2000)
+                return RunResult(-1, null, isError = true, cancelled = false, stderrTail = "", toolDown = why)
+            }
         }
 
         publish()
@@ -254,6 +312,7 @@ class ClaudeExplainer {
             isError = isError.get() || exit != 0,
             cancelled = false,
             stderrTail = tail(synchronized(lock) { stderr.toString() }),
+            toolDown = toolDown.get()?.takeIf { it != CONNECTED },
         )
     }
 
@@ -273,6 +332,23 @@ class ClaudeExplainer {
         var tools = 0
 
         fun at(): String = "%.1fs".format((System.nanoTime() - started) / 1e9)
+    }
+
+    /**
+     * From the run's `init` event, whether the `set_plan` server connected: [CONNECTED], or why not. Null for any
+     * other line. The CLI lists each server with a `status` — `connected`, `failed`, `needs-auth`, `pending` — and
+     * leaves out one a policy refused, so anything but `connected` is a run that cannot send its plan.
+     */
+    private fun toolStatus(line: String): String? {
+        if (!line.contains("\"init\"")) return null
+        val obj = runCatching { json.parseToJsonElement(line.trim()).jsonObject }.getOrNull() ?: return null
+        if (obj["type"]?.jsonPrimitive?.contentOrNull != "system" || obj["subtype"]?.jsonPrimitive?.contentOrNull != "init") return null
+        val servers = runCatching { obj["mcp_servers"]?.jsonArray }.getOrNull()
+        val ours = servers?.mapNotNull { runCatching { it.jsonObject }.getOrNull() }
+            ?.firstOrNull { it["name"]?.jsonPrimitive?.contentOrNull == McpEndpoint.SERVER_NAME }
+            ?: return "not listed in the run's MCP servers"
+        val status = ours["status"]?.jsonPrimitive?.contentOrNull
+        return if (status == "connected") CONNECTED else "status ${status ?: "unknown"}"
     }
 
     /** What a tool call acted on, short enough for one log line: its file, command or pattern. */
@@ -401,7 +477,10 @@ class ClaudeExplainer {
     }
 
     /**
-     * **The plan, loaded the moment the agent writes it** rather than when its POST lands.
+     * **The plan, announced the moment it exists** rather than when the run ends — from the `set_plan` tool as its
+     * call lands ([arrived]), or, on a run that POSTs, from the `Write` that holds it ([offer]).
+     *
+     * **Loaded the moment the agent writes it** rather than when its POST lands.
      *
      * The `Write` that holds the plan is in the stream as soon as it is generated, and the agent then spends
      * 10-15 s on a shell call to POST the same file and a closing summary — time the reader spent looking at a
@@ -428,11 +507,29 @@ class ClaudeExplainer {
                     return@executeOnPooledThread
                 }
                 log.info("explain run: plan loaded from its Write — ${resolved.frames.size} frame(s), ${resolved.steps.size} step(s)")
-                if (loaded) return@executeOnPooledThread
-                loaded = true
-                tracker.finish()
-                announceReady(project, service<ExplainerServerService>().server.walkthrough.getState())
+                announce()
             }
+        }
+
+        /**
+         * A plan the tool has loaded. It is already showing; what waits is only the "ready" — for a plan whose
+         * reply carries more than `[info]`, because the agent is about to send a fixed one.
+         */
+        fun arrived(resolved: ResolvedPlan, issues: List<PlanIssue>) {
+            if (resolved.isEmpty() || issues.any { it.level != IssueLevel.INFO }) {
+                log.info("explain run: the plan sent with the tool is not clean, so ready waits for the agent's fix or its end")
+                return
+            }
+            log.info("explain run: plan loaded from the set_plan tool — ${resolved.frames.size} frame(s), ${resolved.steps.size} step(s)")
+            announce()
+        }
+
+        @Synchronized
+        private fun announce() {
+            if (loaded) return
+            loaded = true
+            tracker.finish()
+            announceReady(project, service<ExplainerServerService>().server.walkthrough.getState())
         }
     }
 
@@ -482,6 +579,7 @@ class ClaudeExplainer {
     companion object {
         const val NOTIFICATION_GROUP = "Audio Explainer"
         private const val TOOL_WINDOW_ID = "Audio Explainer"
+        private const val CONNECTED = "connected"
 
         fun getInstance(): ClaudeExplainer = service()
     }

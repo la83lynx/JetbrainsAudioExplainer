@@ -127,7 +127,7 @@ ranges cover.
 
 ## Read the reply
 
-The POST returns `{"ok":true,"frames":N,"steps":N}` — and an `issues` array whenever something in the plan
+Sending a plan returns `{"ok":true,"frames":N,"steps":N}` — and an `issues` array whenever something in the plan
 was dropped, degraded or over a cap:
 
 ```json
@@ -138,7 +138,7 @@ was dropped, degraded or over a cap:
 
 **Read it.** `[error]` means something is *missing from the picture* — a frame the reader will not see, a
 step that will not be narrated — and it is nearly always a fixable authoring mistake: a path that does not
-resolve, a step naming a frame id that does not exist, a duplicate `id`. Fix and re-POST. `[warn]` means it
+resolve, a step naming a frame id that does not exist, a duplicate `id`. Fix it and send it again. `[warn]` means it
 renders differently from what you wrote. `[info]` is a soft cap or a value the plugin had to derive for you.
 
 ## `keep` — the lines a frame shows
@@ -377,7 +377,7 @@ which match when it repeats. There is one such mechanism in the plugin and this 
 - **One identifier, not a phrase.** `"maxRetries"`, not `"the maxRetries constant"`. A short expression is
   fine when that is genuinely the subject (`"?? 0"`), but prefer a name.
 - **A token that isn't on that line does not pulse**, and nothing else about the step changes. The reply
-  names it (`step.beat-token-not-on-line`) and quotes the line as it actually reads, so fix it and re-POST.
+  names it (`step.beat-token-not-on-line`) and quotes the line as it actually reads, so fix it and send it again.
 - **Only where a step has an obvious focal word.** A step about control flow as a whole has none — omit
   `beats` entirely.
 
@@ -587,11 +587,14 @@ gets translated; its `token` and `symbol` do not.
 
 ## Sending it
 
-Write the JSON to a temp file **outside the project**, then POST the file — never pass JSON inline on a
+A run the IDE plugin started headlessly sends it with the `mcp__audio-explainer__set_plan` tool, the plan as the tool's
+input — no file, no shell — whenever it has that tool.
+
+Otherwise, write the JSON to a temp file **outside the project**, then POST the file — never pass JSON inline on a
 command line, where shell quoting corrupts embedded quotes and newlines. A payload written inside the
 project can land among the user's saved walkthroughs. See `docs/explain-at-cursor.md` (headless) or
 `docs/walkthrough.md` (interactive) for the helper scripts and the exact call. Then read the reply's
 `issues` array, as above.
 
 To change a plan that is already loaded, send a **new `set_plan`**. There are no partial-update messages:
-you are holding the whole plan, and one POST is cheaper than keeping the plugin's copy and yours in step.
+you are holding the whole plan, and one send is cheaper than keeping the plugin's copy and yours in step.

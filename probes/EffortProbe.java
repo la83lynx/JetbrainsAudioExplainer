@@ -11,6 +11,7 @@ import com.audioexplainer.ExplainRequest;
 import com.audioexplainer.ExplainScope;
 import com.audioexplainer.Language;
 import com.audioexplainer.Languages;
+import com.audioexplainer.McpEndpoint;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -385,6 +386,88 @@ public final class EffortProbe {
                 whole3.getPhase() == ExplainProgress.Phase.CHECKING && whole3.observed() == null);
     }
 
+    /**
+     * **The `set_plan` tool's run** (`Speed.md` #3): the argv grants the tool and nothing that writes or runs, the
+     * prompt names the tool and never the POST, and the bar reads the tool's plain-JSON input as it read the
+     * `Write`'s escaped one. The POST run is every control — it is also the fallback, so it must not have moved.
+     */
+    static void toolRoute() {
+        Path config = Paths.get("/tmp/audio-explainer/plans/run-0/mcp.json");
+        List<String> tool = ExplainPrompt.INSTANCE.buildArgs("P", "medium", "", PLAN_DIR, config);
+        List<String> post = ExplainPrompt.INSTANCE.buildArgs("P", "medium", "", PLAN_DIR);
+        String allowed = tool.get(tool.indexOf("--allowedTools") + 1);
+        check("tool: the allow-list is the tool's — `" + allowed + "`",
+                allowed.equals(ExplainPrompt.TOOL_ALLOWED_TOOLS) && allowed.contains(McpEndpoint.QUALIFIED_TOOL));
+        check("  with nothing that writes or runs: no Write, no Bash, no PowerShell",
+                java.util.Collections.disjoint(Arrays.asList(allowed.split(" ")), List.of("Write", "Bash", "PowerShell")));
+        check("  control: the POST run's allow-list has all three, and not the tool",
+                Arrays.asList(post.get(post.indexOf("--allowedTools") + 1).split(" ")).containsAll(List.of("Write", "Bash", "PowerShell"))
+                        && !post.get(post.indexOf("--allowedTools") + 1).contains("mcp__"));
+        int at = tool.indexOf("--mcp-config");
+        check("tool: --mcp-config names the config file once, and a flag follows it (it takes a list)",
+                at >= 0 && at == tool.lastIndexOf("--mcp-config") && tool.get(at + 1).equals(config.toString())
+                        && tool.get(at + 2).startsWith("--"));
+        check("  and --strict-mcp-config still keeps the user's servers out", tool.contains("--strict-mcp-config"));
+        check("tool: the plan directory is not granted — the agent writes nothing", !tool.contains("--add-dir"));
+        check("  control: the POST run grants it, and names no config", post.contains("--add-dir") && !post.contains("--mcp-config"));
+
+        String cfg = McpEndpoint.INSTANCE.config("http://127.0.0.1:1234/mcp/abc", "t0k");
+        kotlinx.serialization.json.JsonObject server = kotlinx.serialization.json.JsonElementKt.getJsonObject(
+                ev(cfg).get("mcpServers")).get(McpEndpoint.SERVER_NAME) instanceof kotlinx.serialization.json.JsonObject o ? o : null;
+        check("tool: the config is one http server, under the name the tool's qualified name carries",
+                server != null && server.toString().contains("\"type\":\"http\"")
+                        && server.toString().contains("\"url\":\"http://127.0.0.1:1234/mcp/abc\"")
+                        && server.toString().contains("\"Authorization\":\"Bearer t0k\"")
+                        && McpEndpoint.QUALIFIED_TOOL.equals("mcp__" + McpEndpoint.SERVER_NAME + "__set_plan"));
+
+        String planPath = PLAN_DIR.toString().replace('\\', '/');
+        int named = 0, clean = 0, posts = 0;
+        List<Case> cases = goldenCases();
+        for (Case c : cases) {
+            String viaTool = ExplainPrompt.INSTANCE.buildPrompt(c.req, c.skill, c.lang, c.req.getDepth(),
+                    c.req.getExtraInstructions(), PLAN_DIR, true);
+            if (viaTool.split(java.util.regex.Pattern.quote(McpEndpoint.QUALIFIED_TOOL), -1).length == 2) named++;
+            if (!viaTool.contains("POST") && !viaTool.contains("explainer.ps1") && !viaTool.contains(planPath)) clean++;
+            if (prompt(c).contains("POST")) posts++;
+        }
+        check("tool: every golden case's tool prompt names the tool once (" + named + "/" + cases.size() + ")", named == cases.size());
+        check("  and never the POST, the helper scripts or the plan directory (" + clean + "/" + cases.size() + ")", clean == cases.size());
+        check("  control: every POST prompt does say POST (" + posts + "/" + cases.size() + ")", posts == cases.size());
+        String extra = ExplainPrompt.INSTANCE.buildPrompt(request(ExplainScope.CURSOR, false, null, AudioExplainerSettings.DEPTH_STANDARD,
+                "Use simple terms."), SKILL, Languages.INSTANCE.byCode("en"), AudioExplainerSettings.DEPTH_STANDARD,
+                "Use simple terms.", PLAN_DIR, true);
+        check("tool: the free text's fence holds the tool call fixed, not the POST",
+                extra.contains("the line-range rules and the `set_plan` call are fixed") && extra.endsWith("Use simple terms.\n"));
+
+        // ── the bar, on the tool's input: plain JSON, so its keys arrive unescaped ──
+        String plan = "{\"title\":\"t\",\"frames\":[{\"keep\":[]},{\"keep\":[]}],\"steps\":[{\"ttsText\":\"a\"},"
+                + "{\"ttsText\":\"b\"},{\"ttsText\":\"say \\\"keep\\\" and \\\"ttsText\\\"\"}]}";
+        double[] clock = {0};
+        ExplainProgress p = new ExplainProgress(new RunShape(30, plan.length(), plan.length() / 10.0, 1), () -> clock[0]);
+        p.onEvent(ev(MESSAGE_START));
+        clock[0] = 30;
+        p.onEvent(ev(blockStart(1, McpEndpoint.QUALIFIED_TOOL)));
+        check("tool: the tool's call starting is the plan being written",
+                p.getPhase() == ExplainProgress.Phase.WRITING && "Writing the walkthrough…".equals(p.activity()));
+        boolean sawFrame2 = false;
+        int parts = (plan.length() + 2) / 3;
+        for (int i = 0, k = 0; i < plan.length(); i += 3, k++) {
+            clock[0] = 30 + 10.0 * (k + 1) / parts;
+            p.onEvent(ev(delta(plan.substring(i, Math.min(plan.length(), i + 3)))));
+            sawFrame2 |= p.activity().endsWith("frame 2…");
+        }
+        check("tool: 2 frames, then 3 steps — the prose's quoted \"keep\" and \"ttsText\" ignored",
+                sawFrame2 && "Writing the walkthrough — step 3…".equals(p.activity()));
+        p.onEvent(ev("{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_stop\",\"index\":1}}"));
+        p.onEvent(ev(toolUse(McpEndpoint.QUALIFIED_TOOL, plan)));
+        check("tool: its end is checking", p.getPhase() == ExplainProgress.Phase.CHECKING && "Checking the walkthrough…".equals(p.activity()));
+        p.onEvent(ev(TOOL_RESULT));
+        check("  and its result is finishing", "Finishing…".equals(p.activity()));
+        RunShape observed = p.observed();
+        check("tool: the run's shape is the tool's input — " + plan.length() + " chars in 10 s",
+                observed != null && observed.getWriteChars() == plan.length() && Math.abs(observed.getPreSeconds() - 30) < 1e-9);
+    }
+
     public static void main(String[] args) throws Exception {
         if (args.length > 0 && args[0].equals("--freeze")) { freeze(); return; }
 
@@ -629,6 +712,7 @@ public final class EffortProbe {
         System.out.println("      (verdicts on this machine, reported not asserted: " + verdicts(results) + ")");
 
         progress();
+        toolRoute();
 
         System.out.println();
         System.out.println(pass + " pass / " + fail + " fail");

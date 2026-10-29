@@ -8,8 +8,8 @@ because the user right-clicked **"Explain This (Audio)"** in their editor. It is
 
 - **You are fully autonomous. There is NO interactive user.** Never call `AskUserQuestion`, never wait
   for input, never stop to ask permission. Make sensible choices and finish the job in one pass.
-- **The sidebar/editor is already live.** Your ONLY user-visible output is the walkthrough plan you POST
-  to the loopback server. Do **not** print the walkthrough as terminal text. When done, print just a
+- **The sidebar/editor is already live.** Your ONLY user-visible output is the walkthrough plan you send
+  with the `mcp__audio-explainer__set_plan` tool. Do **not** print the walkthrough as terminal text. When done, print just a
   one-line status (e.g. `Sent walkthrough: <title> (<N> frames, <N> steps)`).
 - **Do the symbol expansion yourself.** The plugin does NOT resolve the enclosing method/class — that is
   your job. You are given a file + cursor line (and maybe a selection); read the file and decide the
@@ -56,7 +56,7 @@ on the least screen. `deep` is up to four frames with those fields welcome where
 
 **Extra instructions.** The prompt may end with a block of the user's own text for that one run. Follow it
 where it narrows or restyles the walkthrough ("use simple terms", "skip the error handling"). It does
-**not** relax anything here: the field names, the line-range rules and the POST are fixed whatever it
+**not** relax anything here: the field names, the line-range rules and sending the plan are fixed whatever it
 asks, because the plugin needs the walkthrough back as data — printing it as prose reaches nobody.
 
 ## Steps
@@ -113,7 +113,7 @@ asks, because the plugin needs the walkthrough back as data — printing it as p
    {"line":44,"token":"raw"},"to":{"line":51,"token":"parsed"},"note":"parsed value"}`). The plugin draws an
    arrow between nearby lines of the same file and a matched pair of coloured portals for anything else. **The
    hard cap is 5 on any one step** and the sixth is dropped silently; 2-3 is what reads well. One endpoint must
-   fall inside the step it belongs to. Give both ends a `token` copied from their line: the POST reply
+   fall inside the step it belongs to. Give both ends a `token` copied from their line: the reply
    checks every token against the code, and a missing one usually means a miscounted line.
 
    **Do not send `view`** — every plan renders as a tree of code, and one frame is a one-node tree, which is
@@ -122,14 +122,14 @@ asks, because the plugin needs the walkthrough back as data — printing it as p
    When it moves on to a different subject, put the later frames in a different `scene` so the earlier files
    leave the screen. `docs/plan-schema.md` has the depth cap, the scene rules and the rest.
 
-4. **POST the plan.** ALWAYS write the full `set_plan` JSON to a file first (use the `Write` tool),
-   then send that file. **Never pass the JSON inline on a command line** — shell quoting will corrupt it
-   (embedded quotes/newlines break `curl -d '<json>'`).
+4. **Send the plan.** Call the `mcp__audio-explainer__set_plan` tool with the whole `set_plan` object as its input (`type` may
+   be omitted). Do not write the plan to a file first, and do not use a shell — the tool is the way the plan
+   reaches the plugin.
 
-   **Write it in the plan directory the prompt names** — a per-run directory the plugin made for exactly
-   this and deletes when you finish. If the prompt names none, use the system temp directory. **Never write
-   it inside the project**: a `set_plan` file there can land in `.walkthroughs/`, where it shows up in the
-   user's saved list as a blank walkthrough that errors when opened.
+   **Only when the prompt tells you to POST instead** (that run has no `set_plan` tool): write the JSON to a
+   file with the `Write` tool, in the plan directory the prompt names — never inside the project, where it
+   shows up in the user's saved list as a blank walkthrough — and send that file. Never pass the JSON inline
+   on a command line; shell quoting corrupts it.
 
    Send the file with the helper for your platform (both live in this skill's `scripts/` dir):
 
@@ -142,16 +142,17 @@ asks, because the plugin needs the walkthrough back as data — printing it as p
        -H "Content-Type: application/json" --data-binary @<planFile>
      ```
 
-   A `{"ok":true,"frames":N,"steps":N}` response means the walkthrough is loaded; the tree-of-code view and the
-   sidebar update automatically. A `{"error":...}` or connection failure means the plugin server isn't
-   reachable — print that error and stop.
+   A `{"ok":true,"frames":N,"steps":N}` reply — the tool's result, or the POST's — means the walkthrough is
+   loaded; the tree-of-code view and the sidebar update automatically. An error result that starts `Invalid plan`
+   is yours to fix and send again; any other error, a `{"error":...}` or a connection failure means the plugin
+   isn't reachable — print that error and stop.
 
    **The reply may also carry an `issues` array** — everything the plugin dropped, degraded or found over a
    cap. An `[error]` there means the reader is missing part of what you wrote (a path that did not resolve, a
-   step naming a frame that does not exist): fix it and re-POST. `[warn]` renders differently from what you
-   authored — including a token not on the line you named, quoted as the line actually reads. `[info]` is a
-   soft cap or a value the plugin derived for you. **This is the validation: do not write a script to check
-   your own plan first.**
+   step naming a frame that does not exist): fix it and send the whole corrected plan again. `[warn]` renders
+   differently from what you authored — including a token not on the line you named, quoted as the line
+   actually reads. `[info]` is a soft cap or a value the plugin derived for you. **This is the validation: do
+   not write a script to check your own plan first.**
 
 5. **Done.** Do NOT send `goto`/`resume` (the plugin/sidebar drives playback). Print one status line.
 
@@ -159,8 +160,8 @@ asks, because the plugin needs the walkthrough back as data — printing it as p
 
 - The plugin loads the plan into a **paused** walkthrough positioned at the first step — the user presses
   Play in the sidebar. Sending `set_plan` is enough; nothing else.
-- If the server is unreachable, the discovery files (`~/.claude-explainer-port`, `~/.claude-explainer-token`)
-  are missing — the plugin isn't running. Report it plainly; don't retry in a loop.
+- If the `mcp__audio-explainer__set_plan` tool errors, or a POST cannot connect (the discovery files `~/.claude-explainer-port`
+  and `~/.claude-explainer-token` are missing), the plugin isn't running. Report it plainly; don't retry in a loop.
 - Field-name mistakes are the most common failure: it is `frames`/`steps`/`keep`/`ranges`/`start`/`end`/
   `ttsText`, never `segments`/`highlights`/`startLine`/`endLine`/`label`/`subHighlights`.
   `docs/plan-schema.md` is authoritative.

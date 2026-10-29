@@ -34,6 +34,23 @@ import java.util.concurrent.TimeUnit
 data class SavedWalkthrough(val name: String, val filePath: String)
 
 /**
+ * **One headless run's own way in**: `/mcp/<id>`, answered only to its own [token] and only until
+ * [ExplainerServer.closeRun]. The run is never handed the server's token, so nothing it is given outlives it.
+ *
+ * [planDir] keeps each plan the tool receives, as the POST's payload file used to be kept — the evidence when a
+ * run fails. [onPlan] is told about every plan that loads, with its issues, so the run can say it is ready
+ * without waiting for the agent to finish.
+ */
+class McpRun internal constructor(
+    val id: String,
+    val token: String,
+    internal val planDir: Path?,
+    internal val onPlan: (ResolvedPlan, List<PlanIssue>) -> Unit,
+) {
+    internal val calls = java.util.concurrent.atomic.AtomicInteger()
+}
+
+/**
  * Loopback HTTP server, port + auth token published to `~/.claude-explainer-{port,token}` for discovery.
  * It began as a byte-for-byte port of code-explainer's `vscode-extension/src/server.ts`; the `set_plan`
  * body is the `frames` + `steps` schema since Phase 2 and the three segment-surgery messages are retired
@@ -47,6 +64,7 @@ data class SavedWalkthrough(val name: String, val filePath: String)
  *   POST /api/save          -> {"ok":true,"filePath":...}
  *   GET  /api/walkthroughs  -> {"walkthroughs":[{name,title,filePath}]}
  *   POST /api/load          -> {"ok":true,"title":...,"frames":N,"steps":N}
+ *   POST /mcp/<run>         -> MCP JSON-RPC, one `set_plan` tool ([McpEndpoint]); the run's own token, not this one
  *
  * **`issues` on a `set_plan` reply is the one channel that reaches the agent that authored the plan.** A
  * frame dropped, a cycle cut, a step lighting a line its frame elides — all of it comes back on the POST,
@@ -63,6 +81,9 @@ class ExplainerServer {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
     private val token: String = generateToken()
+
+    /** The headless runs with an MCP endpoint open, by the id in their path. */
+    private val runs = java.util.concurrent.ConcurrentHashMap<String, McpRun>()
 
     /** Pending user actions for the `/api/actions` long-poll (FIFO; produced by the sidebar in Phase 4). */
     private val actions = LinkedBlockingDeque<UserAction>()
@@ -122,6 +143,21 @@ class ExplainerServer {
         storage = WalkthroughStorage(root)
         workspaceRoot = root.toString()
     }
+
+    /** Open a headless run's `set_plan` endpoint; see [McpRun]. Close it with [closeRun] when the process exits. */
+    fun openRun(planDir: Path?, onPlan: (ResolvedPlan, List<PlanIssue>) -> Unit): McpRun {
+        val run = McpRun(generateToken().take(16), generateToken(), planDir, onPlan)
+        runs[run.id] = run
+        return run
+    }
+
+    /** Revoke [run]'s endpoint and token. */
+    fun closeRun(run: McpRun) {
+        runs.remove(run.id)
+    }
+
+    /** Where [run]'s endpoint answers. */
+    fun mcpUrl(run: McpRun): String = "http://127.0.0.1:$port$MCP_PREFIX${run.id}"
 
     /** Queue a user action for the agent's next `/api/actions` long-poll (Phase 4 sidebar). */
     fun enqueueAction(action: UserAction) {
@@ -197,6 +233,11 @@ class ExplainerServer {
 
         if (method == "OPTIONS") {
             sendEmpty(ex, 204)
+            return
+        }
+        // Before the server's own auth: a run's endpoint takes the run's token, and only that.
+        if (path.startsWith(MCP_PREFIX)) {
+            handleMcp(ex, runs[path.removePrefix(MCP_PREFIX)])
             return
         }
         if (!authorized(ex)) {
@@ -279,21 +320,64 @@ class ExplainerServer {
             log.warn("agent message dispatch failed", e)
             sendJson(ex, 400, error("Invalid message format")); return
         }
-        sendJson(ex, 200, buildJsonObject {
-            put("ok", true)
-            // Everything wrong with the plan, back to the only reader who can fix it — the agent that just
-            // wrote it. §1b's second requirement: a plan that renders three of its four frames has to say
-            // so, or the fourth reads as a renderer defect. Absent when the plan was clean, so a
-            // well-formed plan's reply is byte-identical to what it always was.
-            if (resolved != null) {
-                put("frames", resolved.frames.size)
-                put("steps", resolved.steps.size)
-                val issues = replyIssues(resolved)
-                if (issues.isNotEmpty()) {
-                    putJsonArray("issues") { issues.forEach { add(it.toString()) } }
-                }
-            }
-        })
+        sendJson(ex, 200, resolved?.let { planReply(it, replyIssues(it)) } ?: buildJsonObject { put("ok", true) })
+    }
+
+    /**
+     * The reply to a plan, POSTed or sent with the tool: everything wrong with it, back to the only reader who can
+     * fix it — the agent that just wrote it. §1b's second requirement: a plan that renders three of its four
+     * frames has to say so, or the fourth reads as a renderer defect. `issues` is absent when the plan was clean,
+     * so a well-formed plan's reply is byte-identical to what it always was.
+     */
+    private fun planReply(resolved: ResolvedPlan, issues: List<PlanIssue>): JsonObject = buildJsonObject {
+        put("ok", true)
+        put("frames", resolved.frames.size)
+        put("steps", resolved.steps.size)
+        if (issues.isNotEmpty()) {
+            putJsonArray("issues") { issues.forEach { add(it.toString()) } }
+        }
+    }
+
+    private fun handleMcp(ex: HttpExchange, run: McpRun?) {
+        if (run == null) {
+            sendJson(ex, 404, error("Not found")); return
+        }
+        if (ex.requestHeaders.getFirst("Authorization") != "Bearer ${run.token}") {
+            sendJson(ex, 401, error("Unauthorized")); return
+        }
+        val body = readBody(ex) ?: return
+        val response = McpEndpoint.handle(ex.requestMethod, body) { plan -> runPlan(run, plan) }
+        if (response.body == null) {
+            sendEmpty(ex, response.status); return
+        }
+        val bytes = response.body.toByteArray(StandardCharsets.UTF_8)
+        ex.responseHeaders.set("Content-Type", "application/json; charset=utf-8")
+        ex.sendResponseHeaders(response.status, bytes.size.toLong())
+        ex.responseBody.use { it.write(bytes) }
+    }
+
+    /**
+     * A plan sent with [run]'s tool: the same validation and the same reply a POST gets. A plan that does not
+     * decode is an error *result* rather than an HTTP error, so the agent reads why and can send it again.
+     */
+    private fun runPlan(run: McpRun, obj: JsonObject): McpEndpoint.ToolResult {
+        run.planDir?.let { dir ->
+            runCatching { Files.writeString(dir.resolve("plan-${run.calls.incrementAndGet()}.json"), obj.toString()) }
+                .onFailure { log.info("could not keep the run's plan in $dir", it) }
+        }
+        if (!validateAgentMessage(obj)) {
+            return McpEndpoint.ToolResult("Invalid plan: it needs a string `title` and a `frames` array", isError = true)
+        }
+        val resolved = try {
+            walkthrough.setPlanUnlessShowing(json.decodeFromJsonElement<Plan>(obj))
+        } catch (e: Exception) {
+            log.warn("set_plan tool: the plan did not decode", e)
+            val why = (e.message ?: e.javaClass.simpleName).lineSequence().first().take(300)
+            return McpEndpoint.ToolResult("Invalid plan: $why", isError = true)
+        }
+        val issues = replyIssues(resolved)
+        runCatching { run.onPlan(resolved, issues) }.onFailure { log.warn("set_plan tool: the run's listener failed", it) }
+        return McpEndpoint.ToolResult(planReply(resolved, issues).toString(), isError = false)
     }
 
     /**
@@ -562,6 +646,7 @@ class ExplainerServer {
         private const val MIN_LONG_POLL_TIMEOUT_MS = 1_000L
         private const val PORT_FILE = ".claude-explainer-port"
         private const val TOKEN_FILE = ".claude-explainer-token"
+        private const val MCP_PREFIX = "/mcp/"
 
         private val VALID_AGENT_MESSAGE_TYPES = setOf("set_plan", "goto", "resume", "stop", "ping")
 

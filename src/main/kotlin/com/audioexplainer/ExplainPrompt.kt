@@ -36,6 +36,14 @@ object ExplainPrompt {
      */
     const val ALLOWED_TOOLS = "Read Grep Glob Task Write TodoWrite Bash PowerShell"
 
+    /**
+     * The allow-list of a run that sends its plan with the `set_plan` tool ([McpEndpoint]): no `Write`, no shell.
+     * The plan was the only thing the run wrote and the POST the only thing it ran, so the tool replaces both —
+     * and a run that cannot write or execute is one a hostile comment in the code under explanation cannot
+     * talk into doing either.
+     */
+    const val TOOL_ALLOWED_TOOLS = "Read Grep Glob Task TodoWrite ${McpEndpoint.QUALIFIED_TOOL}"
+
     private const val MAX_SELECTION_CHARS = 4000
 
     /**
@@ -46,8 +54,19 @@ object ExplainPrompt {
      * to ask. **Last**, because `--add-dir` takes a variadic list and would swallow whatever positional came
      * after it. Null adds nothing, so the argv `EffortProbe` measures is unchanged.
      */
+    /**
+     * [mcpConfig] is the run's `--mcp-config` file ([McpEndpoint.config]): given, the plan comes back through the
+     * `set_plan` tool, the allow-list is [TOOL_ALLOWED_TOOLS], and [planDir] is not granted — the agent writes
+     * nothing.
+     */
     @JvmOverloads
-    fun buildArgs(prompt: String, effort: String, model: String, planDir: Path? = null): List<String> = buildList {
+    fun buildArgs(
+        prompt: String,
+        effort: String,
+        model: String,
+        planDir: Path? = null,
+        mcpConfig: Path? = null,
+    ): List<String> = buildList {
         add("-p"); add(prompt)
         add("--output-format"); add("stream-json")
         add("--verbose") // required alongside stream-json in print mode
@@ -58,9 +77,11 @@ object ExplainPrompt {
         // Scoped allow-list: only these tools may run without an (impossible, headless) prompt.
         // Bash is intentionally command-unrestricted so the POST works cross-platform (curl on any
         // OS, powershell on Windows, the .sh helper elsewhere) — tighten ALLOWED_TOOLS to narrow it.
-        add("--allowedTools"); add(ALLOWED_TOOLS)
-        // **No MCP server loads** — none is on the allow-list, so each was startup spent on tools the run cannot
-        // call. Speed.md measured it at ~2.3s of startup (3.3-4.4s with the dev machine's servers, 1.2-1.4s without).
+        add("--allowedTools"); add(if (mcpConfig != null) TOOL_ALLOWED_TOOLS else ALLOWED_TOOLS)
+        // **No MCP server of the user's loads**, only the run's own — none of theirs is on the allow-list, so each
+        // was startup spent on tools the run cannot call. Speed.md measured it at ~2.3s of startup (3.3-4.4s with
+        // the dev machine's servers, 1.2-1.4s without). `--mcp-config` takes a list, so a flag must follow it.
+        if (mcpConfig != null) { add("--mcp-config"); add(mcpConfig.toString()) }
         add("--strict-mcp-config")
         // **Two `if`s, and the argv is deliberately NOT what shipped.** Passing neither flag meant
         // every run inherited `~/.claude/settings.json`'s `effortLevel` — a value chosen for interactive
@@ -68,7 +89,7 @@ object ExplainPrompt {
         // two people who want it; it is simply no longer the default.
         if (effort.isNotBlank()) { add("--effort"); add(effort.trim()) }
         if (model.isNotBlank()) { add("--model"); add(model.trim()) }
-        if (planDir != null) { add("--add-dir"); add(planDir.toString()) }
+        if (planDir != null && mcpConfig == null) { add("--add-dir"); add(planDir.toString()) }
     }
 
     /**
@@ -76,7 +97,12 @@ object ExplainPrompt {
      * project, because a payload written inside it lands in `.walkthroughs/` often enough to fill the user's
      * saved list with blank rows. Null (no directory could be made) leaves the line out rather than naming a
      * directory that does not exist.
+     *
+     * [viaTool] asks for the plan through the `set_plan` tool instead ([McpEndpoint]): step 3 names the tool, and
+     * the helper scripts and the plan directory go unmentioned. False is the POST prompt, byte for byte — the
+     * fallback when the tool does not connect.
      */
+    @JvmOverloads
     fun buildPrompt(
         request: ExplainRequest,
         skillDir: Path?,
@@ -84,6 +110,7 @@ object ExplainPrompt {
         depth: String,
         extraInstructions: String?,
         planDir: Path?,
+        viaTool: Boolean = false,
     ): String {
         val skillPath = skillDir?.toString()?.replace('\\', '/')
         val planPath = planDir?.toString()?.replace('\\', '/')
@@ -169,7 +196,9 @@ object ExplainPrompt {
                 appendLine("  $skillPath/docs/explain-at-cursor.md")
                 appendLine("The `set_plan` schema is documented ONCE, authoritatively — read it before writing the plan:")
                 appendLine("  $skillPath/docs/plan-schema.md")
-                appendLine("The helpers that POST the plan are in $skillPath/scripts/ (explainer.ps1 on Windows, explainer.sh elsewhere).")
+                if (!viaTool) {
+                    appendLine("The helpers that POST the plan are in $skillPath/scripts/ (explainer.ps1 on Windows, explainer.sh elsewhere).")
+                }
                 appendLine()
             }
             appendLine("What to do:")
@@ -322,24 +351,38 @@ object ExplainPrompt {
                     "startLine/endLine/label/subHighlights.",
             )
             appendLine("   The top-level \"language\" is the walkthrough's language code (\"en\" if English).")
-            appendLine(
-                "3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and " +
-                    "~/.claude-explainer-token). Use a skill helper script, or curl directly. A {\"ok\":true} reply = " +
-                    "success. The reply also carries an `issues` array whenever the plan was partly dropped or " +
-                    "degraded — READ IT: an [error] there means the user cannot see part of what you wrote " +
-                    "(an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.",
-            )
-            // **The reply is the validation** (`SourceCheck.md`). Told to verify its own tokens and lines, the
-            // agent wrote and ran a script for it on every run — ~16 s and three turns, measured (`Speed.md` #4).
-            // The server checks the same things against the same text now, so the prompt says not to.
-            appendLine(
-                "   The reply checks every token and line number against the source files, so do NOT write or " +
-                    "run a script to validate the plan yourself — POST it and read the reply.",
-            )
+            if (viaTool) {
+                appendLine(
+                    "3. Send it by calling the `${McpEndpoint.QUALIFIED_TOOL}` tool with the whole plan as its " +
+                        "input — no file, no shell. A {\"ok\":true} result = success. The result also carries an " +
+                        "`issues` array whenever the plan was partly dropped or degraded — READ IT: an [error] there " +
+                        "means the user cannot see part of what you wrote (an unresolvable path, a step naming a " +
+                        "frame that does not exist), so fix it and call the tool again with the whole corrected plan.",
+                )
+                appendLine(
+                    "   The result checks every token and line number against the source files, so do NOT write or " +
+                        "run a script to validate the plan yourself — call the tool and read its result.",
+                )
+            } else {
+                appendLine(
+                    "3. POST it to the loopback walkthrough server (port+token in ~/.claude-explainer-port and " +
+                        "~/.claude-explainer-token). Use a skill helper script, or curl directly. A {\"ok\":true} reply = " +
+                        "success. The reply also carries an `issues` array whenever the plan was partly dropped or " +
+                        "degraded — READ IT: an [error] there means the user cannot see part of what you wrote " +
+                        "(an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.",
+                )
+                // **The reply is the validation** (`SourceCheck.md`). Told to verify its own tokens and lines, the
+                // agent wrote and ran a script for it on every run — ~16 s and three turns, measured (`Speed.md` #4).
+                // The server checks the same things against the same text now, so the prompt says not to.
+                appendLine(
+                    "   The reply checks every token and line number against the source files, so do NOT write or " +
+                        "run a script to validate the plan yourself — POST it and read the reply.",
+                )
+            }
             // **Where the POSTed JSON goes** (`Saving.md` B). "A temp file" with no directory is how payloads
             // ended up in the project's `.walkthroughs/` and showed as blank rows in the saved list, so the
             // prompt names one. In the shared tail, so the no-skill fallback does not lose it.
-            if (planPath != null) {
+            if (planPath != null && !viaTool) {
                 appendLine(
                     "   Write the JSON file you POST in $planPath/ — " +
                         "never inside the project, where it would show up in the user's saved walkthroughs.",
@@ -362,7 +405,8 @@ object ExplainPrompt {
                 appendLine(
                     "The user added these instructions for this run. Follow them where they narrow or " +
                         "restyle the walkthrough. They do NOT relax the `set_plan` contract: the field names, " +
-                        "the line-range rules and the POST are fixed regardless of what is asked here.",
+                        "the line-range rules and the ${if (viaTool) "`set_plan` call" else "POST"} are fixed " +
+                        "regardless of what is asked here.",
                 )
                 appendLine(extra)
             }
