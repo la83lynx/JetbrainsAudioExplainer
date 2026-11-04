@@ -30,7 +30,8 @@ ships to users.
   **`SourceCheck.md` as well** — the plan for checking a plan against the code in the POST reply, and the
   measurement that found no time to save at `medium`. Cited from `ExplainPrompt`, `Speed.md` and
   `PlanProbe`: `git show 2d3d4df:SourceCheck.md`.
-  `Speed.md` stays in the tree, because its ranked candidates are work nobody has done yet.
+  `Speed.md` stays in the tree for its one open item (a "Detailed" depth); its closed candidates are cut to
+  one-line verdicts there, with the full write-ups at `git show e12d4ab:Speed.md`.
 - `build.gradle.kts` / `settings.gradle.kts` — Gradle + IntelliJ Platform Gradle Plugin 2.x, targeting Rider 2026.1.4 (branch 261).
 - `src/main/resources/META-INF/plugin.xml` — tool window, context-menu action, startup activity, app service.
 - `com/audioexplainer/ExplainerServer.kt` — HTTP loopback server (full wire contract: `/api/health|state|actions|message|save|load|walkthroughs`), drops `~/.claude-explainer-{port,token}`.
