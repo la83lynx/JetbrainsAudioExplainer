@@ -9,3 +9,5 @@ __pycache__/
 *.pyc
 # Phase 0 spike artefacts (PNGs + report) — evidence, not source.
 scratchpad/
+# Secrets — the OpenRouter key for the Models.md spikes. Never commit.
+OpenRouter.info

@@ -32,6 +32,8 @@ ships to users.
   `PlanProbe`: `git show 2d3d4df:SourceCheck.md`.
   `Speed.md` stays in the tree for its one open item (a "Detailed" depth); its closed candidates are cut to
   one-line verdicts there, with the full write-ups at `git show e12d4ab:Speed.md`.
+  `Models.md` is the open plan for other models: provider profiles behind Claude Code first, another agent
+  harness later. Nothing in it is built.
 - `build.gradle.kts` / `settings.gradle.kts` — Gradle + IntelliJ Platform Gradle Plugin 2.x, targeting Rider 2026.1.4 (branch 261).
 - `src/main/resources/META-INF/plugin.xml` — tool window, context-menu action, startup activity, app service.
 - `com/audioexplainer/ExplainerServer.kt` — HTTP loopback server (full wire contract: `/api/health|state|actions|message|save|load|walkthroughs`), drops `~/.claude-explainer-{port,token}`.
