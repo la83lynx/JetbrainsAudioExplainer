@@ -66,8 +66,9 @@ Frame rules:
 - `keep` is what the reader sees; everything else in the file is folded away. List **2-3 ranges**: the
   class/method header lines as `"role": "context"`, and the member this frame is about as
   `"role": "focus"`. You must list header lines yourself — the plugin never derives them.
-- Every line any of your steps lights must be inside `keep`. A step pointing at an elided line
-  renders as a highlight on a fold placeholder, which reads as the plugin having lost the step.
+- Every line any of your steps lights must be inside `keep`. A few lines just past a kept range are
+  widened into it for you; a step pointing further away renders as a highlight on a fold placeholder,
+  which reads as the plugin having lost the step.
 - `explanation` is markdown, for the sidebar. `title` is a short label — usually the member name.
 
 Step rules:

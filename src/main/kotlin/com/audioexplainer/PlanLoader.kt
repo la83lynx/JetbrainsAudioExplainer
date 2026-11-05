@@ -247,6 +247,13 @@ object PlanLoader {
     const val MAX_KEEP_RANGES: Int = 3
 
     /**
+     * **Lines the loader will add to a kept range** so a step's stray lines land on code — the gap plus the
+     * unkept step lines. The one measured case was 3 (a member's last lines); 6 covers a closing brace and a
+     * blank or two past that, and stays well under a placeholder's worth of code the author chose to fold.
+     */
+    const val WIDEN_MAX_LINES: Int = 6
+
+    /**
      * **Lines of code on screen, across every frame** — Phase 2 decision 8. A judgement, and the number
      * moved once before it was ever run in anger, which is worth recording because the correction came from
      * the cheapest possible check.
@@ -289,7 +296,9 @@ object PlanLoader {
     fun resolve(plan: Plan): ResolvedPlan {
         val issues = mutableListOf<PlanIssue>()
 
-        val admitted = admitFrames(plan.frames, issues)
+        // Before anything reads a `keep`: the focus, the call-site checks and the relation endpoints all see
+        // the widened ranges, so a stray step line fixed here is fixed for every one of them.
+        val admitted = widenKeepForSteps(admitFrames(plan.frames, issues), plan.steps, issues)
         val links = resolveLinks(admitted, issues)
         val nesting = resolveDepths(admitted, links, issues)
 
@@ -491,6 +500,55 @@ object PlanLoader {
      * separately is how the two would come to disagree.
      */
     private class Nesting(val links: Map<Int, Int?>, val depth: Map<Int, Int>)
+
+    /**
+     * **A step lighting a few lines just past its frame's `keep` widens the nearest kept range** instead of
+     * being a `[warn]` (`Speed.md`, "widen `keep`").
+     *
+     * As a `[warn]` it sent the agent back to re-send the whole plan — ~25s at xhigh (2026-11-05,
+     * `xhigh / detailed`: "step 3 lights lines 18-21 of frame 0, but 3 of them are not kept") — to fix what is
+     * almost always an off-by-a-few at the end of a member. The earlier verdict here was that growing `keep`
+     * overrides the author's elision; for a handful of lines next to what they kept, the author's own step is
+     * the better statement of what they meant to show.
+     *
+     * The nearest range is grown to cover the step range and any gap between them, keeping its role (so a
+     * widened focus is still the focus). Only when that adds at most [WIDEN_MAX_LINES] lines not already kept;
+     * further away it is a new excerpt the author never chose, and stays [resolveSteps]'s `[warn]`.
+     */
+    private fun widenKeepForSteps(
+        frames: List<Frame>,
+        steps: List<Step>,
+        issues: MutableList<PlanIssue>,
+    ): List<Frame> {
+        val keeps = frames.associate { it.id to it.keep.toMutableList() }
+        for ((i, step) in steps.withIndex()) {
+            for (ref in step.frameRefs()) {
+                val keep = keeps[ref.frame]?.takeIf { it.isNotEmpty() } ?: continue
+                for (r in ref.ranges) {
+                    val lines = r.lines()
+                    if (lines.first <= 0) continue
+                    fun kept(line: Int) = keep.any { line in it.lines() }
+                    if (lines.all(::kept)) continue
+                    val nearest = keep.indices.minBy { k -> gapBetween(keep[k].lines(), lines) }
+                    val old = keep[nearest]
+                    val grown = minOf(old.lines().first, lines.first)..maxOf(old.lines().last, lines.last)
+                    val added = grown.count { !kept(it) }
+                    if (added > WIDEN_MAX_LINES) continue
+                    keep[nearest] = LineRange(grown.first, grown.last, old.role)
+                    issues += PlanIssue(
+                        IssueLevel.INFO, "step.keep-widened",
+                        "step ${i + 1} lights lines ${r.start}-${r.end} of frame ${ref.frame}, just past what it " +
+                            "keeps, so its kept range ${old.start}-${old.end} is widened to " +
+                            "${grown.first}-${grown.last} ($added line(s)). Nothing to re-send for",
+                    )
+                }
+            }
+        }
+        return frames.map { f -> keeps[f.id]?.takeIf { it != f.keep }?.let { f.copy(keep = it) } ?: f }
+    }
+
+    /** Lines strictly between two ranges; 0 when they touch or overlap. */
+    private fun gapBetween(a: IntRange, b: IntRange): Int = maxOf(0, maxOf(a.first, b.first) - minOf(a.last, b.last) - 1)
 
     /** Kept ranges in reading order, so "the second range" means the same thing everywhere. */
     private fun orderedKeep(frame: Frame, issues: MutableList<PlanIssue>): List<LineRange> {
@@ -754,9 +812,10 @@ object PlanLoader {
      *
      * A step's ranges are checked against its frame's `keep` — the rule that came out of writing the first
      * hand-written plan, where the closing step was authored one line past the end of what the frame kept.
-     * It renders: as a highlight on a `⋯ N lines ⋯` placeholder, indistinguishable from a lost step. There
-     * is no sensible render-time recovery (growing `keep` overrides the author's own elision; dropping the
-     * step loses narration), so this is a report and nothing else.
+     * It renders: as a highlight on a `⋯ N lines ⋯` placeholder, indistinguishable from a lost step. A few
+     * lines next to a kept range were already widened by [widenKeepForSteps]; what is left here is a step
+     * pointing well away from anything kept, where growing `keep` would invent an excerpt and dropping the
+     * step loses narration — so a report and nothing else.
      */
     private fun resolveSteps(
         steps: List<Step>,

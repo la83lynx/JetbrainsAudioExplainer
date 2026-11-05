@@ -589,10 +589,29 @@ public class BuildService
         check("focus: NOT inferred when stated (control)", !has(good, "frame.focus-inferred"));
 
         // ── 6. A step lighting a line its frame elides ──
+        // Just past a kept range: the loader widens it (Speed.md "widen keep") instead of a [warn] re-send.
+        ResolvedPlan stray = PlanLoader.INSTANCE.resolve(plan(
+                Collections.singletonList(frame(0, "A.cs", null, 0, null, ctx(1, 3), focus(68, 87))),
+                Collections.singletonList(step(0, ctx(86, 90)))));
+        check("step range: a few stray lines widen keep", has(stray, "step.keep-widened")
+                && !has(stray, "step.range-outside-keep"));
+        check("step range: the nearest range grows, role kept",
+                stray.frame(0).getKeep().size() == 2 && stray.frame(0).getKeep().get(1).getEnd() == 90
+                        && stray.frame(0).getKeep().get(1).isFocus() && stray.frame(0).getKeep().get(0).getEnd() == 3);
+        check("step range: the focus is the widened range", stray.frame(0).getFocus().getEnd() == 90);
+        check("step range: widening is [info]", stray.issues(IssueLevel.WARN).isEmpty());
+        // The gap counts: keep 68-87, step 92-93 adds 88-93 = 6 lines, the cap — widened.
+        ResolvedPlan gap = PlanLoader.INSTANCE.resolve(plan(
+                Collections.singletonList(frame(0, "A.cs", null, 0, null, ctx(68, 87))),
+                Collections.singletonList(step(0, ctx(92, 93)))));
+        check("step range: a gap up to the cap is filled", has(gap, "step.keep-widened")
+                && gap.frame(0).getKeep().get(0).getEnd() == 93);
+        // Control: one line further is a new excerpt the author never chose — still the [warn].
         ResolvedPlan outside = PlanLoader.INSTANCE.resolve(plan(
                 Collections.singletonList(frame(0, "A.cs", null, 0, null, ctx(68, 87))),
-                Collections.singletonList(step(0, ctx(88, 88)))));
-        check("step range: outside keep reported", has(outside, "step.range-outside-keep"));
+                Collections.singletonList(step(0, ctx(93, 94)))));
+        check("step range: far outside keep still reported (control)", has(outside, "step.range-outside-keep")
+                && !has(outside, "step.keep-widened") && outside.frame(0).getKeep().get(0).getEnd() == 87);
         check("step range: the step still renders", outside.getSteps().size() == 1);
 
         // ── 7. An orphaned step, and a duplicate frame id ──
