@@ -178,6 +178,20 @@ object ExplainPrompt {
                     )
                     appendLine()
                 }
+                // **Detailed bounds reach, not output** (`Speed.md`, 2026-11-04): at xhigh, Deep's extra three
+                // minutes were spent opening other files for nested callees, not writing the plan. So this is
+                // Deep's annotations with every frame in the target, and one read beyond it at most.
+                AudioExplainerSettings.DEPTH_DETAILED -> {
+                    appendLine(
+                        "DEPTH: detailed. Up to 3 frames, and EVERY frame is in the target named below — read " +
+                            "at most ONE other file, only to confirm what a call does, and never make a frame of it. " +
+                            "The optional fields are welcome wherever they teach something — step `note`s, " +
+                            "one-line `example`s, `beats`, up to 4 `relations` per frame (both ends in code you " +
+                            "have read), nested frames within the target and `scene`s. Still bounded by " +
+                            "docs/plan-schema.md; a depth never widens what it allows.",
+                    )
+                    appendLine()
+                }
                 AudioExplainerSettings.DEPTH_DEEP -> {
                     appendLine(
                         "DEPTH: deep. Up to 4 frames, and the optional fields are welcome wherever they teach " +
@@ -243,6 +257,34 @@ object ExplainPrompt {
                             "handful of files visible rather than all of them. A `parent` must be in the same " +
                             "`scene`.",
                     )
+                    AudioExplainerSettings.DEPTH_DETAILED -> appendLine(
+                        "2. Build a `set_plan` of up to 3 frames, EVERY one from the target, with dense, " +
+                            "pointer-style steps and good plain-text `ttsText`, following docs/plan-schema.md " +
+                            "exactly. A plan is `frames` (each one a file plus the `keep` ranges visible in it — " +
+                            "header rows as \"context\", the member itself as \"focus\") plus `steps` (the " +
+                            "narration, in order, each naming its frame and the `ranges` it lights). EVERY line a " +
+                            "step lights must be inside its frame's `keep`. Do NOT open other files to follow " +
+                            "calls out of the target: say in a step what a call into another file does instead " +
+                            "of giving it a frame, and read at most ONE other file, only where the target alone " +
+                            "cannot tell you. Where a one-line aside next to the code would genuinely help (a " +
+                            "constraint, a gotcha, the reason behind a magic number), add an optional " +
+                            "one-sentence `note` to that step — at this depth they are welcome wherever they " +
+                            "teach something. Where a step is really about ONE identifier, add an optional " +
+                            "`beats` entry — {\"line\":N,\"token\":\"…\"} with the name copied verbatim from " +
+                            "THAT line, so the plugin can pulse it. Where a concrete case would clarify a tricky " +
+                            "transformation or a surprising result, add an optional ONE-LINE `example` " +
+                            "(\"Parse(\\\"2024-01\\\") → DateOnly(2024, 1, 1)\") — one line only. Where two " +
+                            "places are genuinely linked — a value produced on one line and consumed on another, " +
+                            "a call and the member it lands in — add an optional frame-level `relations` entry " +
+                            "and the plugin will draw the connection; up to 4 per frame, both ends in code you " +
+                            "have read, and anchor an endpoint inside the step it belongs to. Every plan renders " +
+                            "as a tree of code — do not send `view` at all. When the explanation IS a " +
+                            "caller-callee chain inside the target, give each nested frame `parent`, `callLine` " +
+                            "and `callToken` (the call line must be a line the parent keeps). When it walks over " +
+                            "several unrelated places in turn, group the frames into `scene`s: frames sharing a " +
+                            "`scene` are on screen together and a step in another scene replaces them. A " +
+                            "`parent` must be in the same `scene`.",
+                    )
                     // **Standard is the branch that must not move**, so it is the shipped paragraph
                     // verbatim rather than a reassembly of it — `probes/EffortProbe.java` compares what
                     // it produces against `probes/prompt-standard.txt` byte for byte.
@@ -283,6 +325,7 @@ object ExplainPrompt {
                 // "usually 1-2 frames", which is the wording that shipped.
                 val shape = when (depth) {
                     AudioExplainerSettings.DEPTH_BRIEF -> "ONE frame, at most 4 steps"
+                    AudioExplainerSettings.DEPTH_DETAILED -> "up to 3 frames, every one from the target"
                     AudioExplainerSettings.DEPTH_DEEP -> "up to 4 frames"
                     else -> "usually 1-2 frames"
                 }
@@ -342,6 +385,13 @@ object ExplainPrompt {
                         appendLine(
                             "   At this depth all four are welcome wherever they teach something, and a frame " +
                                 "may carry up to 5 `relations`.",
+                        )
+                    }
+                    if (depth == AudioExplainerSettings.DEPTH_DETAILED) {
+                        appendLine(
+                            "   At this depth all four are welcome wherever they teach something, and a frame " +
+                                "may carry up to 4 `relations`. Keep every frame in the target: say what a call " +
+                                "into another file does rather than opening it — one other file at most.",
                         )
                     }
                 }

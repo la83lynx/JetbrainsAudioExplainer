@@ -341,10 +341,11 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         @JvmField var explainModel: String = ""
 
         /**
-         * How much walkthrough to ask for: [DEPTH_BRIEF], [DEPTH_STANDARD] or [DEPTH_DEEP]. Prompt text
-         * only — nothing else in the pipeline reads it, and it narrows what `docs/plan-schema.md` allows
-         * rather than adding to it. **Depth is the knob that buys back wall-clock time** (output volume is
-         * the best single predictor of a run's length); effort mostly buys correctness.
+         * How much walkthrough to ask for: [DEPTH_BRIEF], [DEPTH_STANDARD], [DEPTH_DETAILED] or [DEPTH_DEEP].
+         * Prompt text only — nothing else in the pipeline reads it, and it narrows what `docs/plan-schema.md`
+         * allows rather than adding to it. **Depth buys back wall-clock time by bounding reach**: at xhigh, Deep's
+         * extra time was opening other files and thinking about them, not writing a longer plan (`Speed.md`,
+         * 2026-11-04) — which is why Detailed keeps Deep's annotations but not its reach.
          */
         @JvmField var explainDepth: String = DEPTH_STANDARD
 
@@ -460,8 +461,10 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
 
         const val DEPTH_BRIEF = "brief"
         const val DEPTH_STANDARD = "standard"
+        /** Deep's annotations with Standard's reach: frames only from the target (`Speed.md` #9). */
+        const val DEPTH_DETAILED = "detailed"
         const val DEPTH_DEEP = "deep"
-        val DEPTH_LEVELS = listOf(DEPTH_BRIEF, DEPTH_STANDARD, DEPTH_DEEP)
+        val DEPTH_LEVELS = listOf(DEPTH_BRIEF, DEPTH_STANDARD, DEPTH_DETAILED, DEPTH_DEEP)
 
         /** `--model` aliases offered in the combo; blank (inherit) is the first item and is not in here. */
         val MODEL_ALIASES = listOf("fable", "opus", "sonnet")

@@ -30,7 +30,7 @@ ships to users.
   **`SourceCheck.md` as well** — the plan for checking a plan against the code in the POST reply, and the
   measurement that found no time to save at `medium`. Cited from `ExplainPrompt`, `Speed.md` and
   `PlanProbe`: `git show 2d3d4df:SourceCheck.md`.
-  `Speed.md` stays in the tree for its one open item (a "Detailed" depth); its closed candidates are cut to
+  `Speed.md` stays in the tree for its two open items (widening a stray `keep`, Rider-resolved calls); its closed candidates are cut to
   one-line verdicts there, with the full write-ups at `git show e12d4ab:Speed.md`.
   `Models.md` is the open plan for other models: provider profiles behind Claude Code first, another agent
   harness later. Nothing in it is built.

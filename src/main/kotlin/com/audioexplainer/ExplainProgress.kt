@@ -69,6 +69,9 @@ data class RunShape(
             }
             return when (depth) {
                 AudioExplainerSettings.DEPTH_BRIEF -> RunShape(pre * 0.5, 3_000.0, 320.0)
+                // A guess between the two it sits between: Deep's output (high/deep in-file wrote ~9 000
+                // chars) without Deep's cross-file reading.
+                AudioExplainerSettings.DEPTH_DETAILED -> RunShape(pre * 1.15, 9_500.0, 320.0)
                 AudioExplainerSettings.DEPTH_DEEP -> RunShape(pre * 1.35, 11_000.0, 320.0)
                 else -> RunShape(pre, 8_000.0, 320.0)
             }

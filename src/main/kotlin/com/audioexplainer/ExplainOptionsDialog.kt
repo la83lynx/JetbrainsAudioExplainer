@@ -157,6 +157,7 @@ class ExplainOptionsDialog(project: Project?) : DialogWrapper(project) {
  */
 internal fun depthOptionLabel(code: String?): String = when (code) {
     AudioExplainerSettings.DEPTH_BRIEF -> "Brief — one frame, up to 4 steps, flat"
-    AudioExplainerSettings.DEPTH_DEEP -> "Deep — up to 4 frames, asides and links encouraged"
+    AudioExplainerSettings.DEPTH_DETAILED -> "Detailed — up to 3 frames from the target, asides and links encouraged"
+    AudioExplainerSettings.DEPTH_DEEP -> "Deep — up to 4 frames, may follow calls into other files"
     else -> "Standard — 1–2 frames (the default)"
 }

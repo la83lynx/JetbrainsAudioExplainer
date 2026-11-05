@@ -261,6 +261,13 @@ public final class EffortProbe {
                         && mediumStd.getPreSeconds() > mediumBrief.getPreSeconds()
                         && xhighDeep.getWriteChars() > mediumStd.getWriteChars()
                         && mediumStd.getWriteChars() > mediumBrief.getWriteChars());
+        RunShape xhighStd = RunShape.Companion.seed("xhigh", "standard");
+        RunShape xhighDetailed = RunShape.Companion.seed("xhigh", "detailed");
+        check("progress: Detailed seeds between Standard and Deep, in both thinking and output",
+                xhighStd.getPreSeconds() < xhighDetailed.getPreSeconds()
+                        && xhighDetailed.getPreSeconds() < xhighDeep.getPreSeconds()
+                        && xhighStd.getWriteChars() < xhighDetailed.getWriteChars()
+                        && xhighDetailed.getWriteChars() < xhighDeep.getWriteChars());
         RunShape learnt = mediumStd.learn(new RunShape(52, 6000, 300, 1));
         check("progress: a seed learns 3/4 of the way to its first run",
                 Math.abs(learnt.getPreSeconds() - (32 + 0.75 * 20)) < 1e-9 && learnt.getRuns() == 1);
@@ -473,6 +480,7 @@ public final class EffortProbe {
 
         String BRIEF = AudioExplainerSettings.DEPTH_BRIEF;
         String STD = AudioExplainerSettings.DEPTH_STANDARD;
+        String DETAILED = AudioExplainerSettings.DEPTH_DETAILED;
         String DEEP = AudioExplainerSettings.DEPTH_DEEP;
 
         // ── (a) Standard is today's prompt, byte for byte ─────────────────────
@@ -541,11 +549,21 @@ public final class EffortProbe {
         // ── (c) what each depth asks for ──────────────────────────────────────
         String brief = prompt(ExplainScope.CURSOR, SKILL, BRIEF, null);
         String std = prompt(ExplainScope.CURSOR, SKILL, STD, null);
+        String detailed = prompt(ExplainScope.CURSOR, SKILL, DETAILED, null);
         String deep = prompt(ExplainScope.CURSOR, SKILL, DEEP, null);
         check("Brief asks for no relations, no nesting, no scenes, no note/example/beats",
                 none(brief, ASKS));
         check("  control: Standard asks for all six", all(std, ASKS));
         check("  control: Deep asks for all six", all(deep, ASKS));
+        check("Detailed asks for all six too — Deep's annotations", all(detailed, ASKS));
+        check("Detailed caps frames at three and relations at four",
+                detailed.contains("up to 3 frames") && detailed.contains("up to 4 per frame")
+                        && !detailed.contains("up to 4 frames") && !detailed.contains("up to 5 per frame"));
+        check("  and keeps every frame in the target: no following calls, one other file at most",
+                detailed.contains("EVERY frame is in the target") && detailed.contains("Do NOT open other files")
+                        && detailed.contains("at most ONE other file"));
+        check("  control: Deep says neither (its reach is the point of it)",
+                !deep.contains("Do NOT open other files") && !deep.contains("EVERY frame is in the target"));
         check("Brief caps the plan at one frame and four steps",
                 brief.contains("ONE frame") && brief.contains("at most 4 steps"));
         check("Deep raises the frame cap to four and the relation cap to five",
@@ -554,6 +572,8 @@ public final class EffortProbe {
                 std.contains("usually 1-2 frames") && std.contains("2-3 per frame at most"));
         check("Brief and Deep carry a DEPTH: line; Standard carries none",
                 brief.contains("DEPTH: brief") && deep.contains("DEPTH: deep") && !std.contains("DEPTH:"));
+        check("  Detailed carries its own DEPTH: line, exactly one",
+                countOf(detailed, "DEPTH: detailed") == 1 && countOf(detailed, "DEPTH:") == 1);
 
         // The fallback mirror gets the same treatment, or Brief silently means Standard for anyone whose
         // skill install failed — a defect with no symptom, which is the kind this file exists for.
@@ -564,6 +584,10 @@ public final class EffortProbe {
         check("  control: the fallback at Standard carries every optional-field paragraph",
                 all(stdNo, FALLBACK_ASKS));
         check("  control: the fallback at Deep does too", all(deepNo, FALLBACK_ASKS));
+        String detailedNo = prompt(ExplainScope.CURSOR, null, DETAILED, null);
+        check("the no-skill fallback honours Detailed: every optional field, frames from the target, 4 relations",
+                all(detailedNo, FALLBACK_ASKS) && detailedNo.contains("up to 3 frames, every one from the target")
+                        && detailedNo.contains("up to 4 `relations`") && detailedNo.contains("one other file at most"));
         check("  control: the fallback really is the fallback (no skill path in it)",
                 !stdNo.contains("/home/u/.claude/skills") && std.contains("/home/u/.claude/skills"));
 
@@ -573,13 +597,16 @@ public final class EffortProbe {
             for (Path skill : new Path[] { SKILL, null }) {
                 String b = prompt(scope, skill, BRIEF, null);
                 String s = prompt(scope, skill, STD, null);
+                String t = prompt(scope, skill, DETAILED, null);
                 String d = prompt(scope, skill, DEEP, null);
-                built += 3;
-                if (!b.equals(s) && !s.equals(d) && !b.equals(d)) distinct++;
+                built += 4;
+                if (new java.util.HashSet<>(List.of(b, s, t, d)).size() == 4) distinct++;
             }
         }
-        check("all " + built + " scope x skill x depth prompts build, and the 3 depths differ in each of the 6",
-                built == 18 && distinct == 6);
+        check("all " + built + " scope x skill x depth prompts build, and the 4 depths differ in each of the 6",
+                built == 24 && distinct == 6);
+        check("  the depth list offers all four, Standard second, Detailed between it and Deep",
+                List.of(BRIEF, STD, DETAILED, DEEP).equals(AudioExplainerSettings.Companion.getDEPTH_LEVELS()));
 
         // ── (d) a per-run override beats the setting; absent ones fall back ───
         // The resolution itself is one line of `ClaudeExplainer.explain` (`request.x ?: state.x`) and needs

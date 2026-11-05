@@ -309,8 +309,8 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                     )
                     .applyToComponent { renderer = SimpleListCellRenderer.create("") { depthOptionLabel(it) } }
             }.rowComment(
-                "How much walkthrough to ask for. <b>Depth is the knob that buys back time</b> — output " +
-                    "volume is the best single predictor of how long a run takes; effort mostly buys " +
+                "How much walkthrough to ask for. <b>Depth buys back time by bounding reach</b> — Deep's " +
+                    "extra time goes on opening other files, which Detailed does not do. Effort mostly buys " +
                     "correctness. Depth never asks for anything the plan schema does not already allow.",
             )
             row("Effort:") {

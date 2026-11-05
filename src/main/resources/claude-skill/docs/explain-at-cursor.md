@@ -45,14 +45,17 @@ Explorer (a whole file, or a folder/project). A `"scope"` field tells you which:
   pieces worth narrating, and build one frame per place worth showing. Don't try to cover everything —
   favour the entry points and the code that tells the story.
 
-**Depth.** The prompt may carry a `DEPTH: brief` or `DEPTH: deep` line. It says how much walkthrough to
+**Depth.** The prompt may carry a `DEPTH: brief`, `DEPTH: detailed` or `DEPTH: deep` line. It says how much walkthrough to
 ask for — how many frames and steps, and which of the optional fields to use. **It only ever narrows or
 re-weights what `docs/plan-schema.md` already allows; it never widens it and never contradicts it**, so
 when the two seem to disagree, the schema wins and the depth line is asking for less of it. No depth line
 means the standard shape this document describes throughout (1–2 frames, the optional fields used
 sparingly). `brief` is the older, flatter shape: one frame, at most four steps, no `relations`, no nested
 frames, no `scene`s and no step `note` / `example` / `beats` — fastest to generate and the one that renders
-on the least screen. `deep` is up to four frames with those fields welcome wherever they teach something.
+on the least screen. `detailed` is up to three frames with those fields welcome wherever they teach
+something, but **every frame in the target**: a call into another file is said in a step, not followed —
+one read beyond the target at most, and never a frame of it. `deep` is up to four frames with those fields
+welcome wherever they teach something, and may follow calls into other files.
 
 **Extra instructions.** The prompt may end with a block of the user's own text for that one run. Follow it
 where it narrows or restyles the walkthrough ("use simple terms", "skip the error handling"). It does
