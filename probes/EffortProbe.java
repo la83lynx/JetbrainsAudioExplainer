@@ -8,10 +8,15 @@ import com.audioexplainer.ExplainProgress;
 import com.audioexplainer.RunShape;
 import com.audioexplainer.ExplainPrompt;
 import com.audioexplainer.ExplainRequest;
+import com.audioexplainer.ListedModel;
+import com.audioexplainer.ProviderModels;
 import com.audioexplainer.ExplainScope;
 import com.audioexplainer.Language;
 import com.audioexplainer.Languages;
 import com.audioexplainer.McpEndpoint;
+import com.audioexplainer.ProviderPreset;
+import com.audioexplainer.ProviderProfile;
+import com.audioexplainer.Providers;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -740,10 +745,149 @@ public final class EffortProbe {
 
         progress();
         toolRoute();
+        providers();
+        providerModels();
 
         System.out.println();
         System.out.println(pass + " pass / " + fail + " fail");
         if (fail > 0) System.exit(1);
+    }
+
+    /**
+     * **Provider profiles**: the argv a profile adds, the `--settings` JSON it carries, the
+     * `api_retry` classifier that stops a rejected key, and a state round trip with no key in it. The Claude Code
+     * run is every control: with no profile, nothing here may have moved.
+     */
+    static void providerModels() {
+        String body = "{\"data\":["
+                + "{\"id\":\"z-ai/glm-5.3-flash\",\"name\":\"GLM\",\"pricing\":{\"prompt\":\"0.00000015\",\"completion\":\"0.0000005\"},"
+                + "\"context_length\":1048576,\"supported_parameters\":[\"tools\",\"temperature\"]},"
+                + "{\"id\":\"acme/no-tools\",\"pricing\":{\"prompt\":\"0.000001\",\"completion\":\"0.000002\"},\"supported_parameters\":[\"temperature\"]},"
+                + "{\"id\":\"nvidia/nemo:free\",\"pricing\":{\"prompt\":\"0\",\"completion\":\"0\"},\"context_length\":256000,\"supported_parameters\":[\"tools\"]},"
+                + "{\"id\":\"openrouter/auto\",\"pricing\":{\"prompt\":\"-1\",\"completion\":\"-1\"},\"supported_parameters\":[\"tools\"]},"
+                + "{\"id\":\"~deepseek/flash-latest\",\"supported_parameters\":[\"tools\"]},"
+                + "{\"name\":\"no id\",\"supported_parameters\":[\"tools\"]}"
+                + "],\"extra\":1}";
+        List<ListedModel> ms = ProviderModels.INSTANCE.parseOpenRouter(body);
+        List<String> ids = new ArrayList<>();
+        for (ListedModel m : ms) ids.add(m.getId());
+        check("model list: only tool-capable models with an id, sorted ignoring a leading ~ (" + ids + ")",
+                ids.equals(List.of("~deepseek/flash-latest", "nvidia/nemo:free", "openrouter/auto", "z-ai/glm-5.3-flash")));
+        ListedModel glm = ms.get(3);
+        check("  per-token prices become per-M and the context is shown (" + glm.label() + ")",
+                glm.label().equals("z-ai/glm-5.3-flash   $0.15 / $0.50 per M · 1M ctx"));
+        check("  a :free model says it may train on prompts (" + ms.get(1).label() + ")",
+                ms.get(1).getFree() && ms.get(1).label().contains("free — may train on prompts"));
+        check("  -1 or missing pricing reads \"price varies\"",
+                ms.get(2).label().contains("price varies") && ms.get(0).label().contains("price varies"));
+        check("  a body with no data array is an empty list", ProviderModels.INSTANCE.parseOpenRouter("{\"error\":\"x\"}").isEmpty());
+        check("  Browse is offered for OpenRouter only (trailing slash and case don't matter)",
+                ProviderModels.INSTANCE.canList("https://OpenRouter.ai/api/") && !ProviderModels.INSTANCE.canList("https://api.deepseek.com/anthropic")
+                        && !ProviderModels.INSTANCE.canList("http://localhost:11434"));
+        check("  the list URL is <base>/v1/models",
+                ProviderModels.INSTANCE.listUrl("https://openrouter.ai/api/").equals("https://openrouter.ai/api/v1/models"));
+    }
+
+    static void providers() {
+        Path config = Paths.get("/tmp/audio-explainer/plans/run-0/mcp.json");
+        Path settings = Paths.get("/tmp/audio-explainer/provider/run-1.json");
+        List<String> claude = ExplainPrompt.INSTANCE.buildArgs("P", "medium", "opus", PLAN_DIR, config);
+        List<String> prof = ExplainPrompt.INSTANCE.buildArgs("P", "medium", "opus", PLAN_DIR, config, settings);
+        int at = prof.indexOf("--settings");
+        check("provider: `--settings <file>` appears exactly once",
+                at >= 0 && at == prof.lastIndexOf("--settings") && prof.get(at + 1).equals(settings.toString()));
+        check("  and `--model` is dropped even with explainModel = opus", !prof.contains("--model"));
+        check("  control: without a profile `--model opus` is there and `--settings` is not",
+                claude.contains("--model") && claude.get(claude.indexOf("--model") + 1).equals("opus") && !claude.contains("--settings"));
+        List<String> rest = new ArrayList<>(prof);
+        rest.remove(at + 1); rest.remove(at);
+        List<String> claudeNoModel = new ArrayList<>(claude);
+        int m = claudeNoModel.indexOf("--model");
+        claudeNoModel.remove(m + 1); claudeNoModel.remove(m);
+        check("  the rest of the argv is the Claude run's, in order", rest.equals(claudeNoModel));
+        List<String> postProf = ExplainPrompt.INSTANCE.buildArgs("P", "medium", "", PLAN_DIR, null, settings);
+        check("  the POST fallback keeps `--add-dir` last", postProf.indexOf("--add-dir") == postProf.size() - 2
+                && postProf.contains("--settings"));
+
+        ProviderProfile p = Providers.INSTANCE.newProfile(Providers.INSTANCE.preset(Providers.PRESET_OPENROUTER), "OpenRouter");
+        check("the OpenRouter preset defaults to GLM 5.3 Flash", "z-ai/glm-5.3-flash".equals(p.model)
+                && "https://openrouter.ai/api".equals(p.baseUrl) && !p.id.isEmpty());
+        boolean noFree = true;
+        for (ProviderPreset pr : Providers.INSTANCE.getPRESETS()) for (String id : pr.getModels()) if (Providers.INSTANCE.isFree(id)) noFree = false;
+        check("  no preset suggests a :free model", noFree);
+        p.baseUrl = "https://openrouter.ai/api/";
+        String js = Providers.INSTANCE.settingsJson(p, "sk-or-test\"quote");
+        kotlinx.serialization.json.JsonObject root = (kotlinx.serialization.json.JsonObject)
+                kotlinx.serialization.json.Json.Default.parseToJsonElement(js);
+        kotlinx.serialization.json.JsonObject env = (kotlinx.serialization.json.JsonObject) root.get("env");
+        java.util.function.Function<String, String> v = k -> {
+            Object e = env.get(k);
+            return e == null ? null : ((kotlinx.serialization.json.JsonPrimitive) e).getContent();
+        };
+        check("settingsJson: base URL (trailing slash trimmed), token = the key, ANTHROPIC_API_KEY empty",
+                "https://openrouter.ai/api".equals(v.apply("ANTHROPIC_BASE_URL"))
+                        && "sk-or-test\"quote".equals(v.apply("ANTHROPIC_AUTH_TOKEN"))
+                        && "".equals(v.apply("ANTHROPIC_API_KEY")));
+        int slots = 0;
+        for (String k : Providers.INSTANCE.getMODEL_VARS()) if (p.model.equals(v.apply(k))) slots++;
+        check("  all " + slots + " model slots carry the profile's model", slots == 5);
+        check("  and nothing else: " + env.keySet().size() + " keys", env.keySet().size() == 8 && root.keySet().size() == 1);
+        ProviderProfile ollama = Providers.INSTANCE.newProfile(Providers.INSTANCE.preset(Providers.PRESET_OLLAMA), "Ollama");
+        check("Ollama needs no key and sends `ollama`", !Providers.INSTANCE.needsKey(ollama)
+                && Providers.INSTANCE.settingsJson(ollama, null).contains("\"ANTHROPIC_AUTH_TOKEN\":\"ollama\""));
+        check("  control: OpenRouter needs one", Providers.INSTANCE.needsKey(p));
+
+        // The lines are real ones (2026-11-05, bad key / OpenRouter).
+        String r401 = "{\"type\":\"system\",\"subtype\":\"api_retry\",\"attempt\":1,\"max_retries\":10,\"retry_delay_ms\":602,\"error_status\":401,\"error\":\"authentication_failed\",\"session_id\":\"s\"}";
+        String r403 = r401.replace("401", "403");
+        String r429 = r401.replace("401", "429").replace("authentication_failed", "rate_limit");
+        String r500 = r401.replace("401", "500"), r529 = r401.replace("401", "529");
+        String init = "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s\",\"model\":\"api_retry-ish\"}";
+        Providers.Retry a = Providers.INSTANCE.retry(r401);
+        check("retry: a 401 line stops the run (attempt 1 of 10)", a != null && a.getAuthRejected()
+                && Integer.valueOf(1).equals(a.getAttempt()) && Integer.valueOf(10).equals(a.getMaxRetries()));
+        check("  a 403 line does too", Providers.INSTANCE.retry(r403).getAuthRejected());
+        check("  429, 500 and 529 retry without stopping",
+                !Providers.INSTANCE.retry(r429).getAuthRejected() && !Providers.INSTANCE.retry(r500).getAuthRejected()
+                        && !Providers.INSTANCE.retry(r529).getAuthRejected());
+        check("  a non-retry line (even one mentioning it) is not a retry", Providers.INSTANCE.retry(init) == null
+                && Providers.INSTANCE.retry("not json api_retry") == null);
+
+        String err = "⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set\n"
+                + "[claude-code:unrecognized_model] {\"model\":\"x\"}\nreal failure here";
+        check("stderr: the two harmless lines go, a real one stays",
+                "real failure here".equals(Providers.INSTANCE.dropHarmlessStderr(err)));
+        check("  control: harmless-only stderr is empty", Providers.INSTANCE.dropHarmlessStderr(
+                err.substring(0, err.lastIndexOf('\n'))).isEmpty());
+
+        check("baseUrlProblem: https passes, ftp and garbage do not",
+                Providers.INSTANCE.baseUrlProblem("https://openrouter.ai/api") == null
+                        && Providers.INSTANCE.baseUrlProblem("ftp://x") != null
+                        && Providers.INSTANCE.baseUrlProblem("not a url") != null);
+
+        AudioExplainerSettings.State st = new AudioExplainerSettings.State();
+        check("state: a fresh one is Claude Code with no profiles",
+                "".equals(st.explainProvider) && st.providers.isEmpty() && Providers.INSTANCE.selected(st) == null);
+        st.providers.add(p);
+        st.explainProvider = p.id;
+        check("  a selected profile resolves", Providers.INSTANCE.selected(st) == p);
+        st.explainProvider = "gone";
+        check("  a removed profile's id falls back to Claude Code", Providers.INSTANCE.selected(st) == null);
+        st.explainProvider = p.id;
+        org.jdom.Element el = com.intellij.util.xmlb.XmlSerializer.serialize(st);
+        String xml = com.intellij.openapi.util.JDOMUtil.write(el);
+        AudioExplainerSettings.State back = com.intellij.util.xmlb.XmlSerializer.deserialize(el, AudioExplainerSettings.State.class);
+        check("  round trip: the profile and the selection survive",
+                back.providers.size() == 1 && p.id.equals(back.providers.get(0).id) && p.model.equals(back.providers.get(0).model)
+                        && p.id.equals(back.explainProvider));
+        check("  and the XML carries no key and no field for one",
+                !xml.contains("sk-or-test") && !xml.toLowerCase().contains("token") && !xml.toLowerCase().contains("apikey"));
+        boolean keyField = false;
+        for (java.lang.reflect.Field f : ProviderProfile.class.getDeclaredFields()) {
+            String n = f.getName().toLowerCase();
+            if (n.contains("key") || n.contains("token") || n.contains("secret")) keyField = true;
+        }
+        check("  ProviderProfile has no key/token/secret field at all", !keyField);
     }
 
     static boolean isWindows() {

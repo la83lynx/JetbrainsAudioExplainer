@@ -133,7 +133,8 @@ object ExplainerDiagnostics {
             val cli = claudeSettings()
             val inherited = stringAt(cli, "effortLevel")
             val plugin = ctx.state.explainEffort.trim()
-            val model = ctx.state.explainModel.trim()
+            // A provider profile drops `--model`: its model comes in the `--settings` env.
+            val model = if (Providers.selected(ctx.state) != null) "" else ctx.state.explainModel.trim()
             val modelTail = if (model.isEmpty()) "" else "; `--model $model`"
             when {
                 plugin.isNotEmpty() -> Outcome(
@@ -151,6 +152,27 @@ object ExplainerDiagnostics {
                         "cannot see, and which nothing in the IDE will report",
                 )
             }
+        },
+
+        DiagnosticCheck(
+            "Explain provider", CheckOs.ANY,
+            "Open Settings → Tools → Audio Explainer → Explanation → Manage… and fix the profile: a base URL " +
+                "with http(s) and a host, a model id, and an API key. \"Test connection\" beside it makes a real call.",
+        ) { ctx ->
+            val profile = Providers.selected(ctx.state)
+                ?: return@DiagnosticCheck Outcome(CheckStatus.PASS, "Claude Code (your own setup) — nothing injected")
+            val problems = buildList {
+                Providers.baseUrlProblem(profile.baseUrl)?.let { add("the base URL $it") }
+                if (profile.model.isBlank()) add("no model id")
+                if (Providers.needsKey(profile) && runCatching { ProviderKeys.get(profile.id) }.getOrNull() == null) {
+                    add("no API key stored")
+                }
+            }
+            if (problems.isEmpty()) Outcome(
+                CheckStatus.PASS,
+                "${profile.name}: ${profile.model} at ${Providers.host(profile.baseUrl)} (not called here; Test does that)",
+            )
+            else Outcome(CheckStatus.FAIL, "${profile.name}: " + problems.joinToString(", "))
         },
 
         DiagnosticCheck(

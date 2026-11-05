@@ -18,6 +18,8 @@ import java.nio.file.Path
  */
 class ServerStartupActivity : ProjectActivity {
     override suspend fun execute(project: Project) {
+        // Once per IDE session, before any run of it exists: a key file an IDE kill left behind.
+        ProviderFiles.sweepOnce()
         val server = service<ExplainerServerService>().server
         project.basePath?.let { server.setWorkspaceRoot(Path.of(it)) }
         // Drive the tree of code views from walkthrough state changes.

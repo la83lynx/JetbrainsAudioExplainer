@@ -58,6 +58,10 @@ object ExplainPrompt {
      * [mcpConfig] is the run's `--mcp-config` file ([McpEndpoint.config]): given, the plan comes back through the
      * `set_plan` tool, the allow-list is [TOOL_ALLOWED_TOOLS], and [planDir] is not granted — the agent writes
      * nothing.
+     *
+     * [settings] is a provider profile's `--settings` file ([Providers.settingsJson]): its `env` points Claude
+     * Code at the provider and names the model, so `--model` is **dropped** — an alias like `opus` means nothing
+     * there. Null adds nothing, so a Claude Code run's argv is the one `EffortProbe` holds.
      */
     @JvmOverloads
     fun buildArgs(
@@ -66,6 +70,7 @@ object ExplainPrompt {
         model: String,
         planDir: Path? = null,
         mcpConfig: Path? = null,
+        settings: Path? = null,
     ): List<String> = buildList {
         add("-p"); add(prompt)
         add("--output-format"); add("stream-json")
@@ -88,7 +93,8 @@ object ExplainPrompt {
         // coding, and the four-minute walkthrough Speed.md measured. Blank still means inherit, for the
         // two people who want it; it is simply no longer the default.
         if (effort.isNotBlank()) { add("--effort"); add(effort.trim()) }
-        if (model.isNotBlank()) { add("--model"); add(model.trim()) }
+        if (settings != null) { add("--settings"); add(settings.toString()) }
+        else if (model.isNotBlank()) { add("--model"); add(model.trim()) }
         if (planDir != null && mcpConfig == null) { add("--add-dir"); add(planDir.toString()) }
     }
 

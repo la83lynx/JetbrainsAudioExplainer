@@ -35,6 +35,14 @@ import com.intellij.ui.dsl.builder.bindItem
 import com.intellij.ui.dsl.builder.bindSelected
 import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
+import com.intellij.ui.DocumentAdapter
+import com.intellij.ui.layout.ComponentPredicate
+import com.intellij.ui.layout.not
+import com.intellij.openapi.observable.properties.AtomicBooleanProperty
+import com.intellij.openapi.util.text.StringUtil
+import com.intellij.util.ui.UIUtil
+import javax.swing.JTextField
+import javax.swing.event.DocumentEvent
 import java.awt.Color
 import java.awt.Font
 import com.intellij.util.ui.JBUI
@@ -174,6 +182,46 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
      * See [AppearancePreview]; [refreshAppearancePreview] keeps it fed.
      */
     private val appearancePreview = AppearancePreview()
+
+    // ── Provider profiles ──────────────────────────────────────────────────────
+
+    /** Profile ids, `""` first for Claude Code; the renderer shows names. */
+    private val providerCombo = ComboBox<String>().apply {
+        renderer = SimpleListCellRenderer.create("") { id ->
+            if (id.isNullOrEmpty()) "Claude Code (your own setup)" else state.providers.firstOrNull { it.id == id }?.name ?: id
+        }
+        addActionListener { loadProfileModel(); providerTestLabel.text = ""; providerTestShown.set(false) }
+    }
+
+    /** The selected profile's model id, editable; edits wait in [pendingModels] until Apply. */
+    private val profileModelCombo = ComboBox<String>().apply { isEditable = true }
+    private val pendingModels = LinkedHashMap<String, String>()
+    private var loadingModel = false
+    private val providerWarning = JBLabel().apply { foreground = UIUtil.getContextHelpForeground() }
+    private val providerTestLabel = JBLabel()
+    private val providerTestShown = AtomicBooleanProperty(false)
+    private val providerSelected = object : ComponentPredicate() {
+        override fun invoke() = selectedProviderId().isNotEmpty()
+        override fun addListener(listener: (Boolean) -> Unit) = providerCombo.addActionListener { listener(invoke()) }
+    }
+
+    /** The selected profile's base URL is one whose model list [ProviderModels] can fetch. */
+    private val providerListable = object : ComponentPredicate() {
+        override fun invoke() =
+            state.providers.firstOrNull { it.id == selectedProviderId() }?.let { ProviderModels.canList(it.baseUrl) } == true
+        override fun addListener(listener: (Boolean) -> Unit) = providerCombo.addActionListener { listener(invoke()) }
+    }
+
+    init {
+        (profileModelCombo.editor.editorComponent as? JTextField)?.document?.addDocumentListener(object : DocumentAdapter() {
+            override fun textChanged(e: DocumentEvent) {
+                if (loadingModel) return
+                val id = selectedProviderId().ifEmpty { return }
+                pendingModels[id] = profileModelText()
+                refreshProviderWarning()
+            }
+        })
+    }
 
     /** The narration voice combo (Phase L7 cleanup) — its items are rebuilt to match the currently-selected
      *  explanation language, so it always shows only voices valid for that language. */
@@ -323,11 +371,39 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                     "for interactive coding, was measured costing a walkthrough 255s where medium took 118s " +
                     "for the same plan shape.",
             )
+            // **Provider profiles**: another service behind the user's own Claude Code. The
+            // selection is bound like any row; the profiles themselves are written by the Manage dialog's OK,
+            // because their keys go to the password safe at that moment.
+            row("Provider:") {
+                cell(providerCombo)
+                    .onReset { reloadProviders(state.explainProvider) }
+                    .onApply { state.explainProvider = selectedProviderId() }
+                    .onIsModified { selectedProviderId() != state.explainProvider }
+                button("Manage…") { manageProviders() }
+                button("Test connection") { testProvider() }
+            }.rowComment(
+                "Claude Code (your own setup) is today's behaviour: nothing is injected. A provider runs the same " +
+                    "prompt on its model through your Claude Code. Test uses the unsaved choice.",
+            )
+            row("") { cell(providerTestLabel) }.visibleIf(providerTestShown)
             row("Model:") {
                 comboBox(listOf("") + AudioExplainerSettings.MODEL_ALIASES)
                     .bindItem({ state.explainModel }, { state.explainModel = it?.trim() ?: "" })
                     .applyToComponent { renderer = SimpleListCellRenderer.create("") { modelLabel(it) } }
             }.rowComment("Blank keeps your own configured model, which is usually the right one.")
+                .visibleIf(providerSelected.not())
+            row("Model:") {
+                cell(profileModelCombo)
+                    .onReset { pendingModels.clear(); loadProfileModel() }
+                    .onApply { applyPendingModels() }
+                    .onIsModified { pendingModels.any { (id, m) -> state.providers.firstOrNull { it.id == id }?.model != m } }
+                button("Browse…") {
+                    val profile = state.providers.firstOrNull { it.id == selectedProviderId() } ?: return@button
+                    ProviderModels.browse(profileModelCombo, profile.baseUrl) { id -> profileModelCombo.selectedItem = id }
+                }.applyToComponent { toolTipText = "Fetch OpenRouter's model list (no key needed) and pick one." }
+                    .visibleIf(providerListable)
+            }.visibleIf(providerSelected)
+            row("") { cell(providerWarning) }.visibleIf(providerSelected)
         }.apply { expanded = true }
 
         // **Then what a walkthrough is made of.** The language governs the prose *and* the narration, so
@@ -979,6 +1055,106 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
             project,
         )
         DiagnosticsDialog(project, results).show()
+    }
+
+    private fun selectedProviderId(): String = providerCombo.selectedItem as? String ?: ""
+
+    private fun profileModelText(): String =
+        ((profileModelCombo.editor.editorComponent as? JTextField)?.text ?: profileModelCombo.selectedItem?.toString()).orEmpty().trim()
+
+    /** Rebuild the provider combo from the saved profiles, selecting [select] (or Claude Code when it is gone). */
+    private fun reloadProviders(select: String) {
+        val ids = listOf("") + state.providers.map { it.id }
+        providerCombo.model = DefaultComboBoxModel(ids.toTypedArray())
+        providerCombo.selectedItem = select.takeIf { it in ids } ?: ""
+        loadProfileModel()
+    }
+
+    /** Show the selected profile's model — its pending edit if there is one — with its preset's suggestions. */
+    private fun loadProfileModel() {
+        val profile = state.providers.firstOrNull { it.id == selectedProviderId() }
+        loadingModel = true
+        try {
+            val current = profile?.let { pendingModels[it.id] ?: it.model }.orEmpty()
+            val items = (listOf(current) + (Providers.preset(profile?.preset)?.models ?: emptyList())).filter { it.isNotBlank() }.distinct()
+            profileModelCombo.model = DefaultComboBoxModel(items.toTypedArray())
+            profileModelCombo.selectedItem = current
+        } finally {
+            loadingModel = false
+        }
+        refreshProviderWarning()
+    }
+
+    private fun applyPendingModels() {
+        for ((id, m) in pendingModels) state.providers.firstOrNull { it.id == id }?.model = m
+        pendingModels.clear()
+    }
+
+    private fun refreshProviderWarning() {
+        val profile = state.providers.firstOrNull { it.id == selectedProviderId() } ?: return
+        val host = StringUtil.escapeXmlEntities(Providers.host(profile.baseUrl))
+        providerWarning.text = "<html>Unsupported by Anthropic. Your code is sent to <b>$host</b>." +
+            (if (Providers.isFree(profileModelText())) " <b>Free models may train on prompts.</b>" else "") +
+            " Cost is the provider's; the run log says <code>cost n/a</code>.</html>"
+    }
+
+    /**
+     * Open the Manage dialog over the saved profiles plus this page's pending model edits. Its OK writes the
+     * profiles to the state at once and the keys to the password safe, both off the page's Apply: a key cannot
+     * wait in a text field until someone presses Apply.
+     */
+    private fun manageProviders() {
+        val working = state.providers.map { p -> p.copy().also { c -> pendingModels[p.id]?.let { c.model = it } } }
+        var keys: Map<String, String?> = emptyMap()
+        val read = ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            { keys = working.associate { it.id to runCatching { ProviderKeys.get(it.id) }.getOrNull() } },
+            "Reading API Keys…", true, null,
+        )
+        if (!read) return
+        val dialog = ProviderManagerDialog(working, keys, selectedProviderId().ifEmpty { null })
+        if (!dialog.showAndGet()) return
+        val before = state.providers.map { it.id }.toSet()
+        val after = dialog.profiles
+        val changed = dialog.keys.filter { (id, k) -> keys[id] != k || id !in after.map { it.id } }
+        ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            {
+                for ((id, k) in changed) runCatching { ProviderKeys.set(id, if (after.any { it.id == id }) k else null) }
+                for (id in before - after.map { it.id }.toSet()) runCatching { ProviderKeys.set(id, null) }
+            },
+            "Saving API Keys…", false, null,
+        )
+        state.providers = after.map { it.copy() }.toMutableList()
+        pendingModels.clear()
+        if (state.explainProvider !in after.map { it.id }) state.explainProvider = ""
+        // A provider just added is the one the user means to use; otherwise keep the page's choice.
+        val added = after.map { it.id }.toSet() - before
+        val next = dialog.selectedId?.takeIf { it in added } ?: selectedProviderId()
+        reloadProviders(next)
+    }
+
+    /** Test the provider the combo shows — unsaved choice and model included — with its stored key. */
+    private fun testProvider() {
+        val saved = state.providers.firstOrNull { it.id == selectedProviderId() }
+        if (saved == null) {
+            providerTestLabel.text = "Claude Code (your own setup) has nothing to test here; choose a provider."
+            providerTestShown.set(true)
+            return
+        }
+        val profile = saved.copy().also { it.model = profileModelText() }
+        var outcome: ProviderTest.Outcome? = null
+        ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            {
+                val indicator = ProgressManager.getInstance().progressIndicator
+                val key = runCatching { ProviderKeys.get(profile.id) }.getOrNull()
+                outcome = runCatching { ProviderTest.run(profile, key, state.claudeExecutablePath, indicator) }
+                    .getOrElse { ProviderTest.Outcome(false, it.message ?: it.toString()) }
+            },
+            "Testing ${profile.name}…", true, null,
+        )
+        val o = outcome ?: ProviderTest.Outcome(false, "Cancelled.")
+        providerTestLabel.text = "<html>${if (o.ok) "✔" else "✘"} ${StringUtil.escapeXmlEntities(o.message)}</html>"
+        providerTestLabel.foreground = if (o.ok) UIUtil.getLabelForeground() else UIUtil.getErrorForeground()
+        providerTestShown.set(true)
     }
 
     private fun recheckAll() {

@@ -341,6 +341,15 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         @JvmField var explainModel: String = ""
 
         /**
+         * The [ProviderProfile.id] Explain This runs on; blank (the default) is Claude Code's own setup, with
+         * nothing injected. With a profile, [explainModel] is not read: the profile's model is the model.
+         */
+        @JvmField var explainProvider: String = ""
+
+        /** The user's provider profiles. **No key in here** — see [ProviderKeys]. */
+        @JvmField var providers: MutableList<ProviderProfile> = mutableListOf()
+
+        /**
          * How much walkthrough to ask for: [DEPTH_BRIEF], [DEPTH_STANDARD], [DEPTH_DETAILED] or [DEPTH_DEEP].
          * Prompt text only — nothing else in the pipeline reads it, and it narrows what `docs/plan-schema.md`
          * allows rather than adding to it. **Depth buys back wall-clock time by bounding reach**: at xhigh, Deep's

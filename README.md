@@ -161,6 +161,29 @@ and a one-time setup offer appears. Verify the TTS server standalone with
 `python ~/.claude/skills/audio-explainer/scripts/tts_server.py --check` (→ `"ready":true`) or, with no
 model, `--synthetic` (a sine tone proves the audio path).
 
+## Other models — unsupported by Anthropic
+Explain This can run on a model other than Claude by pointing **your own Claude Code** at another provider.
+The prompt and the skill stay the same; only the model behind the agent changes. Anthropic does not
+endorse or support routing Claude Code to non-Claude models, and the plugin ships neither the CLI nor a key.
+
+- **Settings → Tools → Audio Explainer → Explanation → Provider → Manage…** adds a profile from a preset:
+  OpenRouter, DeepSeek, Kimi, GLM (Z.ai), Qwen, Ollama or Custom. Each profile has a name, a base URL (the
+  Anthropic-style endpoint), a model id and an API key. The key goes to the IDE password safe, never into
+  `audioExplainer.xml`.
+- **Provider** selects a profile; "Claude Code (your own setup)" is the default and injects nothing. With a
+  profile selected, **Model** is that profile's model id (editable), and Effort and Depth work as before.
+  For OpenRouter, **Browse…** beside it fetches OpenRouter's public model list (no key is sent) and shows
+  the models with tool use, with price per million tokens and context size; type to filter.
+- **Test connection** asks the provider for one word through your Claude Code and reports the answer, a
+  rejected key, or the provider's error.
+- **Your code is sent to the provider.** Free models (`:free` on OpenRouter) may train on what they are sent.
+  Cost is the provider's; the run log shows `cost n/a` because the CLI prices every token as Claude's.
+- Verified on OpenRouter with `z-ai/glm-5.3-flash` and `deepseek/deepseek-v4.1-flash`; the other presets
+  follow each provider's documentation.
+- How it works: each run gets a short-lived `--settings` file whose `env` sets `ANTHROPIC_BASE_URL`, the
+  token and every model slot. The file is deleted when the run ends, and a rejected key (401/403) stops the
+  run at the first retry instead of after the CLI's ~3 minutes of retries.
+
 ## Notes
 - Verify `org.jetbrains.intellij.platform` (2.5.0), Kotlin (2.1.0), and the Rider version against
   current releases before the first build — bump if Gradle reports resolution errors.

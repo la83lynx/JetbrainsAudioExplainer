@@ -89,6 +89,20 @@ class ClaudeExplainer {
         val effort = request.effort ?: state.explainEffort
         val model = state.explainModel // no per-run model control — see Effort.md's dialog table
         val depth = request.depth ?: state.explainDepth
+        // **A provider profile** swaps the service behind Claude Code, not the prompt. Its model is
+        // the model, so the timings learn it apart from Claude's; null is Claude Code's own setup, untouched.
+        val profile = Providers.selected(state)
+        val runModel = profile?.model?.trim() ?: model
+        val providerKey = profile?.let { runCatching { ProviderKeys.get(it.id) }.getOrNull() }
+        if (profile != null && providerKey == null && Providers.needsKey(profile)) {
+            val why = "No API key is set for ${profile.name}."
+            tracker.fail(why)
+            notify(
+                project, NotificationType.ERROR, "Explain This: no API key",
+                "${StringUtil.escapeXmlEntities(why)} Set it in Settings → Tools → Audio Explainer → Explanation → Manage….",
+            )
+            return
+        }
         // The run's own directory (`Saving.md` B): the plans it sends are kept there, and the JSON it POSTs
         // when it has to, so no payload lands in the project.
         val planDir = createPlanDir()
@@ -97,7 +111,19 @@ class ClaudeExplainer {
         val server = service<ExplainerServerService>().server
         val early = EarlyPlan(project, tracker)
         var tool = planDir?.let { openTool(server, it, early) }
+        var settingsFile: Path? = null
         try {
+            if (profile != null) {
+                settingsFile = try {
+                    ProviderFiles.write(Providers.settingsJson(profile, providerKey))
+                } catch (e: Exception) {
+                    log.warn("could not write the provider settings file", e)
+                    tracker.fail("Could not write the provider settings file.")
+                    notify(project, NotificationType.ERROR, "Explain This failed", errorHtml(e.message))
+                    keepPlanDir = false
+                    return
+                }
+            }
             fun attempt(tool: ToolRoute?): RunResult? {
                 val prompt = ExplainPrompt.buildPrompt(
                     request, skillDir, resolveLanguage(), depth, request.extraInstructions, planDir,
@@ -105,7 +131,7 @@ class ClaudeExplainer {
                 )
                 val cmd = try {
                     GeneralCommandLine(claudeExe.toString())
-                        .withParameters(ExplainPrompt.buildArgs(prompt, effort, model, planDir, tool?.config))
+                        .withParameters(ExplainPrompt.buildArgs(prompt, effort, model, planDir, tool?.config, settingsFile))
                         .withWorkDirectory(workDir)
                         .withCharset(StandardCharsets.UTF_8)
                         .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
@@ -118,15 +144,16 @@ class ClaudeExplainer {
 
                 log.info(
                     "explain run started: ${request.displayName} (${request.scope.name.lowercase()}), " +
-                        "effort=${effort.ifBlank { "inherited" }}, depth=$depth, model=${model.ifBlank { "default" }}, " +
+                        "effort=${effort.ifBlank { "inherited" }}, depth=$depth, " +
+                        (profile?.let { "provider=${it.name}, " } ?: "") + "model=${runModel.ifBlank { "default" }}, " +
                         "plan via ${if (tool != null) "the set_plan tool" else "POST"}",
                 )
                 indicator.text = "Claude is reading ${request.displayName} and planning the walkthrough…"
                 tracker.progress("Reading ${request.displayName} and planning…")
                 val timings = ExplainTimings.getInstance()
-                val progress = ExplainProgress(timings.expected(effort, depth, model))
+                val progress = ExplainProgress(timings.expected(effort, depth, runModel))
                 val result = try {
-                    runClaude(cmd, indicator, progress, tracker::progress, early::offer, needsTool = tool != null)
+                    runClaude(cmd, indicator, progress, tracker::progress, early::offer, needsTool = tool != null, provider = profile?.name)
                 } catch (e: Exception) {
                     log.warn("claude invocation failed", e)
                     tracker.fail(e.message ?: "Claude invocation failed.")
@@ -134,9 +161,9 @@ class ClaudeExplainer {
                     return null
                 }
                 if (!result.cancelled && result.toolDown == null) {
-                    log.info("explain run shape ${ExplainTimings.key(effort, depth, model)}: ${progress.report()}")
+                    log.info("explain run shape ${ExplainTimings.key(effort, depth, runModel)}: ${progress.report()}")
                     // Only a run that finished cleanly teaches the bar what this combination takes.
-                    if (!result.isError) progress.observed()?.let { timings.record(effort, depth, model, it) }
+                    if (!result.isError) progress.observed()?.let { timings.record(effort, depth, runModel, it) }
                 }
                 return result
             }
@@ -151,6 +178,8 @@ class ClaudeExplainer {
             keepPlanDir = !reportResult(project, request, result, tracker, announced = early.loaded)
         } finally {
             tool?.close(server)
+            // Always, even when the plan directory is kept as evidence: the key in it is live.
+            ProviderFiles.delete(settingsFile)
             disposePlanDir(planDir, keepPlanDir)
         }
     }
@@ -241,6 +270,7 @@ class ClaudeExplainer {
         onActivity: (String, Double?) -> Unit,
         onPlanWritten: (String) -> Unit,
         needsTool: Boolean,
+        provider: String? = null,
     ): RunResult {
         val handler = OSProcessHandler(cmd)
         val lock = Any()
@@ -249,6 +279,9 @@ class ClaudeExplainer {
         val finalText = AtomicReference<String?>(null)
         val isError = AtomicBoolean(false)
         val toolDown = AtomicReference<String?>(null)
+        // A provider run only: a rejected key stops the run, any other retry shows in the progress text.
+        val authStop = AtomicReference<Providers.Retry?>(null)
+        var retryNote: String? = null
         val timeline = RunTimeline()
 
         handler.addProcessListener(object : ProcessListener {
@@ -264,8 +297,17 @@ class ClaudeExplainer {
                     while (nl >= 0) {
                         val line = lineBuf.substring(0, nl)
                         lineBuf.delete(0, nl + 1)
-                        processStreamLine(line, finalText, isError, timeline, progress, onPlanWritten)
+                        processStreamLine(line, finalText, isError, timeline, progress, onPlanWritten, provider)
                         if (needsTool && toolDown.get() == null) toolStatus(line)?.let(toolDown::set)
+                        if (provider != null) {
+                            val retry = Providers.retry(line)
+                            when {
+                                retry == null -> retryNote = null
+                                retry.authRejected -> authStop.compareAndSet(null, retry)
+                                else -> retryNote = "$provider busy (${retry.status ?: retry.error ?: "error"}), " +
+                                    "retrying (${retry.attempt ?: "?"}/${retry.maxRetries ?: "?"})…"
+                            }
+                        }
                         nl = lineBuf.indexOf("\n")
                     }
                 }
@@ -277,7 +319,7 @@ class ClaudeExplainer {
         indicator.isIndeterminate = false
         var shown: Pair<Int, String>? = null
         fun publish() {
-            val (fraction, activity) = synchronized(lock) { progress.fraction() to progress.activity() }
+            val (fraction, activity) = synchronized(lock) { progress.fraction() to (retryNote ?: progress.activity()) }
             val now = (fraction * 100).toInt() to activity
             if (now == shown) return
             shown = now
@@ -293,7 +335,7 @@ class ClaudeExplainer {
                 handler.destroyProcess()
                 handler.waitFor(2000)
                 log.info("explain run cancelled at ${timeline.at()} after ${timeline.tools} tool call(s)")
-                return RunResult(-1, null, isError = false, cancelled = true, stderrTail = tail(synchronized(lock) { stderr.toString() }))
+                return RunResult(-1, null, isError = false, cancelled = true, stderrTail = stderrTail(synchronized(lock) { stderr.toString() }))
             }
             // Stopped at its first event: a run asked to call a tool it does not have would only report that it
             // has not, after reading the code and writing the plan.
@@ -301,6 +343,18 @@ class ClaudeExplainer {
                 handler.destroyProcess()
                 handler.waitFor(2000)
                 return RunResult(-1, null, isError = true, cancelled = false, stderrTail = "", toolDown = why)
+            }
+            // Stopped at the first 401/403: the CLI would retry a rejected key 10 times, ~3 minutes of backoff.
+            authStop.get()?.let { retry ->
+                handler.destroyProcess()
+                handler.waitFor(2000)
+                log.info("explain run stopped at ${timeline.at()}: $provider rejected the API key (HTTP ${retry.status})")
+                return RunResult(
+                    -1,
+                    "$provider rejected the API key (HTTP ${retry.status}). Check it in Settings → Tools → " +
+                        "Audio Explainer → Explanation → Manage….",
+                    isError = true, cancelled = false, stderrTail = "",
+                )
             }
         }
 
@@ -311,7 +365,7 @@ class ClaudeExplainer {
             finalText = finalText.get(),
             isError = isError.get() || exit != 0,
             cancelled = false,
-            stderrTail = tail(synchronized(lock) { stderr.toString() }),
+            stderrTail = stderrTail(synchronized(lock) { stderr.toString() }),
             toolDown = toolDown.get()?.takeIf { it != CONNECTED },
         )
     }
@@ -371,6 +425,7 @@ class ClaudeExplainer {
         timeline: RunTimeline,
         progress: ExplainProgress,
         onPlanWritten: (String) -> Unit,
+        provider: String?,
     ) {
         val trimmed = line.trim()
         if (trimmed.isEmpty()) return
@@ -400,7 +455,10 @@ class ClaudeExplainer {
                     "explain run finished at ${timeline.at()}: ${timeline.tools} tool call(s), " +
                         "${num("num_turns")} turn(s), api ${num("duration_api_ms")} ms, " +
                         "${usage?.get("output_tokens")?.jsonPrimitive?.contentOrNull} output token(s), " +
-                        "cost \$${num("total_cost_usd")}, ${num("subtype")}",
+                        // Off Claude the CLI still prices the tokens as Claude's ($0.68-2.02 for runs that cost
+                        // $0-0.03 when tested), so the number would only mislead.
+                        (if (provider != null) "cost n/a ($provider)" else "cost \$${num("total_cost_usd")}") +
+                        ", ${num("subtype")}",
                 )
                 finalText.set(obj["result"]?.jsonPrimitive?.contentOrNull)
                 val subtype = obj["subtype"]?.jsonPrimitive?.contentOrNull
@@ -572,6 +630,9 @@ class ClaudeExplainer {
 
     private fun errorHtml(message: String?): String =
         StringUtil.escapeXmlEntities(StringUtil.shortenTextWithEllipsis(message ?: "Unknown error", 600, 0))
+
+    /** The end of stderr, without the lines every provider run prints and none of which is a failure. */
+    private fun stderrTail(s: String): String = tail(Providers.dropHarmlessStderr(s))
 
     private fun tail(s: String, max: Int = 600): String =
         if (s.length <= max) s else "…" + s.substring(s.length - max)
