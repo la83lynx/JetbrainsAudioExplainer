@@ -113,7 +113,8 @@ class AudioExplainerSwingSidebar(
             when (gen.phase) {
                 ExplainPhase.GENERATING -> {
                     genLabel.text = "⏳ Generating${if (gen.displayName.isNotEmpty()) ": ${gen.displayName}" else "…"}" +
-                        (gen.fraction?.let { " — ${(it * 100).toInt()}%" } ?: "")
+                        (gen.fraction?.let { " — ${(it * 100).toInt()}%" } ?: "") +
+                        (gen.warning.takeIf { it.isNotEmpty() }?.let { " — ⚠ $it" } ?: "")
                     genLabel.isVisible = true
                 }
                 ExplainPhase.FAILED -> {

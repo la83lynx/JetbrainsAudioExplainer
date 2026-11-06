@@ -132,7 +132,10 @@ Saves write the same file with no dialog, the caret's **Save As…** always asks
 different walkthrough). An unsaved walkthrough is asked about before a new generation, the sidebar's
 Close, or the project closing. The idle view lists saved walkthroughs to reload — only files the saver
 could have written, so an agent's stray POST payload never shows as a blank row. Audio (speed/voice + narration) is stubbed until the TTS phase. If JCEF is unavailable, the
-window falls back to a plain Swing control panel wired to the same walkthrough.
+window falls back to a plain Swing control panel wired to the same walkthrough. While a walkthrough generates,
+the banner's **Run log** (also **Tools → Audio Explainer → Show Run Log**, or the tool window's title button)
+lists every step of the run as it happens: each read, each think and how long it took, the plan sent and the
+plugin's reply, and how the run ended. The last run's log stays available after it ends.
 
 **Phase 5 check:** open a file, right-click in the editor → **Explain This (Audio)** appears (and is
 enabled only with a file open). Place the caret in a method (or select some code) and click it: an
@@ -176,6 +179,10 @@ endorse or support routing Claude Code to non-Claude models, and the plugin ship
   the models with tool use, with price per million tokens and context size; type to filter.
 - **Test connection** asks the provider for one word through your Claude Code and reports the answer, a
   rejected key, or the provider's error.
+- **A run that loops.** When the model re-reads what it already read for the 4th time, the banner, the
+  status bar and the "Walkthrough ready" notification warn that it may have lost the task. The run log
+  shows which OpenRouter host served each turn; if one host keeps looping, add it to **Ignored Providers**
+  in your OpenRouter account's preferences.
 - **Your code is sent to the provider.** Free models (`:free` on OpenRouter) may train on what they are sent.
   Cost is the provider's; the run log shows `cost n/a` because the CLI prices every token as Claude's.
 - Verified on OpenRouter with `z-ai/glm-5.3-flash` and `deepseek/deepseek-v4.1-flash`; the other presets

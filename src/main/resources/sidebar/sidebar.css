@@ -75,8 +75,25 @@
     background: var(--ae-accent);
     transition: width 0.25s linear;
 }
-/* Collapsed: single compact line — hide the activity detail, keep spinner + title. */
+/* RunLog's loop warning: wraps rather than ellipsises, since it is the line that says what to do. */
+.gen-warning {
+    font-size: 11px;
+    color: #d19a3a;
+    margin-top: 4px;
+}
+/* Collapsed: single compact line — hide the activity detail, keep spinner + title. The warning stays. */
 .gen-banner.collapsed .gen-activity { display: none; }
+.gen-textbtn {
+    flex: 0 0 auto;
+    background: transparent;
+    border: 1px solid var(--ae-border);
+    border-radius: 4px;
+    color: var(--ae-fg-dim);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 7px;
+}
+.gen-textbtn:hover { background: var(--ae-btn-hover); color: var(--ae-fg); }
 .gen-iconbtn {
     flex: 0 0 auto;
     background: transparent;

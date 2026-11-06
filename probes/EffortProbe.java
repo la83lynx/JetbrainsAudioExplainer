@@ -10,6 +10,7 @@ import com.audioexplainer.ExplainPrompt;
 import com.audioexplainer.ExplainRequest;
 import com.audioexplainer.ListedModel;
 import com.audioexplainer.ProviderModels;
+import com.audioexplainer.RunLog;
 import com.audioexplainer.ExplainScope;
 import com.audioexplainer.Language;
 import com.audioexplainer.Languages;
@@ -747,6 +748,7 @@ public final class EffortProbe {
         toolRoute();
         providers();
         providerModels();
+        runLog();
 
         System.out.println();
         System.out.println(pass + " pass / " + fail + " fail");
@@ -758,6 +760,84 @@ public final class EffortProbe {
      * `api_retry` classifier that stops a rejected key, and a state round trip with no key in it. The Claude Code
      * run is every control: with no profile, nothing here may have moved.
      */
+    static String tool(String id, String name, String input, String provider) {
+        return "{\"type\":\"assistant\",\"message\":{\"provider\":\"" + provider + "\",\"content\":[{\"type\":\"tool_use\",\"id\":\""
+                + id + "\",\"name\":\"" + name + "\",\"input\":" + input + "}]}}";
+    }
+
+    /**
+     * **The run log**: a line per read, think, plan and reply; the host only when it changes; and the loop warning
+     * at the 4th re-read of a range already read — not for a big file paged in disjoint chunks.
+     */
+    static void runLog() {
+        double[] t = {100};
+        RunLog log = new RunLog("Foo.cs", () -> t[0]);
+        String schema = "{\"file_path\":\"C:/skill/docs/plan-schema.md\"}";
+        log.onEvent(ev(tool("t1", "Read", schema, "Makora")));
+        t[0] = 101;
+        log.onEvent(ev("{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\"}}}"));
+        log.onEvent(ev("{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens_delta\":11400}"));
+        t[0] = 170.4;
+        log.onEvent(ev("{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\"}}}"));
+        // A 6000-line file paged in three disjoint reads: none is a re-read.
+        for (int i = 0; i < 3; i++) {
+            log.onEvent(ev(tool("p" + i, "Read", "{\"file_path\":\"/src/Big.cs\",\"offset\":" + (1 + 2000 * i) + ",\"limit\":2000}", "Makora")));
+        }
+        List<String> a = log.snapshot();
+        check("run log: a read is its file name (" + a.get(1) + ")", a.get(1).endsWith("  Read plan-schema.md") && a.get(1).startsWith("    0.0s"));
+        check("  the host is a line of its own, and only once while it stays (" + a.get(0) + ")",
+                a.get(0).endsWith("Host: Makora") && a.stream().filter(l -> l.contains("Host:")).count() == 1);
+        check("  a think is stamped where it began, with its length and tokens (" + a.get(2) + ")",
+                a.get(2).equals("    1.0s  Thinking 69.4s, ~11.4k tokens"));
+        check("  a file paged in disjoint ranges is no re-read (" + a.get(3) + ")",
+                log.getRereads() == 0 && a.get(3).endsWith("Read Big.cs lines 1–2000"));
+        log.onEvent(ev(tool("r1", "Read", schema, "OpenInference")));
+        log.onEvent(ev(tool("r2", "Read", "{\"file_path\":\"C:/skill/docs/PLAN-SCHEMA.md\",\"offset\":120,\"limit\":150}", "OpenInference")));
+        log.onEvent(ev(tool("r3", "Read", "{\"file_path\":\"/src/Big.cs\",\"offset\":1500,\"limit\":100}", "OpenInference")));
+        check("  overlapping reads count, path case ignored, and no warning yet at 3",
+                log.getRereads() == 3 && log.getWarning() == null);
+        check("  a host change is logged", log.snapshot().stream().anyMatch(l -> l.endsWith("Host: OpenInference")));
+        log.onEvent(ev(tool("r4", "Read", schema, "OpenInference")));
+        List<String> b = log.snapshot();
+        check("  the 4th re-read warns (" + log.getWarning() + ")",
+                log.getRereads() == 4 && "May be looping: 4 re-reads of files it already read (last plan-schema.md)".equals(log.getWarning())
+                        && b.get(b.size() - 1).contains("⚠ The model keeps re-reading") && b.get(b.size() - 2).endsWith("⟲ re-read 4"));
+        log.onEvent(ev(tool("s1", McpEndpoint.QUALIFIED_TOOL, "{\"frames\":[{},{},{}],\"steps\":[{},{}]}", "OpenInference")));
+        log.onEvent(ev("{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"s1\",\"content\":[{\"type\":\"text\","
+                + "\"text\":\"{\\\"ok\\\":true,\\\"frames\\\":3,\\\"steps\\\":2,\\\"issues\\\":[\\\"[info] relation.endpoint-not-kept — x\\\"]}\"}]}]}}"));
+        log.onEvent(ev("{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"r4\",\"is_error\":true,"
+                + "\"content\":\"<tool_use_error>Page range exceeds maximum</tool_use_error>\"}]}}"));
+        List<String> c = log.snapshot();
+        int n = c.size();
+        check("  set_plan: its sizes, the reply, and each issue on a line (" + c.subList(n - 4, n) + ")",
+                c.get(n - 4).endsWith("set_plan: 3 frame(s), 2 step(s)") && c.get(n - 3).endsWith("  → ok, 3 frame(s), 2 step(s), 1 issue(s)")
+                        && c.get(n - 2).endsWith("      [info] relation.endpoint-not-kept — x"));
+        check("  a failed tool says so", c.get(n - 1).endsWith("  ✖ Read failed: <tool_use_error>Page range exceeds maximum</tool_use_error>"));
+        log.retry("OpenRouter busy (429), retrying (1/10)…");
+        log.retry("OpenRouter busy (429), retrying (1/10)…");
+        log.retry("OpenRouter busy (429), retrying (2/10)…");
+        check("  a retry is logged once per attempt", log.snapshot().size() == n + 2);
+        List<String> seen = new ArrayList<>();
+        String[] verdict = {null};
+        RunLog.Listener l = new RunLog.Listener() {
+            public void onLine(String line) { seen.add(line); }
+            public void onEnd(boolean ok, String summary) { verdict[0] = ok + " " + summary; }
+        };
+        log.subscribe(l);
+        check("  a window opened mid-run gets every line so far", seen.equals(log.snapshot()));
+        log.note("Finished: 9 turn(s)");
+        log.end(true, "Walkthrough loaded.");
+        log.end(false, "late");
+        check("  then the new lines and the first verdict only (" + verdict[0] + ")",
+                seen.size() == log.snapshot().size() && "true Walkthrough loaded.".equals(verdict[0]));
+        List<String> late = new ArrayList<>();
+        log.subscribe(new RunLog.Listener() {
+            public void onLine(String line) { late.add(line); }
+            public void onEnd(boolean ok, String summary) { late.add("END " + summary); }
+        });
+        check("  one opened after the run gets the lines and the verdict", late.size() == seen.size() + 1 && late.get(late.size() - 1).equals("END Walkthrough loaded."));
+    }
+
     static void providerModels() {
         String body = "{\"data\":["
                 + "{\"id\":\"z-ai/glm-5.3-flash\",\"name\":\"GLM\",\"pricing\":{\"prompt\":\"0.00000015\",\"completion\":\"0.0000005\"},"

@@ -1449,6 +1449,9 @@ document.getElementById("gen-dismiss").addEventListener("click", () => {
 	document.getElementById("generation-banner").style.display = "none";
 	forceFullRepaint();
 });
+document.getElementById("gen-log").addEventListener("click", () => {
+	vscode.postMessage({ type: "show_run_log" });
+});
 document.getElementById("gen-collapse").addEventListener("click", () => {
 	const banner = document.getElementById("generation-banner");
 	const btn = document.getElementById("gen-collapse");
@@ -1624,6 +1627,11 @@ window.addEventListener("message", (event) => {
 					? `Generating: ${msg.displayName}`
 					: "Generating walkthrough…") + (pct !== null ? ` — ${pct}%` : "");
 				activity.textContent = msg.activity || "";
+				const warning = document.getElementById("gen-warning");
+				const hadWarning = warning.style.display !== "none";
+				warning.textContent = msg.warning ? `⚠ ${msg.warning}` : "";
+				warning.style.display = msg.warning ? "" : "none";
+				if (hadWarning !== !!msg.warning) forceFullRepaint(); // the strip grows a line
 				const bar = document.getElementById("gen-bar");
 				bar.style.display = pct !== null ? "" : "none";
 				if (pct !== null) document.getElementById("gen-bar-fill").style.width = `${msg.fraction * 100}%`;
@@ -1636,6 +1644,7 @@ window.addEventListener("message", (event) => {
 				dismiss.style.display = "";
 				title.textContent = "Generation failed";
 				activity.textContent = msg.message || "";
+				document.getElementById("gen-warning").style.display = "none";
 				document.getElementById("gen-bar").style.display = "none";
 			} else {
 				// idle

@@ -359,6 +359,7 @@ class AudioExplainerSidebar(
             put("activity", state.activity)
             state.fraction?.let { put("fraction", it) }
             put("message", state.message)
+            put("warning", state.warning)
         })
     }
 
@@ -450,6 +451,9 @@ class AudioExplainerSidebar(
             // Phase 7.5 #5 — undo/keep the walkthrough that a generation just replaced.
             "restore_previous" -> walkthrough.restorePrevious()
             "dismiss_replace" -> walkthrough.clearPrevious()
+            "show_run_log" -> ApplicationManager.getApplication().invokeLater {
+                if (!project.isDisposed) RunLogWindow.show(project, ExplainSessionTracker.getInstance(project).lastLog)
+            }
             "request_saved_list" -> pushSavedList()
             // The split button (`Saving.md` C): Save writes the file this walkthrough already is, or asks once;
             // the caret's Save As… always asks.

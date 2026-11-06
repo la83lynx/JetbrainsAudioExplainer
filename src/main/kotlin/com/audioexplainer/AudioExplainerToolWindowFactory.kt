@@ -1,5 +1,6 @@
 package com.audioexplainer
 
+import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
@@ -30,5 +31,7 @@ class AudioExplainerToolWindowFactory : ToolWindowFactory {
         }
         val content = ContentFactory.getInstance().createContent(component, "", false)
         toolWindow.contentManager.addContent(content)
+        // The last run's log, after the banner is gone — a run that succeeds clears it as its plan lands.
+        ActionManager.getInstance().getAction("AudioExplainer.ShowRunLog")?.let { toolWindow.setTitleActions(listOf(it)) }
     }
 }

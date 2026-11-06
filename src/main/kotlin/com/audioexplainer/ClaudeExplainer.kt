@@ -6,6 +6,7 @@ import com.intellij.execution.process.ProcessListener
 import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.process.ProcessOutputTypes
 import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.PathManager
@@ -61,7 +62,8 @@ class ClaudeExplainer {
         // Surface the generation inside the tool window (Phase 7.5 #5): flip the project-scoped tracker
         // and make the sidebar visible so its loading banner shows while Claude works.
         val tracker = ExplainSessionTracker.getInstance(project)
-        tracker.startGenerating(request.displayName)
+        val runLog = RunLog(request.displayName)
+        tracker.startGenerating(request.displayName, runLog)
         ensureToolWindowVisible(project)
 
         val claudeExe = findClaudeExecutable()
@@ -109,7 +111,7 @@ class ClaudeExplainer {
         // **Kept unless the run succeeds**: a failed run's payloads are the evidence of what it sent.
         var keepPlanDir = true
         val server = service<ExplainerServerService>().server
-        val early = EarlyPlan(project, tracker)
+        val early = EarlyPlan(project, tracker, runLog)
         var tool = planDir?.let { openTool(server, it, early) }
         var settingsFile: Path? = null
         try {
@@ -119,7 +121,7 @@ class ClaudeExplainer {
                 } catch (e: Exception) {
                     log.warn("could not write the provider settings file", e)
                     tracker.fail("Could not write the provider settings file.")
-                    notify(project, NotificationType.ERROR, "Explain This failed", errorHtml(e.message))
+                    notify(project, NotificationType.ERROR, "Explain This failed", errorHtml(e.message), runLog)
                     keepPlanDir = false
                     return
                 }
@@ -142,22 +144,22 @@ class ClaudeExplainer {
                     return null
                 }
 
-                log.info(
-                    "explain run started: ${request.displayName} (${request.scope.name.lowercase()}), " +
-                        "effort=${effort.ifBlank { "inherited" }}, depth=$depth, " +
-                        (profile?.let { "provider=${it.name}, " } ?: "") + "model=${runModel.ifBlank { "default" }}, " +
-                        "plan via ${if (tool != null) "the set_plan tool" else "POST"}",
-                )
+                val startLine = "${request.displayName} (${request.scope.name.lowercase()}), " +
+                    "effort=${effort.ifBlank { "inherited" }}, depth=$depth, " +
+                    (profile?.let { "provider=${it.name}, " } ?: "") + "model=${runModel.ifBlank { "default" }}, " +
+                    "plan via ${if (tool != null) "the set_plan tool" else "POST"}"
+                log.info("explain run started: $startLine")
+                runLog.note("Started: $startLine")
                 indicator.text = "Claude is reading ${request.displayName} and planning the walkthrough…"
                 tracker.progress("Reading ${request.displayName} and planning…")
                 val timings = ExplainTimings.getInstance()
                 val progress = ExplainProgress(timings.expected(effort, depth, runModel))
                 val result = try {
-                    runClaude(cmd, indicator, progress, tracker::progress, early::offer, needsTool = tool != null, provider = profile?.name)
+                    runClaude(cmd, indicator, progress, runLog, tracker::progress, early::offer, needsTool = tool != null, provider = profile?.name)
                 } catch (e: Exception) {
                     log.warn("claude invocation failed", e)
                     tracker.fail(e.message ?: "Claude invocation failed.")
-                    notify(project, NotificationType.ERROR, "Explain This failed", errorHtml(e.message))
+                    notify(project, NotificationType.ERROR, "Explain This failed", errorHtml(e.message), runLog)
                     return null
                 }
                 if (!result.cancelled && result.toolDown == null) {
@@ -171,11 +173,12 @@ class ClaudeExplainer {
             var result = attempt(tool) ?: return
             if (result.toolDown != null) {
                 log.info("explain run: the set_plan tool did not connect (${result.toolDown}); starting again with the POST")
+                runLog.note("The set_plan tool did not connect (${result.toolDown}); starting again, sending the plan by POST")
                 tool?.close(server)
                 tool = null
                 result = attempt(null) ?: return
             }
-            keepPlanDir = !reportResult(project, request, result, tracker, announced = early.loaded)
+            keepPlanDir = !reportResult(project, request, result, tracker, runLog, announced = early.loaded)
         } finally {
             tool?.close(server)
             // Always, even when the plan directory is kept as evidence: the key in it is live.
@@ -267,7 +270,8 @@ class ClaudeExplainer {
         cmd: GeneralCommandLine,
         indicator: ProgressIndicator,
         progress: ExplainProgress,
-        onActivity: (String, Double?) -> Unit,
+        runLog: RunLog,
+        onActivity: (String, Double?, String?) -> Unit,
         onPlanWritten: (String) -> Unit,
         needsTool: Boolean,
         provider: String? = null,
@@ -297,15 +301,19 @@ class ClaudeExplainer {
                     while (nl >= 0) {
                         val line = lineBuf.substring(0, nl)
                         lineBuf.delete(0, nl + 1)
-                        processStreamLine(line, finalText, isError, timeline, progress, onPlanWritten, provider)
+                        processStreamLine(line, finalText, isError, timeline, progress, runLog, onPlanWritten, provider)
                         if (needsTool && toolDown.get() == null) toolStatus(line)?.let(toolDown::set)
                         if (provider != null) {
                             val retry = Providers.retry(line)
                             when {
                                 retry == null -> retryNote = null
                                 retry.authRejected -> authStop.compareAndSet(null, retry)
-                                else -> retryNote = "$provider busy (${retry.status ?: retry.error ?: "error"}), " +
-                                    "retrying (${retry.attempt ?: "?"}/${retry.maxRetries ?: "?"})…"
+                                else -> {
+                                    val note = "$provider busy (${retry.status ?: retry.error ?: "error"}), " +
+                                        "retrying (${retry.attempt ?: "?"}/${retry.maxRetries ?: "?"})…"
+                                    retryNote = note
+                                    runLog.retry(note)
+                                }
                             }
                         }
                         nl = lineBuf.indexOf("\n")
@@ -317,15 +325,20 @@ class ClaudeExplainer {
         // **One place moves the bar**, on a 200 ms beat: the stream can deliver hundreds of deltas a second,
         // and the bar has to advance when nothing is streaming at all.
         indicator.isIndeterminate = false
-        var shown: Pair<Int, String>? = null
+        val text = indicator.text
+        var shown: Triple<Int, String, String?>? = null
         fun publish() {
             val (fraction, activity) = synchronized(lock) { progress.fraction() to (retryNote ?: progress.activity()) }
-            val now = (fraction * 100).toInt() to activity
+            val warning = runLog.warning
+            val now = Triple((fraction * 100).toInt(), activity, warning)
             if (now == shown) return
+            if (warning != null && warning != shown?.third) log.info("explain run at ${timeline.at()}: $warning")
             shown = now
             indicator.fraction = fraction
+            // The warning takes the task's own line, so it shows in the status bar beside the task's stop button.
+            indicator.text = warning?.let { "⚠ $it" } ?: text
             indicator.text2 = activity
-            onActivity(activity, fraction)
+            onActivity(activity, fraction, warning)
         }
 
         handler.startNotify()
@@ -335,6 +348,7 @@ class ClaudeExplainer {
                 handler.destroyProcess()
                 handler.waitFor(2000)
                 log.info("explain run cancelled at ${timeline.at()} after ${timeline.tools} tool call(s)")
+                runLog.note("Cancelled after ${timeline.tools} tool call(s)")
                 return RunResult(-1, null, isError = false, cancelled = true, stderrTail = stderrTail(synchronized(lock) { stderr.toString() }))
             }
             // Stopped at its first event: a run asked to call a tool it does not have would only report that it
@@ -349,6 +363,7 @@ class ClaudeExplainer {
                 handler.destroyProcess()
                 handler.waitFor(2000)
                 log.info("explain run stopped at ${timeline.at()}: $provider rejected the API key (HTTP ${retry.status})")
+                runLog.note("Stopped: $provider rejected the API key (HTTP ${retry.status})")
                 return RunResult(
                     -1,
                     "$provider rejected the API key (HTTP ${retry.status}). Check it in Settings → Tools → " +
@@ -424,6 +439,7 @@ class ClaudeExplainer {
         isError: AtomicBoolean,
         timeline: RunTimeline,
         progress: ExplainProgress,
+        runLog: RunLog,
         onPlanWritten: (String) -> Unit,
         provider: String?,
     ) {
@@ -431,6 +447,7 @@ class ClaudeExplainer {
         if (trimmed.isEmpty()) return
         val obj = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull() ?: return
         progress.onEvent(obj)
+        runLog.onEvent(obj)
         when (obj["type"]?.jsonPrimitive?.contentOrNull) {
             "assistant" -> {
                 val content = obj["message"]?.jsonObject?.get("content") ?: return
@@ -451,15 +468,16 @@ class ClaudeExplainer {
             "result" -> {
                 fun num(key: String) = obj[key]?.jsonPrimitive?.contentOrNull
                 val usage = runCatching { obj["usage"]?.jsonObject }.getOrNull()
+                // Off Claude the CLI still prices the tokens as Claude's ($0.68-2.02 for runs that cost
+                // $0-0.03 when tested), so the number would only mislead.
+                val cost = if (provider != null) "cost n/a ($provider)" else "cost \$${num("total_cost_usd")}"
+                val tokens = usage?.get("output_tokens")?.jsonPrimitive?.contentOrNull
                 log.info(
                     "explain run finished at ${timeline.at()}: ${timeline.tools} tool call(s), " +
-                        "${num("num_turns")} turn(s), api ${num("duration_api_ms")} ms, " +
-                        "${usage?.get("output_tokens")?.jsonPrimitive?.contentOrNull} output token(s), " +
-                        // Off Claude the CLI still prices the tokens as Claude's ($0.68-2.02 for runs that cost
-                        // $0-0.03 when tested), so the number would only mislead.
-                        (if (provider != null) "cost n/a ($provider)" else "cost \$${num("total_cost_usd")}") +
-                        ", ${num("subtype")}",
+                        "${num("num_turns")} turn(s), api ${num("duration_api_ms")} ms, $tokens output token(s), " +
+                        "$cost, ${num("subtype")}",
                 )
+                runLog.note("Finished: ${num("num_turns")} turn(s), ${timeline.tools} tool call(s), $tokens output token(s), $cost")
                 finalText.set(obj["result"]?.jsonPrimitive?.contentOrNull)
                 val subtype = obj["subtype"]?.jsonPrimitive?.contentOrNull
                 val flagged = (obj["is_error"]?.jsonPrimitive?.contentOrNull == "true")
@@ -479,11 +497,13 @@ class ClaudeExplainer {
         request: ExplainRequest,
         result: RunResult,
         tracker: ExplainSessionTracker,
+        runLog: RunLog,
         announced: Boolean,
     ): Boolean {
         if (result.cancelled) {
+            runLog.end(false, "Cancelled.")
             tracker.finish() // clear the banner; the balloon reports the cancellation
-            notify(project, NotificationType.INFORMATION, "Explain This cancelled", "The walkthrough request was cancelled.")
+            notify(project, NotificationType.INFORMATION, "Explain This cancelled", "The walkthrough request was cancelled.", runLog)
             return true
         }
 
@@ -502,13 +522,15 @@ class ClaudeExplainer {
                     append("Claude did not produce a walkthrough (exit ${result.exitCode}).")
                     if (detail != null) append("<br/><br/>").append(errorHtml(detail))
                 },
+                runLog,
             )
             return false
         }
 
         if (planLoaded) {
+            runLog.end(true, "Walkthrough loaded: ${state.plan.frames.size} frame(s), ${state.plan.steps.size} step(s).")
             tracker.finish() // plan arrived via set_plan → walkthrough; the banner's job is done
-            if (!announced) announceReady(project, state)
+            if (!announced) announceReady(project, state, runLog)
             return true
         } else {
             // Claude reported success but no plan reached the server.
@@ -519,18 +541,24 @@ class ClaudeExplainer {
                     append("Claude finished but no walkthrough was received by the plugin.")
                     result.finalText?.takeIf { it.isNotBlank() }?.let { append("<br/><br/>").append(errorHtml(it)) }
                 },
+                runLog,
             )
         }
         return false
     }
 
-    private fun announceReady(project: Project, state: WalkthroughSnapshot) {
+    /** With the loop warning when the run had one: the plan arrived, but from a run that may have lost the task. */
+    private fun announceReady(project: Project, state: WalkthroughSnapshot, runLog: RunLog) {
         activateSidebar(project)
         notify(
             project, NotificationType.INFORMATION, "Walkthrough ready",
             "<b>${StringUtil.escapeXmlEntities(state.title)}</b> — ${state.plan.frames.size} frame(s), " +
                 "${state.plan.steps.size} step(s). " +
-                "Open the <b>Audio Explainer</b> tool window and press Play.",
+                "Open the <b>Audio Explainer</b> tool window and press Play." +
+                (runLog.warning?.let {
+                    "<br/><br/>⚠ ${StringUtil.escapeXmlEntities(it)}. Check that the walkthrough covers what you asked."
+                } ?: ""),
+            runLog,
         )
     }
 
@@ -550,7 +578,11 @@ class ClaudeExplainer {
      * walkthrough on screen and then swap it. The agent's POST of the same file is then a no-op
      * ([Walkthrough.setPlanUnlessShowing]) — no reload, no "replaced" banner, the reader's position kept.
      */
-    private inner class EarlyPlan(private val project: Project, private val tracker: ExplainSessionTracker) {
+    private inner class EarlyPlan(
+        private val project: Project,
+        private val tracker: ExplainSessionTracker,
+        private val runLog: RunLog,
+    ) {
         @Volatile
         var loaded = false
             private set
@@ -587,7 +619,7 @@ class ClaudeExplainer {
             if (loaded) return
             loaded = true
             tracker.finish()
-            announceReady(project, service<ExplainerServerService>().server.walkthrough.getState())
+            announceReady(project, service<ExplainerServerService>().server.walkthrough.getState(), runLog)
         }
     }
 
@@ -619,12 +651,14 @@ class ClaudeExplainer {
     private fun findClaudeExecutable(): Path? =
         ExecutableFinder.findClaude(AudioExplainerSettings.getInstance().state.claudeExecutablePath)
 
-    private fun notify(project: Project, type: NotificationType, title: String, content: String) {
+    /** With a "Run log" link when there is a run to show. */
+    private fun notify(project: Project, type: NotificationType, title: String, content: String, runLog: RunLog? = null) {
         ApplicationManager.getApplication().invokeLater {
-            NotificationGroupManager.getInstance()
+            val n = NotificationGroupManager.getInstance()
                 .getNotificationGroup(NOTIFICATION_GROUP)
                 .createNotification(title, content, type)
-                .notify(project)
+            if (runLog != null) n.addAction(NotificationAction.createSimple("Run log") { RunLogWindow.show(project, runLog) })
+            n.notify(project)
         }
     }
 

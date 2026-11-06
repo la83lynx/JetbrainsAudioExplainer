@@ -20,6 +20,8 @@ data class ExplainSessionState(
     val fraction: Double? = null,
     /** Failure detail (FAILED only). */
     val message: String = "",
+    /** [RunLog.warning]: the run may be looping. Empty while it is not. */
+    val warning: String = "",
 )
 
 /**
@@ -41,24 +43,36 @@ class ExplainSessionTracker {
     /** Current state — read by a freshly-created sidebar to catch up on a generation already running. */
     val current: ExplainSessionState get() = state.get()
 
+    /** The latest run's log in this project, kept after it ends for Show Run Log. */
+    @Volatile var lastLog: RunLog? = null
+        private set
+
     fun addListener(l: Listener) = listeners.add(l)
     fun removeListener(l: Listener) = listeners.remove(l)
 
-    fun startGenerating(displayName: String) =
+    @JvmOverloads
+    fun startGenerating(displayName: String, log: RunLog? = null) {
+        if (log != null) lastLog = log
         set(ExplainSessionState(ExplainPhase.GENERATING, displayName, activity = "Starting…"))
+    }
 
     /** Update the activity line — no-op unless a generation is in progress (ignores late/stray pings). */
     @JvmOverloads
-    fun progress(activity: String, fraction: Double? = null) {
+    fun progress(activity: String, fraction: Double? = null, warning: String? = null) {
         val s = state.get()
-        if (s.phase == ExplainPhase.GENERATING) set(s.copy(activity = activity, fraction = fraction ?: s.fraction))
+        if (s.phase == ExplainPhase.GENERATING) {
+            set(s.copy(activity = activity, fraction = fraction ?: s.fraction, warning = warning ?: s.warning))
+        }
     }
 
     /** Generation done (the plan, if any, arrives via the walkthrough) — clear the banner. */
     fun finish() = set(ExplainSessionState(ExplainPhase.IDLE))
 
-    fun fail(message: String) =
+    /** Also the run log's verdict, unless the run already gave it one. */
+    fun fail(message: String) {
+        lastLog?.end(false, message)
         set(ExplainSessionState(ExplainPhase.FAILED, state.get().displayName, message = message))
+    }
 
     private fun set(s: ExplainSessionState) {
         state.set(s)

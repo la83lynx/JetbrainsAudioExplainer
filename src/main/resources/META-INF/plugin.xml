@@ -71,6 +71,11 @@
                     class="com.audioexplainer.ConfigureTtsAction"
                     text="Audio engines…"
                     description="Open the per-engine narration settings: status, install Kokoro / language packs, Windows voices"/>
+            <action id="AudioExplainer.ShowRunLog"
+                    class="com.audioexplainer.ShowRunLogAction"
+                    text="Show Run Log"
+                    icon="AllIcons.Debugger.Console"
+                    description="Every step of the latest Explain This run: reads, thinking, the plan sent and its reply, the host"/>
         </group>
     </actions>
 </idea-plugin>
