@@ -48,6 +48,20 @@ class McpRun internal constructor(
     internal val onPlan: (ResolvedPlan, List<PlanIssue>) -> Unit,
 ) {
     internal val calls = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * When the agent first said `initialize` here (`System.nanoTime`), or 0: whether the tool connected, as the server
+     * saw it. Claude Code also reports it in its `init` event; an ACP agent reports nothing, so this is its only sign.
+     */
+    @Volatile
+    var connectedAt: Long = 0L
+        private set
+
+    val connected: Boolean get() = connectedAt != 0L
+
+    internal fun heard(method: String) {
+        if (method == "initialize" && connectedAt == 0L) connectedAt = System.nanoTime()
+    }
 }
 
 /**
@@ -346,7 +360,7 @@ class ExplainerServer {
             sendJson(ex, 401, error("Unauthorized")); return
         }
         val body = readBody(ex) ?: return
-        val response = McpEndpoint.handle(ex.requestMethod, body) { plan -> runPlan(run, plan) }
+        val response = McpEndpoint.handle(ex.requestMethod, body, { plan -> runPlan(run, plan) }, run::heard)
         if (response.body == null) {
             sendEmpty(ex, response.status); return
         }

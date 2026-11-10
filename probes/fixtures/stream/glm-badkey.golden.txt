@@ -1,0 +1,14 @@
+# glm-badkey: tool=1 provider=OpenRouter cancel=0
+    0.2s  0%  Starting Claude…
+    1.2s  1%  Starting Claude…
+== stop: auth rejected, HTTP 401
+== result
+isError=false toolDown=connected finalText=null
+== progress report
+no plan Write; 0 thinking token(s), 0 tool call(s)
+observed: null
+== early plans
+== run log (warning: null, rereads 0)
+    1.4s  Stopped: OpenRouter rejected the API key (HTTP 401)
+== idea.log
+explain run stopped at #s: OpenRouter rejected the API key (HTTP 401)

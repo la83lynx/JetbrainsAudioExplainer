@@ -59,6 +59,28 @@ object ExecutableFinder {
         )
     }
 
+    /**
+     * An ACP agent's executable ([command] `opencode` or `qwen`): [overridePath], then `PATH`, then where npm, opencode's
+     * own installer and scoop put them.
+     */
+    fun findAgent(command: String, overridePath: String?): Path? {
+        val home = Path.of(System.getProperty("user.home"))
+        return find(
+            command,
+            overridePath,
+            listOf(
+                home.resolve("AppData/Roaming/npm"),
+                home.resolve(".opencode/bin"),
+                home.resolve("scoop/shims"),
+                home.resolve(".local/bin"),
+                home.resolve(".npm-global/bin"),
+                Path.of("/usr/local/bin"),
+                Path.of("/opt/homebrew/bin"),
+                home.resolve("bin"),
+            ),
+        )
+    }
+
     private fun resolveInDir(dir: Path, name: String): Path? {
         for (candidate in withExtensions(name)) {
             val p = runCatching { dir.resolve(candidate) }.getOrNull() ?: continue

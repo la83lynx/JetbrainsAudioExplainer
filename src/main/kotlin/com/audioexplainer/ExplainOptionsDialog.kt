@@ -1,5 +1,6 @@
 package com.audioexplainer
 
+import com.audioexplainer.acp.AgentPresets
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
@@ -53,6 +54,20 @@ class ExplainOptionsDialog(project: Project?) : DialogWrapper(project) {
             .firstOrNull { it == settings.state.explainDepth } ?: AudioExplainerSettings.DEPTH_STANDARD
     }
 
+    /** The agent for this run, seeded from Settings (`Models.B.md` B2b). */
+    private val harnessCombo = ComboBox((listOf(AgentPresets.CLAUDE) + AgentPresets.ACP).toTypedArray()).apply {
+        renderer = SimpleListCellRenderer.create("") { AgentPresets.label(it ?: AgentPresets.CLAUDE) }
+        selectedItem = settings.state.explainHarness.takeIf { it == AgentPresets.CLAUDE || it in AgentPresets.ACP } ?: AgentPresets.CLAUDE
+    }
+
+    /** The provider profile for this run, `""` for none; seeded from Settings. */
+    private val providerCombo = ComboBox((listOf("") + settings.state.providers.map { it.id }).toTypedArray()).apply {
+        renderer = SimpleListCellRenderer.create("") { id ->
+            if (id.isNullOrEmpty()) "None — the agent's own setup" else settings.state.providers.firstOrNull { it.id == id }?.let { "${it.name} — ${it.model}" } ?: id
+        }
+        selectedItem = Providers.selected(settings.state)?.id ?: ""
+    }
+
     private val instructions = JBTextArea(4, 48).apply {
         lineWrap = true
         wrapStyleWord = true
@@ -82,6 +97,11 @@ class ExplainOptionsDialog(project: Project?) : DialogWrapper(project) {
 
     override fun createCenterPanel(): JComponent {
         val builder = FormBuilder.createFormBuilder()
+            .addLabeledComponent("Agent:", harnessCombo)
+            .addLabeledComponent("Provider:", providerCombo)
+            .addComponentToRightColumn(JBLabel("<html><body style='width:440px'>Anything but Claude Code with your own " +
+                "setup is <b>unsupported by Anthropic</b>. A provider sends your code to its service.</body></html>"))
+            .addSeparator()
             .addLabeledComponent("Effort:", effortSlider)
             .addComponentToRightColumn(effortNote)
             .addLabeledComponent("Depth:", depthCombo)
@@ -107,6 +127,12 @@ class ExplainOptionsDialog(project: Project?) : DialogWrapper(project) {
     fun effort(): String = AudioExplainerSettings.EFFORT_LEVELS[effortSlider.value]
 
     fun depth(): String = depthCombo.selectedItem as? String ?: AudioExplainerSettings.DEPTH_STANDARD
+
+    /** The agent for this run. */
+    fun harness(): String = harnessCombo.selectedItem as? String ?: AgentPresets.CLAUDE
+
+    /** The provider profile id for this run, `""` for none. */
+    fun provider(): String = providerCombo.selectedItem as? String ?: ""
 
     /** The typed text, or null when the box is empty — null is what keeps the prompt free of the block. */
     fun extraInstructions(): String? = instructions.text.trim().takeIf { it.isNotEmpty() }

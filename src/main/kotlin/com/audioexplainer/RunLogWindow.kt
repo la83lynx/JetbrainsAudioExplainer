@@ -41,6 +41,23 @@ object RunLogWindow {
     }
 }
 
+/**
+ * The tool window's stop button beside Show Run Log, there only while a run is: the status bar's × for the run,
+ * where the run is being watched.
+ */
+class CancelExplainAction : AnAction(), DumbAware {
+    override fun getActionUpdateThread() = ActionUpdateThread.BGT
+
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        ExplainSessionTracker.getInstance(project).cancel()
+    }
+
+    override fun update(e: AnActionEvent) {
+        e.presentation.isEnabledAndVisible = e.project?.let { ExplainSessionTracker.getInstance(it).isRunning } == true
+    }
+}
+
 /** Tools → Audio Explainer → Show Run Log, and the tool window's title button: the latest run in this project. */
 class ShowRunLogAction : AnAction(), DumbAware {
     override fun getActionUpdateThread() = ActionUpdateThread.BGT

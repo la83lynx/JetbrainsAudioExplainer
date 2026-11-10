@@ -2,6 +2,7 @@ package com.audioexplainer
 
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
+import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.project.Project
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicReference
@@ -50,10 +51,25 @@ class ExplainSessionTracker {
     fun addListener(l: Listener) = listeners.add(l)
     fun removeListener(l: Listener) = listeners.remove(l)
 
+    /**
+     * The running task's indicator, for the tool window's Cancel Explanation: cancelling it is what the status bar's
+     * × does, so the run stops the same way. Kept past [finish] — a plan announced early ends the banner while the
+     * agent may still be fixing it — and asked [isRunning] instead of cleared.
+     */
+    @Volatile private var indicator: ProgressIndicator? = null
+
     @JvmOverloads
-    fun startGenerating(displayName: String, log: RunLog? = null) {
+    fun startGenerating(displayName: String, log: RunLog? = null, indicator: ProgressIndicator? = null) {
         if (log != null) lastLog = log
+        if (indicator != null) this.indicator = indicator
         set(ExplainSessionState(ExplainPhase.GENERATING, displayName, activity = "Starting…"))
+    }
+
+    /** An Explain This run is in progress here and can still be cancelled. */
+    val isRunning: Boolean get() = indicator?.let { it.isRunning && !it.isCanceled } == true
+
+    fun cancel() {
+        indicator?.takeIf { it.isRunning }?.cancel()
     }
 
     /** Update the activity line — no-op unless a generation is in progress (ignores late/stray pings). */

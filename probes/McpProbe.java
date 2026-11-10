@@ -100,11 +100,13 @@ public final class McpProbe {
         HttpResponse<String> discover = post(url, run.getToken(), "{\"jsonrpc\":\"2.0\",\"id\":\"server-discover-probe-1\",\"method\":\"server/discover\"}");
         check("handshake: the CLI's server/discover probe is method-not-found, its string id echoed",
                 discover.statusCode() == 200 && discover.body().contains("-32601") && discover.body().contains("\"id\":\"server-discover-probe-1\""));
+        check("connected: not before the agent says initialize — a ping or a probe is not a connection", !run.getConnected());
         HttpResponse<String> init = post(url, run.getToken(), call(0, "initialize",
                 "{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"probe\",\"version\":\"0\"}}"));
         check("handshake: initialize answers the client's version, a tools capability and the server's name",
                 init.statusCode() == 200 && init.body().contains("\"protocolVersion\":\"2025-11-25\"")
                         && init.body().contains("\"tools\":{}") && init.body().contains("\"name\":\"" + McpEndpoint.SERVER_NAME + "\""));
+        check("connected: the run knows its agent connected once it has said initialize", run.getConnected());
         HttpResponse<String> note = post(url, run.getToken(), "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
         check("handshake: a notification is 202 with no body", note.statusCode() == 202 && note.body().isEmpty());
         HttpResponse<String> get = HTTP.send(HttpRequest.newBuilder(URI.create(url)).header("Authorization", "Bearer " + run.getToken()).build(),

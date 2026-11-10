@@ -191,6 +191,43 @@ endorse or support routing Claude Code to non-Claude models, and the plugin ship
   token and every model slot. The file is deleted when the run ends, and a rejected key (401/403) stops the
   run at the first retry instead of after the CLI's ~3 minutes of retries.
 
+### ACP agents: Explain This without Claude Code
+
+Explain This can also run on an agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com)
+instead of Claude Code. The prompt and the skill are the same, and the agent sends the walkthrough
+through the same `set_plan` tool.
+
+- **Settings → Tools → Audio Explainer → Explanation → Agent** picks the agent:
+  - **Claude Code** is the default.
+  - **opencode**: install `npm i -g opencode-ai` or use its installer.
+  - **Qwen Code**: install `npm i -g @qwen-code/qwen-code`. It needs Node.js 22 or newer.
+  - **Custom**: any command line that speaks ACP on stdio.
+- **Executable path.** Leave it blank to look on PATH and in the usual install directories.
+- **"Explain This (Audio) with…"** has Agent and Provider choices for a single run.
+- **The Provider row applies to the agent too.**
+  - With a profile, opencode and Qwen Code get its endpoint, model and key in their environment.
+  - "None" uses the agent's own configured model.
+  - Your agent's own configuration is never rewritten.
+  - Verified with OpenRouter. The other presets follow each provider's documentation.
+- **Read-only.** The agent may read and search the project and the skill, and send the plan. Every other
+  request is refused, including edits, shell commands and fetches, and refusals show in the run log.
+  opencode is also configured not to attempt edits, shell or web fetches at all, and Qwen Code is started in
+  its `default` approval mode, which asks before every edit and command.
+- **A Custom agent must be set to ask.** The plugin can refuse only what an agent asks about; one whose own
+  config allows a tool runs it without asking. When an edit, command or fetch completes that was never asked
+  about, the run stops the agent at once and fails, naming what it touched. That is after the fact, so check
+  the change.
+- **Unsaved edits are read.** An agent that hands its file reads to the IDE (Qwen Code does) gets the
+  editor's text.
+- **What an ACP run does not show:**
+  - which upstream host served each turn;
+  - the cost;
+  - while the plan is being written, its frame and step counts, because ACP sends a tool call's input whole.
+- **Effort.** opencode maps it to the model's reasoning effort through OpenRouter; blank leaves the model's
+  default, which reasons least and runs fastest. Qwen Code uses its own setting.
+- **Diagnostics** shows whether the agent is found, its version, and whether it supports HTTP MCP.
+  For Qwen Code it also checks Node.js 22 or newer.
+
 ## Notes
 - Verify `org.jetbrains.intellij.platform` (2.5.0), Kotlin (2.1.0), and the Rider version against
   current releases before the first build — bump if Gradle reports resolution errors.

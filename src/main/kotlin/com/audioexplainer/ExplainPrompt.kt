@@ -42,6 +42,9 @@ object ExplainPrompt {
      * and a run that cannot write or execute is one a hostile comment in the code under explanation cannot
      * talk into doing either.
      */
+    /** The skill's docs an ACP run attaches to its prompt ([buildPrompt]'s `docsAttached`), relative to the skill dir. */
+    val SKILL_DOCS = listOf("docs/explain-at-cursor.md", "docs/plan-schema.md")
+
     const val TOOL_ALLOWED_TOOLS = "Read Grep Glob Task TodoWrite ${McpEndpoint.QUALIFIED_TOOL}"
 
     private const val MAX_SELECTION_CHARS = 4000
@@ -107,6 +110,11 @@ object ExplainPrompt {
      * [viaTool] asks for the plan through the `set_plan` tool instead ([McpEndpoint]): step 3 names the tool, and
      * the helper scripts and the plan directory go unmentioned. False is the POST prompt, byte for byte — the
      * fallback when the tool does not connect.
+     *
+     * [docsAttached] is for an ACP agent the two docs are sent to as `resource` blocks beside this text ([SKILL_DOCS]):
+     * the prompt says they are attached instead of asking for them to be read. One agent's reader truncated the
+     * schema at line 375 of 601 (`Models.B.md`), and every agent saves two tool calls. Every other prompt is
+     * unchanged by it.
      */
     @JvmOverloads
     fun buildPrompt(
@@ -117,6 +125,7 @@ object ExplainPrompt {
         extraInstructions: String?,
         planDir: Path?,
         viaTool: Boolean = false,
+        docsAttached: Boolean = false,
     ): String {
         val skillPath = skillDir?.toString()?.replace('\\', '/')
         val planPath = planDir?.toString()?.replace('\\', '/')
@@ -211,7 +220,13 @@ object ExplainPrompt {
             appendLine("$contextLabel (JSON):")
             appendLine(buildContextJson(request))
             appendLine()
-            if (skillPath != null) {
+            if (skillPath != null && docsAttached) {
+                appendLine("The headless flow to follow and the `set_plan` schema are ATTACHED to this message in full:")
+                appendLine("  $skillPath/docs/explain-at-cursor.md — the flow; follow it")
+                appendLine("  $skillPath/docs/plan-schema.md — the schema, the one authority on the plan's shape")
+                appendLine("They are the whole of both files: do not read them again. Read only the code.")
+                appendLine()
+            } else if (skillPath != null) {
                 appendLine("Follow the headless flow documented here (read it first):")
                 appendLine("  $skillPath/docs/explain-at-cursor.md")
                 appendLine("The `set_plan` schema is documented ONCE, authoritatively — read it before writing the plan:")

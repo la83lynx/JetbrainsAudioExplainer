@@ -23,6 +23,8 @@ class ExplainThisWithAction : ExplainThisAction() {
             effort = dialog.effort(),
             depth = dialog.depth(),
             extraInstructions = dialog.extraInstructions(),
+            harness = dialog.harness(),
+            provider = dialog.provider(),
         )
     }
 }

@@ -1,10 +1,9 @@
 package com.audioexplainer
 
+import com.audioexplainer.acp.AcpHarness
+import com.audioexplainer.acp.AcpSession
+import com.audioexplainer.acp.AgentPresets
 import com.intellij.execution.configurations.GeneralCommandLine
-import com.intellij.execution.process.OSProcessHandler
-import com.intellij.execution.process.ProcessListener
-import com.intellij.execution.process.ProcessEvent
-import com.intellij.execution.process.ProcessOutputTypes
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationType
@@ -15,21 +14,12 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.util.Key
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.util.text.StringUtil
 import com.intellij.openapi.wm.ToolWindowManager
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Phase 6 — the Claude Code backbone.
@@ -45,8 +35,9 @@ import java.util.concurrent.atomic.AtomicReference
  * and POSTs it with a helper script. The tool is ~12 s faster (`Speed.md` #3), but the POST is the path
  * that needs nothing from the CLI's MCP support or the user's policy on it.
  *
- * Runs on the background thread of [ExplainThisAction]'s `Task.Backgroundable`, streaming Claude's
- * `stream-json` events into the progress indicator and honouring cancellation.
+ * Runs on the background thread of [ExplainThisAction]'s `Task.Backgroundable`. The process and its output are
+ * [ClaudeHarness]'s; what is here is the run around it — the plan directory, the tool endpoint, the retry by POST,
+ * and how the run is reported.
  *
  * **The argv and the prompt are built in [ExplainPrompt]**, which is pure string building and therefore
  * measurable by `probes/EffortProbe.java`. What stays here is everything that needs an IDE. The three
@@ -56,15 +47,22 @@ import java.util.concurrent.atomic.AtomicReference
 @Service(Service.Level.APP)
 class ClaudeExplainer {
     private val log = Logger.getInstance(ClaudeExplainer::class.java)
-    private val json = Json { ignoreUnknownKeys = true }
 
     fun explain(project: Project, request: ExplainRequest, indicator: ProgressIndicator) {
         // Surface the generation inside the tool window (Phase 7.5 #5): flip the project-scoped tracker
         // and make the sidebar visible so its loading banner shows while Claude works.
         val tracker = ExplainSessionTracker.getInstance(project)
         val runLog = RunLog(request.displayName)
-        tracker.startGenerating(request.displayName, runLog)
+        tracker.startGenerating(request.displayName, runLog, indicator)
         ensureToolWindowVisible(project)
+        // What was showing before the run, so a walkthrough left from an earlier run never counts as this one's.
+        val planBefore = showingPlan()
+
+        val harness = request.harness ?: AudioExplainerSettings.getInstance().state.explainHarness
+        if (harness in AgentPresets.ACP) {
+            explainWithAgent(project, request, indicator, tracker, runLog, harness, planBefore)
+            return
+        }
 
         val claudeExe = findClaudeExecutable()
         if (claudeExe == null) {
@@ -93,7 +91,7 @@ class ClaudeExplainer {
         val depth = request.depth ?: state.explainDepth
         // **A provider profile** swaps the service behind Claude Code, not the prompt. Its model is
         // the model, so the timings learn it apart from Claude's; null is Claude Code's own setup, untouched.
-        val profile = Providers.selected(state)
+        val profile = Providers.selected(state, request.provider)
         val runModel = profile?.model?.trim() ?: model
         val providerKey = profile?.let { runCatching { ProviderKeys.get(it.id) }.getOrNull() }
         if (profile != null && providerKey == null && Providers.needsKey(profile)) {
@@ -155,7 +153,7 @@ class ClaudeExplainer {
                 val timings = ExplainTimings.getInstance()
                 val progress = ExplainProgress(timings.expected(effort, depth, runModel))
                 val result = try {
-                    runClaude(cmd, indicator, progress, runLog, tracker::progress, early::offer, needsTool = tool != null, provider = profile?.name)
+                    ClaudeHarness.run(cmd, indicator, progress, runLog, tracker::progress, early::offer, needsTool = tool != null, provider = profile?.name)
                 } catch (e: Exception) {
                     log.warn("claude invocation failed", e)
                     tracker.fail(e.message ?: "Claude invocation failed.")
@@ -178,11 +176,130 @@ class ClaudeExplainer {
                 tool = null
                 result = attempt(null) ?: return
             }
-            keepPlanDir = !reportResult(project, request, result, tracker, runLog, announced = early.loaded)
+            keepPlanDir = !reportResult(project, request, result, tracker, runLog, early, planBefore)
         } finally {
             tool?.close(server)
             // Always, even when the plan directory is kept as evidence: the key in it is live.
             ProviderFiles.delete(settingsFile)
+            disposePlanDir(planDir, keepPlanDir)
+        }
+    }
+
+    /**
+     * **An Explain This run on an ACP agent** (`Models.B.md` B2b): the same request, skill, prompt, plan directory,
+     * `set_plan` endpoint, bar and report as a Claude run, with [AcpHarness] in place of `claude -p`.
+     *
+     * The tool is the only way back for its plan: the read-only policy refuses the `Write` and the shell a POST needs,
+     * so a run whose agent never connects to the tool fails, saying so, instead of starting again by POST.
+     */
+    private fun explainWithAgent(
+        project: Project,
+        request: ExplainRequest,
+        indicator: ProgressIndicator,
+        tracker: ExplainSessionTracker,
+        runLog: RunLog,
+        harness: String,
+        planBefore: Plan?,
+    ) {
+        val state = AudioExplainerSettings.getInstance().state
+        val label = AgentPresets.label(harness)
+        fun fail(title: String, why: String, log: RunLog? = null) {
+            tracker.fail(why)
+            notify(project, NotificationType.ERROR, title, StringUtil.escapeXmlEntities(why), log)
+        }
+
+        val (exe, customArgs) = AcpHarness.find(harness, state)
+        if (exe == null) {
+            fail("$label not found", AgentPresets.notFound(harness))
+            return
+        }
+
+        indicator.text = "Preparing the Audio Explainer skill…"
+        tracker.progress("Preparing the Audio Explainer skill…")
+        val skillDir = ClaudeSkillInstaller.ensureInstalled()
+        val workDir = request.projectBasePath
+            ?: request.absolutePath.substringBeforeLast('/', "").ifEmpty { System.getProperty("user.home") }
+        val effort = request.effort ?: state.explainEffort
+        val depth = request.depth ?: state.explainDepth
+        val profile = Providers.selected(state, request.provider)
+        val providerKey = profile?.let { runCatching { ProviderKeys.get(it.id) }.getOrNull() }
+        if (profile != null && providerKey == null && Providers.needsKey(profile)) {
+            fail("Explain This: no API key", "No API key is set for ${profile.name}. Set it in Settings → Tools → Audio Explainer → Explanation → Manage….")
+            return
+        }
+        val launch = AgentPresets.launch(harness, workDir, profile, providerKey, effort, customArgs)
+        launch.problem?.let { fail("Explain This: $label cannot run", it); return }
+        // The bar learns each agent apart: its pace is the agent's as much as the model's.
+        val runModel = "$harness:" + (profile?.model?.trim()?.ifBlank { null } ?: "default")
+
+        val planDir = createPlanDir()
+        var keepPlanDir = true
+        val server = service<ExplainerServerService>().server
+        val early = EarlyPlan(project, tracker, runLog)
+        val tool = planDir?.let { openTool(server, it, early) }
+        if (tool == null) {
+            fail("Explain This failed", "Could not open the run's set_plan endpoint.")
+            disposePlanDir(planDir, keep = false)
+            return
+        }
+        try {
+            val language = resolveLanguage()
+            val prompt = ExplainPrompt.buildPrompt(request, skillDir, language, depth, request.extraInstructions, planDir, viaTool = true)
+            // An agent that takes embedded resources gets the two docs with the prompt, and is told so.
+            val docs = ExplainPrompt.SKILL_DOCS.mapNotNull { rel ->
+                val f = skillDir?.resolve(rel) ?: return@mapNotNull null
+                runCatching { f.toString() to Files.readString(f) }.getOrNull()
+            }
+            val promptFor = { embedded: Boolean ->
+                if (embedded && docs.size == ExplainPrompt.SKILL_DOCS.size) {
+                    AcpSession.blocks(
+                        ExplainPrompt.buildPrompt(request, skillDir, language, depth, request.extraInstructions, planDir, viaTool = true, docsAttached = true),
+                        docs,
+                    )
+                } else {
+                    AcpSession.blocks(prompt)
+                }
+            }
+            val startLine = "${request.displayName} (${request.scope.name.lowercase()}), agent=$label, " +
+                "effort=${effort.ifBlank { "inherited" }}, depth=$depth, " +
+                (profile?.let { "provider=${it.name}, model=${it.model.trim()}, " } ?: "model=the agent's own, ") +
+                "plan via the set_plan tool"
+            log.info("explain run started: $startLine")
+            runLog.note("Started: $startLine")
+            indicator.text = "$label is reading ${request.displayName} and planning the walkthrough…"
+            tracker.progress("Reading ${request.displayName} and planning…")
+            val timings = ExplainTimings.getInstance()
+            val progress = ExplainProgress(timings.expected(effort, depth, runModel), starting = "Starting $label…")
+            val roots = buildList {
+                add(workDir)
+                add(skillDir.toString())
+                request.absolutePath.substringBeforeLast('/', "").takeIf { it.isNotEmpty() }?.let(::add)
+                request.extraPaths.forEach { add(if (runCatching { Path.of(it).isAbsolute }.getOrDefault(false)) it else "$workDir/$it") }
+            }
+            val result = try {
+                AcpHarness.run(
+                    exe, launch, workDir, AcpSession.McpServer(server.mcpUrl(tool.run), tool.run.token), promptFor, roots,
+                    indicator, progress, runLog, tracker::progress, profile?.name,
+                    toolConnected = { tool.run.connected }, clientVersion = CLIENT_VERSION,
+                )
+            } catch (e: Exception) {
+                log.warn("ACP agent invocation failed", e)
+                fail("Explain This failed", "$label could not be started: ${e.message ?: e.javaClass.simpleName}", runLog)
+                return
+            }
+            if (result.toolDown != null) {
+                log.info("explain run: $label did not connect to the set_plan tool (${result.toolDown})")
+                runLog.end(false, "$label did not connect to the set_plan tool.")
+                fail("Explain This failed", "$label did not connect to the run's set_plan tool (${result.toolDown}), so it has no way to send the walkthrough.", runLog)
+                return
+            }
+            if (!result.cancelled) {
+                log.info("explain run shape ${ExplainTimings.key(effort, depth, runModel)}: ${progress.report()}")
+                if (!result.isError) progress.observed()?.let { timings.record(effort, depth, runModel, it) }
+            }
+            keepPlanDir = !reportResult(project, request, result, tracker, runLog, early, planBefore, agent = label)
+        } finally {
+            tool.close(server)
             disposePlanDir(planDir, keepPlanDir)
         }
     }
@@ -254,238 +371,6 @@ class ClaudeExplainer {
         return Languages.byCode(langCode)
     }
 
-    // ── Process execution ────────────────────────────────────────────────────
-
-    /** [toolDown] is why the run was stopped at its start: it needed the `set_plan` tool, and the tool did not connect. */
-    private class RunResult(
-        val exitCode: Int,
-        val finalText: String?,
-        val isError: Boolean,
-        val cancelled: Boolean,
-        val stderrTail: String,
-        val toolDown: String? = null,
-    )
-
-    private fun runClaude(
-        cmd: GeneralCommandLine,
-        indicator: ProgressIndicator,
-        progress: ExplainProgress,
-        runLog: RunLog,
-        onActivity: (String, Double?, String?) -> Unit,
-        onPlanWritten: (String) -> Unit,
-        needsTool: Boolean,
-        provider: String? = null,
-    ): RunResult {
-        val handler = OSProcessHandler(cmd)
-        val lock = Any()
-        val lineBuf = StringBuilder()
-        val stderr = StringBuilder()
-        val finalText = AtomicReference<String?>(null)
-        val isError = AtomicBoolean(false)
-        val toolDown = AtomicReference<String?>(null)
-        // A provider run only: a rejected key stops the run, any other retry shows in the progress text.
-        val authStop = AtomicReference<Providers.Retry?>(null)
-        var retryNote: String? = null
-        val timeline = RunTimeline()
-
-        handler.addProcessListener(object : ProcessListener {
-            override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
-                if (outputType == ProcessOutputTypes.STDERR) {
-                    synchronized(lock) { stderr.append(event.text) }
-                    return
-                }
-                if (outputType != ProcessOutputTypes.STDOUT) return
-                synchronized(lock) {
-                    lineBuf.append(event.text)
-                    var nl = lineBuf.indexOf("\n")
-                    while (nl >= 0) {
-                        val line = lineBuf.substring(0, nl)
-                        lineBuf.delete(0, nl + 1)
-                        processStreamLine(line, finalText, isError, timeline, progress, runLog, onPlanWritten, provider)
-                        if (needsTool && toolDown.get() == null) toolStatus(line)?.let(toolDown::set)
-                        if (provider != null) {
-                            val retry = Providers.retry(line)
-                            when {
-                                retry == null -> retryNote = null
-                                retry.authRejected -> authStop.compareAndSet(null, retry)
-                                else -> {
-                                    val note = "$provider busy (${retry.status ?: retry.error ?: "error"}), " +
-                                        "retrying (${retry.attempt ?: "?"}/${retry.maxRetries ?: "?"})…"
-                                    retryNote = note
-                                    runLog.retry(note)
-                                }
-                            }
-                        }
-                        nl = lineBuf.indexOf("\n")
-                    }
-                }
-            }
-        })
-
-        // **One place moves the bar**, on a 200 ms beat: the stream can deliver hundreds of deltas a second,
-        // and the bar has to advance when nothing is streaming at all.
-        indicator.isIndeterminate = false
-        val text = indicator.text
-        var shown: Triple<Int, String, String?>? = null
-        fun publish() {
-            val (fraction, activity) = synchronized(lock) { progress.fraction() to (retryNote ?: progress.activity()) }
-            val warning = runLog.warning
-            val now = Triple((fraction * 100).toInt(), activity, warning)
-            if (now == shown) return
-            if (warning != null && warning != shown?.third) log.info("explain run at ${timeline.at()}: $warning")
-            shown = now
-            indicator.fraction = fraction
-            // The warning takes the task's own line, so it shows in the status bar beside the task's stop button.
-            indicator.text = warning?.let { "⚠ $it" } ?: text
-            indicator.text2 = activity
-            onActivity(activity, fraction, warning)
-        }
-
-        handler.startNotify()
-        while (!handler.waitFor(200)) {
-            publish()
-            if (indicator.isCanceled) {
-                handler.destroyProcess()
-                handler.waitFor(2000)
-                log.info("explain run cancelled at ${timeline.at()} after ${timeline.tools} tool call(s)")
-                runLog.note("Cancelled after ${timeline.tools} tool call(s)")
-                return RunResult(-1, null, isError = false, cancelled = true, stderrTail = stderrTail(synchronized(lock) { stderr.toString() }))
-            }
-            // Stopped at its first event: a run asked to call a tool it does not have would only report that it
-            // has not, after reading the code and writing the plan.
-            toolDown.get()?.takeIf { it != CONNECTED }?.let { why ->
-                handler.destroyProcess()
-                handler.waitFor(2000)
-                return RunResult(-1, null, isError = true, cancelled = false, stderrTail = "", toolDown = why)
-            }
-            // Stopped at the first 401/403: the CLI would retry a rejected key 10 times, ~3 minutes of backoff.
-            authStop.get()?.let { retry ->
-                handler.destroyProcess()
-                handler.waitFor(2000)
-                log.info("explain run stopped at ${timeline.at()}: $provider rejected the API key (HTTP ${retry.status})")
-                runLog.note("Stopped: $provider rejected the API key (HTTP ${retry.status})")
-                return RunResult(
-                    -1,
-                    "$provider rejected the API key (HTTP ${retry.status}). Check it in Settings → Tools → " +
-                        "Audio Explainer → Explanation → Manage….",
-                    isError = true, cancelled = false, stderrTail = "",
-                )
-            }
-        }
-
-        publish()
-        val exit = handler.exitCode ?: -1
-        return RunResult(
-            exitCode = exit,
-            finalText = finalText.get(),
-            isError = isError.get() || exit != 0,
-            cancelled = false,
-            stderrTail = stderrTail(synchronized(lock) { stderr.toString() }),
-            toolDown = toolDown.get()?.takeIf { it != CONNECTED },
-        )
-    }
-
-    /**
-     * **One run's timeline, written to `idea.log`** — a line per tool call with its elapsed time, and a closing
-     * line with the run's own accounting.
-     *
-     * It exists because a sandbox round could not answer the two questions `Speed.md` keeps asking: how long
-     * the run took, and what it spent the time on (did it write a validator, did it re-POST). The headless
-     * bench answers them from `stream-json`; this is the same reading, kept where a round can see it. INFO,
-     * so it reaches `idea.log` and stays out of the `runIde` console.
-     *
-     * Touched only under the stream lock in [runClaude], so the counters need no synchronisation of their own.
-     */
-    private class RunTimeline {
-        private val started = System.nanoTime()
-        var tools = 0
-
-        fun at(): String = "%.1fs".format((System.nanoTime() - started) / 1e9)
-    }
-
-    /**
-     * From the run's `init` event, whether the `set_plan` server connected: [CONNECTED], or why not. Null for any
-     * other line. The CLI lists each server with a `status` — `connected`, `failed`, `needs-auth`, `pending` — and
-     * leaves out one a policy refused, so anything but `connected` is a run that cannot send its plan.
-     */
-    private fun toolStatus(line: String): String? {
-        if (!line.contains("\"init\"")) return null
-        val obj = runCatching { json.parseToJsonElement(line.trim()).jsonObject }.getOrNull() ?: return null
-        if (obj["type"]?.jsonPrimitive?.contentOrNull != "system" || obj["subtype"]?.jsonPrimitive?.contentOrNull != "init") return null
-        val servers = runCatching { obj["mcp_servers"]?.jsonArray }.getOrNull()
-        val ours = servers?.mapNotNull { runCatching { it.jsonObject }.getOrNull() }
-            ?.firstOrNull { it["name"]?.jsonPrimitive?.contentOrNull == McpEndpoint.SERVER_NAME }
-            ?: return "not listed in the run's MCP servers"
-        val status = ours["status"]?.jsonPrimitive?.contentOrNull
-        return if (status == "connected") CONNECTED else "status ${status ?: "unknown"}"
-    }
-
-    /** What a tool call acted on, short enough for one log line: its file, command or pattern. */
-    private fun toolTarget(input: JsonObject?): String {
-        if (input == null) return ""
-        val raw = sequenceOf("file_path", "command", "pattern", "path")
-            .mapNotNull { input[it]?.jsonPrimitive?.contentOrNull }
-            .firstOrNull() ?: return ""
-        return ": " + StringUtil.shortenTextWithEllipsis(raw.trim().replace('\n', ' '), 160, 60)
-    }
-
-    /**
-     * Parse one `stream-json` event line: feed the progress estimate, log the timeline, hand a written plan to
-     * [onPlanWritten], capture the final result. The activity label is [ExplainProgress]'s now.
-     */
-    private fun processStreamLine(
-        line: String,
-        finalText: AtomicReference<String?>,
-        isError: AtomicBoolean,
-        timeline: RunTimeline,
-        progress: ExplainProgress,
-        runLog: RunLog,
-        onPlanWritten: (String) -> Unit,
-        provider: String?,
-    ) {
-        val trimmed = line.trim()
-        if (trimmed.isEmpty()) return
-        val obj = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull() ?: return
-        progress.onEvent(obj)
-        runLog.onEvent(obj)
-        when (obj["type"]?.jsonPrimitive?.contentOrNull) {
-            "assistant" -> {
-                val content = obj["message"]?.jsonObject?.get("content") ?: return
-                val blocks = runCatching { content.jsonArray }.getOrNull() ?: return
-                for (block in blocks) {
-                    val b = runCatching { block.jsonObject }.getOrNull() ?: continue
-                    if (b["type"]?.jsonPrimitive?.contentOrNull != "tool_use") continue
-                    val name = b["name"]?.jsonPrimitive?.contentOrNull ?: continue
-                    timeline.tools++
-                    val input = runCatching { b["input"]?.jsonObject }.getOrNull()
-                    log.info("explain run +${timeline.at()} $name${toolTarget(input)}")
-                    // The whole plan, the moment it is generated — 10-15 s before the agent's POST lands.
-                    if (name == "Write" && input?.get("file_path")?.jsonPrimitive?.contentOrNull?.endsWith(".json") == true) {
-                        input["content"]?.jsonPrimitive?.contentOrNull?.let(onPlanWritten)
-                    }
-                }
-            }
-            "result" -> {
-                fun num(key: String) = obj[key]?.jsonPrimitive?.contentOrNull
-                val usage = runCatching { obj["usage"]?.jsonObject }.getOrNull()
-                // Off Claude the CLI still prices the tokens as Claude's ($0.68-2.02 for runs that cost
-                // $0-0.03 when tested), so the number would only mislead.
-                val cost = if (provider != null) "cost n/a ($provider)" else "cost \$${num("total_cost_usd")}"
-                val tokens = usage?.get("output_tokens")?.jsonPrimitive?.contentOrNull
-                log.info(
-                    "explain run finished at ${timeline.at()}: ${timeline.tools} tool call(s), " +
-                        "${num("num_turns")} turn(s), api ${num("duration_api_ms")} ms, $tokens output token(s), " +
-                        "$cost, ${num("subtype")}",
-                )
-                runLog.note("Finished: ${num("num_turns")} turn(s), ${timeline.tools} tool call(s), $tokens output token(s), $cost")
-                finalText.set(obj["result"]?.jsonPrimitive?.contentOrNull)
-                val subtype = obj["subtype"]?.jsonPrimitive?.contentOrNull
-                val flagged = (obj["is_error"]?.jsonPrimitive?.contentOrNull == "true")
-                if (flagged || (subtype != null && subtype != "success")) isError.set(true)
-            }
-        }
-    }
-
     // ── Result reporting ───────────────────────────────────────────────────────
 
     /**
@@ -498,28 +383,44 @@ class ClaudeExplainer {
         result: RunResult,
         tracker: ExplainSessionTracker,
         runLog: RunLog,
-        announced: Boolean,
+        early: EarlyPlan,
+        planBefore: Plan?,
+        agent: String = "Claude",
     ): Boolean {
+        val announced = early.loaded
         if (result.cancelled) {
             runLog.end(false, "Cancelled.")
             tracker.finish() // clear the banner; the balloon reports the cancellation
             notify(project, NotificationType.INFORMATION, "Explain This cancelled", "The walkthrough request was cancelled.", runLog)
             return true
         }
+        // Failed even when its plan arrived first: the run broke the one promise the agent setting makes.
+        result.policyBreach?.let { why ->
+            runLog.end(false, why)
+            tracker.fail(StringUtil.shortenTextWithEllipsis(why, 300, 0))
+            notify(project, NotificationType.ERROR, "Explain This stopped: $agent acted without asking", errorHtml(why), runLog)
+            return false
+        }
 
         val state = runCatching { service<ExplainerServerService>().server.walkthrough.getState() }.getOrNull()
         // Frames, not projected segments: a plan whose frames all resolved but whose steps were dropped is
-        // still a plan that arrived, and the notification below says how much of it there is.
-        val planLoaded = state != null && state.title.isNotEmpty() && state.plan.frames.isNotEmpty()
+        // still a plan that arrived, and the notification below says how much of it there is. **This run's
+        // plan**: one the run delivered (the tool, the early Write), or a plan other than the one showing when
+        // it started (a POST). The walkthrough an earlier run left showing is not this run's success.
+        val planLoaded = state != null && state.title.isNotEmpty() && state.plan.frames.isNotEmpty() &&
+            (early.received || state.plan !== planBefore)
 
         if (result.isError && !planLoaded) {
             val detail = result.finalText?.takeIf { it.isNotBlank() } ?: result.stderrTail.takeIf { it.isNotBlank() }
+            // The run log takes the whole reason (the banner gets a line of it): it is where a failure is read.
+            runLog.end(false, "$agent did not produce a walkthrough (exit ${result.exitCode})." +
+                (detail?.let { "\n" + StringUtil.shortenTextWithEllipsis(it.trim(), 4000, 0) } ?: ""))
             tracker.fail(detail?.let { StringUtil.shortenTextWithEllipsis(it.trim(), 300, 0) }
-                ?: "Claude did not produce a walkthrough (exit ${result.exitCode}).")
+                ?: "$agent did not produce a walkthrough (exit ${result.exitCode}).")
             notify(
                 project, NotificationType.ERROR, "Explain This failed",
                 buildString {
-                    append("Claude did not produce a walkthrough (exit ${result.exitCode}).")
+                    append("$agent did not produce a walkthrough (exit ${result.exitCode}).")
                     if (detail != null) append("<br/><br/>").append(errorHtml(detail))
                 },
                 runLog,
@@ -533,12 +434,14 @@ class ClaudeExplainer {
             if (!announced) announceReady(project, state, runLog)
             return true
         } else {
-            // Claude reported success but no plan reached the server.
-            tracker.fail("Claude finished but no walkthrough was received by the plugin.")
+            // The agent reported success but no plan reached the server.
+            runLog.end(false, "$agent finished but no walkthrough was received by the plugin." +
+                (result.finalText?.takeIf { it.isNotBlank() }?.let { "\n" + StringUtil.shortenTextWithEllipsis(it.trim(), 4000, 0) } ?: ""))
+            tracker.fail("$agent finished but no walkthrough was received by the plugin.")
             notify(
                 project, NotificationType.WARNING, "No walkthrough loaded",
                 buildString {
-                    append("Claude finished but no walkthrough was received by the plugin.")
+                    append("$agent finished but no walkthrough was received by the plugin.")
                     result.finalText?.takeIf { it.isNotBlank() }?.let { append("<br/><br/>").append(errorHtml(it)) }
                 },
                 runLog,
@@ -587,6 +490,11 @@ class ClaudeExplainer {
         var loaded = false
             private set
 
+        /** A plan of this run's reached the walkthrough — clean or not, announced or not. */
+        @Volatile
+        var received = false
+            private set
+
         fun offer(content: String) {
             ApplicationManager.getApplication().executeOnPooledThread {
                 val resolved = runCatching { service<ExplainerServerService>().server.preload(content) }
@@ -596,6 +504,7 @@ class ClaudeExplainer {
                     log.info("explain run: the written plan is not clean, so it waits for the agent's POST")
                     return@executeOnPooledThread
                 }
+                received = true
                 log.info("explain run: plan loaded from its Write — ${resolved.frames.size} frame(s), ${resolved.steps.size} step(s)")
                 announce()
             }
@@ -606,6 +515,7 @@ class ClaudeExplainer {
          * reply carries more than `[info]`, because the agent is about to send a fixed one.
          */
         fun arrived(resolved: ResolvedPlan, issues: List<PlanIssue>) {
+            received = true
             if (resolved.isEmpty() || issues.any { it.level != IssueLevel.INFO }) {
                 log.info("explain run: the plan sent with the tool is not clean, so ready waits for the agent's fix or its end")
                 return
@@ -622,6 +532,10 @@ class ClaudeExplainer {
             announceReady(project, service<ExplainerServerService>().server.walkthrough.getState(), runLog)
         }
     }
+
+    /** The plan the walkthrough shows now, by identity: every plan a run delivers is a newly decoded one. */
+    private fun showingPlan(): Plan? =
+        runCatching { service<ExplainerServerService>().server.walkthrough.getState().plan }.getOrNull()
 
     private fun activateSidebar(project: Project) {
         ApplicationManager.getApplication().invokeLater {
@@ -665,16 +579,11 @@ class ClaudeExplainer {
     private fun errorHtml(message: String?): String =
         StringUtil.escapeXmlEntities(StringUtil.shortenTextWithEllipsis(message ?: "Unknown error", 600, 0))
 
-    /** The end of stderr, without the lines every provider run prints and none of which is a failure. */
-    private fun stderrTail(s: String): String = tail(Providers.dropHarmlessStderr(s))
-
-    private fun tail(s: String, max: Int = 600): String =
-        if (s.length <= max) s else "…" + s.substring(s.length - max)
-
     companion object {
         const val NOTIFICATION_GROUP = "Audio Explainer"
         private const val TOOL_WINDOW_ID = "Audio Explainer"
-        private const val CONNECTED = "connected"
+        /** What this client tells an ACP agent it is. */
+        private const val CLIENT_VERSION = "1"
 
         fun getInstance(): ClaudeExplainer = service()
     }

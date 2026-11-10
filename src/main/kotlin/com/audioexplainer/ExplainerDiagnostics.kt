@@ -105,6 +105,13 @@ object ExplainerDiagnostics {
         },
 
         DiagnosticCheck(
+            "ACP agent", CheckOs.ANY,
+            "Install the agent picked in Settings → Tools → Audio Explainer → Explanation → Agent, or set its path " +
+                "there: opencode is `npm i -g opencode-ai` (or its installer), Qwen Code is " +
+                "`npm i -g @qwen-code/qwen-code` on Node.js 22 or newer. A custom agent must speak ACP on stdio.",
+        ) { ctx -> acpAgent(ctx) },
+
+        DiagnosticCheck(
             "CLI version", CheckOs.ANY,
             "Update Claude Code (`claude update`, or your installer). Below $EFFORT_CLI_FLOOR the `--effort` " +
                 "flag this plugin now passes is not understood and the run fails before it starts.",
@@ -424,6 +431,34 @@ object ExplainerDiagnostics {
         conn.setRequestProperty("Authorization", "Bearer $token")
         conn.inputStream.use { it.readBytes().toString(StandardCharsets.UTF_8) }
     }.getOrNull()
+
+    /**
+     * The selected ACP agent: found, what it says it is, whether it reaches an HTTP MCP server — which the run's
+     * `set_plan` tool is — and, for Qwen Code, a Node.js it runs on. INFO when Claude Code is the agent.
+     */
+    private fun acpAgent(ctx: DiagnosticContext): Outcome {
+        val harness = ctx.state.explainHarness
+        if (harness !in com.audioexplainer.acp.AgentPresets.ACP) return Outcome(CheckStatus.INFO, "Claude Code is the agent; no ACP agent is selected")
+        val label = com.audioexplainer.acp.AgentPresets.label(harness)
+        val (exe, args) = com.audioexplainer.acp.AcpHarness.find(harness, ctx.state)
+        if (exe == null) return Outcome(CheckStatus.FAIL, "$label: not found on PATH or in the usual install directories",
+            com.audioexplainer.acp.AgentPresets.notFound(harness))
+        if (harness == com.audioexplainer.acp.AgentPresets.QWEN) {
+            val node = Regex("""v(\d+)\.""").find(exec(listOf("node", "--version"), 10).text)?.groupValues?.get(1)?.toIntOrNull()
+            if (node == null || node < 22) {
+                return Outcome(CheckStatus.FAIL, "$label at $exe, but " + (node?.let { "Node.js $it" } ?: "no Node.js on PATH") +
+                    " — it needs 22 or newer", "Install Node.js 22 or newer and restart the IDE.")
+            }
+        }
+        val launchArgs = com.audioexplainer.acp.AgentPresets.launch(harness, System.getProperty("user.home"), null, null, "", args).args
+        val hello = com.audioexplainer.acp.AcpHarness.hello(exe, launchArgs, System.getProperty("user.home"))
+        return when {
+            hello.error != null -> Outcome(CheckStatus.FAIL, "$label at $exe did not answer `initialize`: ${hello.error.take(160)}")
+            !hello.httpMcp -> Outcome(CheckStatus.FAIL, "${hello.agent ?: label} cannot connect to an HTTP MCP server, which the run's tool is",
+                "Update the agent; Explain This needs ACP's HTTP MCP support (`mcpCapabilities.http`).")
+            else -> Outcome(CheckStatus.PASS, "${hello.agent ?: label} at $exe, HTTP MCP yes")
+        }
+    }
 
     private class Exec(val exit: Int, val text: String)
 

@@ -3,10 +3,6 @@ package com.audioexplainer
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.progress.ProgressIndicator
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -21,7 +17,6 @@ import java.util.concurrent.TimeUnit
 object ProviderTest {
     private const val TIMEOUT_S = 30L
     private const val PROMPT = "Reply with the single word ok."
-    private val json = Json { ignoreUnknownKeys = true }
 
     class Outcome(val ok: Boolean, val message: String)
 
@@ -51,6 +46,7 @@ object ProviderTest {
                 lines.offer(EOF)
             }, "Audio Explainer provider test").apply { isDaemon = true; start() }
             val other = StringBuilder()
+            val stream = ClaudeStream()
             val deadline = started + TimeUnit.SECONDS.toNanos(TIMEOUT_S)
             try {
                 while (true) {
@@ -58,20 +54,19 @@ object ProviderTest {
                     if (System.nanoTime() > deadline) return Outcome(false, "No answer within ${TIMEOUT_S}s.")
                     val line = lines.poll(200, TimeUnit.MILLISECONDS) ?: continue
                     if (line == EOF) break
-                    Providers.retry(line)?.let { r ->
-                        if (r.authRejected) return Outcome(false, "Key rejected (HTTP ${r.status}).")
-                        indicator.text2 = "Provider busy (${r.status ?: r.error}), retrying ${r.attempt}/${r.maxRetries}…"
-                        return@let
+                    // stderr is merged in: a line that is not a JSON object is the CLI's own text.
+                    if (!line.trimStart().startsWith("{")) { other.append(line).append('\n'); continue }
+                    for (e in stream.parse(line)) {
+                        if (e is RunEvent.Retry) {
+                            if (e.authRejected) return Outcome(false, "Key rejected (HTTP ${e.status}).")
+                            indicator.text2 = "Provider busy (${e.status ?: e.error}), retrying ${e.attempt}/${e.maxRetries}…"
+                        }
+                        if (e !is RunEvent.Finished) continue
+                        val text = e.finalText?.trim().orEmpty()
+                        val secs = "%.1f".format((System.nanoTime() - started) / 1e9)
+                        return if (!e.ok || e.reason != "success") Outcome(false, text.ifBlank { "The run ended in an error." }.take(300))
+                        else Outcome(true, "OK — ${profile.model.trim()} answered in ${secs}s: \"${text.take(40)}\"")
                     }
-                    val obj = runCatching { json.parseToJsonElement(line.trim()).jsonObject }.getOrNull()
-                    if (obj == null) { other.append(line).append('\n'); continue }
-                    if (obj["type"]?.jsonPrimitive?.contentOrNull != "result") continue
-                    val text = obj["result"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-                    val error = obj["is_error"]?.jsonPrimitive?.contentOrNull == "true" ||
-                        obj["subtype"]?.jsonPrimitive?.contentOrNull != "success"
-                    val secs = "%.1f".format((System.nanoTime() - started) / 1e9)
-                    return if (error) Outcome(false, text.ifBlank { "The run ended in an error." }.take(300))
-                    else Outcome(true, "OK — ${profile.model.trim()} answered in ${secs}s: \"${text.take(40)}\"")
                 }
             } finally {
                 if (proc.isAlive) proc.destroyForcibly()

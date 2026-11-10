@@ -31,7 +31,7 @@ import kotlinx.serialization.json.add
  */
 object McpEndpoint {
     const val SERVER_NAME = "audio-explainer"
-    private const val TOOL_NAME = "set_plan"
+    const val TOOL_NAME = "set_plan"
 
     /** The name the CLI gives the tool: what the allow-list grants and what the stream reports. */
     const val QUALIFIED_TOOL = "mcp__${SERVER_NAME}__$TOOL_NAME"
@@ -72,14 +72,19 @@ object McpEndpoint {
         }
     }
 
-    /** One HTTP request to the run's endpoint. [setPlan] receives the tool's arguments with `type` set. */
-    fun handle(method: String, body: String, setPlan: (JsonObject) -> ToolResult): Response {
+    /**
+     * One HTTP request to the run's endpoint. [setPlan] receives the tool's arguments with `type` set; [onMethod] hears
+     * every JSON-RPC method named, so the run knows its agent connected ([McpRun.connectedAt]).
+     */
+    @JvmOverloads
+    fun handle(method: String, body: String, setPlan: (JsonObject) -> ToolResult, onMethod: (String) -> Unit = {}): Response {
         if (method != "POST") return Response(405, null)
         val msg = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
             ?: return Response(400, error(null, PARSE_ERROR, "Parse error: one JSON-RPC message per request"))
         val id = msg["id"]
         val name = (msg["method"] as? JsonPrimitive)?.contentOrNull
             ?: return Response(400, error(id, INVALID_REQUEST, "Invalid request"))
+        onMethod(name)
         // A notification (`notifications/initialized` and the like) wants no answer.
         if (id == null) return Response(202, null)
         val params = msg["params"] as? JsonObject

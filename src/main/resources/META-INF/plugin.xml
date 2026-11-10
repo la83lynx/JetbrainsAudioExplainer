@@ -77,5 +77,11 @@
                     icon="AllIcons.Debugger.Console"
                     description="Every step of the latest Explain This run: reads, thinking, the plan sent and its reply, the host"/>
         </group>
+        <!-- Only in the tool window's title, beside Show Run Log, and only while a run is going. -->
+        <action id="AudioExplainer.CancelExplain"
+                class="com.audioexplainer.CancelExplainAction"
+                text="Cancel Explanation"
+                icon="AllIcons.Actions.Suspend"
+                description="Stop the Explain This run in progress, as the × on its progress in the status bar does"/>
     </actions>
 </idea-plugin>

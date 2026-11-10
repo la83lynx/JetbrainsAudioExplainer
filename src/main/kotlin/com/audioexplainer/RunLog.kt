@@ -6,8 +6,6 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -22,7 +20,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  * transcripts, 2026-11-06). A `Read` that overlaps a range already read counts as a re-read; at [REREAD_WARN]
  * the run gets a [warning], which the status bar and the banner show beside Stop.
  *
- * Fed from the stream reader under its lock ([onEvent]) and from the run's own code ([note], [end]); listeners
+ * Fed from the run's reader under its lock ([onEvent]) and from the run's own code ([note], [end]); listeners
  * are called on that thread and must marshal UI work themselves. [now] is injected so a probe can replay a run.
  */
 class RunLog(val title: String, private val now: () -> Double = { System.nanoTime() / 1e9 }) {
@@ -49,7 +47,9 @@ class RunLog(val title: String, private val now: () -> Double = { System.nanoTim
     private var thinkingTokens = 0
     private var thinkFrom = Double.NaN
     private var thinkTokensFrom = 0
-    private val toolNames = HashMap<String, String>()
+    private var thinkingChars = 0
+    private var thinkCharsFrom = 0
+    private val tools = HashMap<String, Tool>()
     private val reads = HashMap<String, MutableList<LongRange>>()
     private var lastRetry: String? = null
 
@@ -90,81 +90,57 @@ class RunLog(val title: String, private val now: () -> Double = { System.nanoTim
         listeners.forEach { runCatching { it.onEnd(ok, summary) } }
     }
 
-    /** One parsed `stream-json` line. */
-    fun onEvent(obj: JsonObject) {
-        when (obj.str("type")) {
-            "stream_event" -> {
-                val ev = obj["event"] as? JsonObject ?: return
-                when (ev.str("type")) {
-                    "content_block_start" -> {
-                        val type = (ev["content_block"] as? JsonObject)?.str("type")
-                        if (type == "thinking") {
-                            if (thinkFrom.isNaN()) { thinkFrom = now(); thinkTokensFrom = thinkingTokens }
-                        } else {
-                            closeThinking()
-                        }
-                    }
-                    "message_stop" -> closeThinking()
+    /** One event of the run. */
+    fun onEvent(e: RunEvent) {
+        when (e) {
+            is RunEvent.ThinkingStart -> if (thinkFrom.isNaN()) {
+                thinkFrom = now(); thinkTokensFrom = thinkingTokens; thinkCharsFrom = thinkingChars
+            }
+            is RunEvent.ToolStart, is RunEvent.TextStart, is RunEvent.TurnEnd -> closeThinking()
+            is RunEvent.Thinking -> { thinkingTokens += e.tokens; thinkingChars += e.chars }
+            is RunEvent.Host -> if (e.name != host) {
+                host = e.name
+                note("Host: ${e.name}")
+            }
+            is RunEvent.ToolCall -> {
+                closeThinking()
+                if (e.id.isNotEmpty()) tools[e.id] = e.tool
+                val before = rereads
+                note(toolLine(e.tool, e.input))
+                if (before < REREAD_WARN && rereads >= REREAD_WARN) {
+                    note("⚠ The model keeps re-reading what it already has, so it may have lost the task. " +
+                        "Stop it, or let it finish and check the walkthrough.")
                 }
             }
-            "system" -> if (obj.str("subtype") == "thinking_tokens") {
-                thinkingTokens += obj["estimated_tokens_delta"]?.jsonPrimitive?.intOrNull ?: 0
+            is RunEvent.Text -> e.text.trim().takeIf { it.isNotEmpty() }?.let {
+                closeThinking()
+                note("Says: " + oneLine(it, 200))
             }
-            "assistant" -> {
-                val message = obj["message"] as? JsonObject ?: return
-                message.str("provider")?.takeIf { it.isNotBlank() && it != host }?.let {
-                    host = it
-                    note("Host: $it")
-                }
-                for (b in message.blocks()) {
-                    when (b.str("type")) {
-                        "tool_use" -> {
-                            closeThinking()
-                            val name = b.str("name") ?: continue
-                            b.str("id")?.let { toolNames[it] = name }
-                            val before = rereads
-                            note(toolLine(name, b["input"] as? JsonObject))
-                            if (before < REREAD_WARN && rereads >= REREAD_WARN) {
-                                note("⚠ The model keeps re-reading what it already has, so it may have lost the task. " +
-                                    "Stop it, or let it finish and check the walkthrough.")
-                            }
-                        }
-                        "text" -> b.str("text")?.trim()?.takeIf { it.isNotEmpty() }?.let {
-                            closeThinking()
-                            note("Says: " + oneLine(it, 200))
-                        }
-                    }
+            is RunEvent.ToolResult -> {
+                val tool = tools[e.id]
+                when {
+                    tool is Tool.SetPlan -> planReply(e.text, e.failed).forEach(::note)
+                    e.failed -> note("  ✖ ${shortName(tool?.raw)} failed: ${oneLine(e.text, 200)}")
                 }
             }
-            "user" -> {
-                val message = obj["message"] as? JsonObject ?: return
-                for (b in message.blocks()) {
-                    if (b.str("type") != "tool_result") continue
-                    val name = b.str("tool_use_id")?.let(toolNames::get)
-                    val text = resultText(b["content"])
-                    val failed = b.str("is_error") == "true"
-                    when {
-                        name == McpEndpoint.QUALIFIED_TOOL -> planReply(text, failed).forEach(::note)
-                        failed -> note("  ✖ ${shortName(name)} failed: ${oneLine(text, 200)}")
-                    }
-                }
-            }
+            else -> {}
         }
     }
 
-    private fun toolLine(name: String, input: JsonObject?): String {
+    private fun toolLine(tool: Tool, input: JsonObject?): String {
         val path = input?.str("file_path")?.replace('\\', '/')
         return when {
-            name == "Read" && path != null -> {
-                val offset = input.long("offset")
-                val limit = input.long("limit")
+            tool is Tool.Read && tool.path != null -> {
+                val file = tool.path.replace('\\', '/')
+                val offset = tool.offset
+                val limit = tool.limit
                 val from = offset ?: 1
                 val range = from until from + (limit ?: READ_DEFAULT_LINES)
-                val key = path.lowercase(Locale.ROOT)
+                val key = file.lowercase(Locale.ROOT)
                 val again = reads[key].orEmpty().any { it.first <= range.last && range.first <= it.last }
                 reads.getOrPut(key) { ArrayList() }.add(range)
                 val span = if (offset != null || limit != null) " lines ${from}–${range.last}" else ""
-                val base = path.substringAfterLast('/')
+                val base = file.substringAfterLast('/')
                 if (again) {
                     rereads++
                     if (rereads >= REREAD_WARN) {
@@ -175,7 +151,7 @@ class RunLog(val title: String, private val now: () -> Double = { System.nanoTim
                     "Read $base$span"
                 }
             }
-            name == McpEndpoint.QUALIFIED_TOOL -> {
+            tool is Tool.SetPlan -> {
                 val frames = (input?.get("frames") as? JsonArray)?.size
                 val steps = (input?.get("steps") as? JsonArray)?.size
                 "set_plan: ${frames ?: "?"} frame(s), ${steps ?: "?"} step(s)"
@@ -183,7 +159,7 @@ class RunLog(val title: String, private val now: () -> Double = { System.nanoTim
             else -> {
                 val target = path?.substringAfterLast('/')
                     ?: sequenceOf("command", "pattern", "query", "path").mapNotNull { input?.str(it) }.firstOrNull()
-                shortName(name) + (target?.let { " " + oneLine(it, 120) } ?: "")
+                shortName(tool.raw) + (target?.let { " " + oneLine(it, 120) } ?: "")
             }
         }
     }
@@ -209,10 +185,16 @@ class RunLog(val title: String, private val now: () -> Double = { System.nanoTim
         if (thinkFrom.isNaN()) return
         val took = now() - thinkFrom
         val tokens = thinkingTokens - thinkTokensFrom
+        val chars = thinkingChars - thinkCharsFrom
         val from = thinkFrom
         thinkFrom = Double.NaN
         if (took < THINK_MIN_SECONDS) return
-        add(from, "Thinking %.1fs".format(Locale.ROOT, took) + if (tokens > 0) ", ~${tokensText(tokens)} tokens" else "")
+        val size = when {
+            tokens > 0 -> ", ~${tokensText(tokens)} tokens"
+            chars > 0 -> ", ${tokensText(chars)} chars"
+            else -> ""
+        }
+        add(from, "Thinking %.1fs".format(Locale.ROOT, took) + size)
     }
 
     private fun add(at: Double, text: String) {
@@ -246,18 +228,6 @@ class RunLog(val title: String, private val now: () -> Double = { System.nanoTim
 
         private fun tokensText(n: Int) = if (n >= 1000) "%.1fk".format(Locale.ROOT, n / 1000.0) else n.toString()
 
-        /** A `tool_result`'s content: a string, or a list of `{type: text, text}` blocks. */
-        private fun resultText(content: Any?): String = when (content) {
-            is JsonPrimitive -> content.contentOrNull.orEmpty()
-            is JsonArray -> content.mapNotNull { (it as? JsonObject)?.str("text") }.joinToString("\n")
-            else -> ""
-        }
-
         private fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
-
-        private fun JsonObject.long(key: String): Long? = (this[key] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toLong()
-
-        private fun JsonObject.blocks(): List<JsonObject> =
-            (this["content"] as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
     }
 }

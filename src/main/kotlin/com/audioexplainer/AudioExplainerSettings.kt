@@ -346,6 +346,19 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
          */
         @JvmField var explainProvider: String = ""
 
+        /**
+         * Which agent runs Explain This (`Models.B.md` B2b): [com.audioexplainer.acp.AgentPresets.CLAUDE] (the default) —
+         * Claude Code, as every run before it — or an ACP agent: `opencode`, `qwen`, `custom`.
+         */
+        @JvmField var explainHarness: String = "claude"
+
+        /** Explicit paths for the ACP agents; blank looks on PATH and in the usual install directories. */
+        @JvmField var opencodePath: String = ""
+        @JvmField var qwenPath: String = ""
+
+        /** The Custom ACP agent: its command line, executable first (quotes for a path with spaces). */
+        @JvmField var customAgentCommand: String = ""
+
         /** The user's provider profiles. **No key in here** — see [ProviderKeys]. */
         @JvmField var providers: MutableList<ProviderProfile> = mutableListOf()
 

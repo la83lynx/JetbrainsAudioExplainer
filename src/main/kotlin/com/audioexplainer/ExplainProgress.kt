@@ -1,11 +1,5 @@
 package com.audioexplainer
 
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
@@ -101,7 +95,12 @@ data class RunShape(
  * The bar glides toward its target over [GLIDE] seconds and **never goes backwards**. [now] is seconds on any
  * monotonic clock, injected so a recorded run can be replayed at its own timestamps.
  */
-class ExplainProgress(private val expected: RunShape, private val now: () -> Double = { System.nanoTime() / 1e9 }) {
+class ExplainProgress @JvmOverloads constructor(
+    private val expected: RunShape,
+    private val now: () -> Double = { System.nanoTime() / 1e9 },
+    /** What the bar says before the agent has done anything. */
+    starting: String = "Starting Claude…",
+) {
 
     enum class Phase { PREPARING, WRITING, CHECKING, DONE }
 
@@ -119,6 +118,8 @@ class ExplainProgress(private val expected: RunShape, private val now: () -> Dou
     private var checkFrom = 0.0
 
     private var thinkingTokens = 0
+    /** An ACP agent's thinking, which arrives as text rather than as a count. */
+    private var thinkingChars = 0
     private var thinking = false
     private var tools = 0
     private var writeChars = 0
@@ -126,26 +127,48 @@ class ExplainProgress(private val expected: RunShape, private val now: () -> Dou
     private var writeCarry = ""
     private var writeSteps = 0
     private var writes = 0
-    private var writeBlock = -1
+    /** The plan call's id while its input streams. */
+    private var writeId: String? = null
     private var keys = WRITE_KEYS
     private var postPending = false
-    private var activity = "Starting Claude…"
+    private var activity = starting
 
-    /** Feed one parsed `stream-json` line. */
-    fun onEvent(obj: JsonObject) {
-        when (obj.str("type")) {
-            "stream_event" -> onStreamEvent(obj["event"] as? JsonObject ?: return)
-            "system" -> if (obj.str("subtype") == "thinking_tokens") {
-                thinkingTokens += obj["estimated_tokens_delta"]?.jsonPrimitive?.intOrNull ?: 0
+    /** Feed one event of the run. */
+    fun onEvent(e: RunEvent) {
+        when (e) {
+            is RunEvent.Thinking -> {
+                thinkingTokens += e.tokens
+                thinkingChars += e.chars
                 if (thinking) activity = thinkingLabel()
             }
-            "assistant" -> for (block in obj.blocks()) {
-                if (block.str("type") != "tool_use") continue
-                val name = block.str("name")
-                val input = block["input"] as? JsonObject
+            is RunEvent.ThinkingStart -> if (phase == Phase.PREPARING) { thinking = true; activity = thinkingLabel() }
+            is RunEvent.ToolStart -> if (e.tool.isPlan) {
+                writes++
+                if (writes == 1 && phase == Phase.PREPARING) {
+                    writeId = e.id
+                    keys = if (e.tool is Tool.PlanWrite) WRITE_KEYS else TOOL_KEYS
+                    writeStarted = now()
+                    barAtWriteStart = shown
+                    phase = Phase.WRITING
+                    thinking = false
+                    activity = "Writing the walkthrough…"
+                } else {
+                    activity = "Fixing the walkthrough…"
+                }
+            }
+            is RunEvent.ToolInputDelta -> if (phase == Phase.WRITING && e.id == writeId) onWriteDelta(e.partialJson)
+            is RunEvent.ToolInputEnd -> if (phase == Phase.WRITING && e.id == writeId) {
+                writeEnded = now()
+                barAtWriteEnd = fraction()
+                checkFrom = max(shown, target(writeEnded))
+                phase = Phase.CHECKING
+                activity = "Checking the walkthrough…"
+            }
+            is RunEvent.ToolCall -> {
+                val tool = e.tool
                 when {
                     // A stream without partial messages never showed the `Write` start: it begins and ends here.
-                    isPlan(name) && writes == 0 -> {
+                    tool.isPlan && writes == 0 -> {
                         writes = 1
                         writeStarted = now(); writeEnded = writeStarted
                         barAtWriteStart = shown; barAtWriteEnd = shown
@@ -157,81 +180,46 @@ class ExplainProgress(private val expected: RunShape, private val now: () -> Dou
                     phase == Phase.PREPARING -> {
                         tools++
                         thinking = false
-                        activity = toolLabel(name, input)
+                        activity = toolLabel(tool)
                     }
-                    (name == "Bash" || name == "PowerShell") && input?.str("command")?.let(POST::containsMatchIn) == true -> {
+                    tool is Tool.Shell && tool.command?.let(POST::containsMatchIn) == true -> {
                         postPending = true
                         activity = "Sending the walkthrough…"
                     }
                     // The tool's call is its send; its result is the reply, and the run's tail is all that is left.
-                    name == McpEndpoint.QUALIFIED_TOOL -> postPending = true
+                    tool is Tool.SetPlan -> postPending = true
                 }
             }
-            "user" -> if (obj.blocks().any { it.str("type") == "tool_result" }) {
-                when {
-                    postPending -> { postPending = false; activity = "Finishing…" }
-                    phase == Phase.PREPARING -> { thinking = true; activity = thinkingLabel() }
-                }
+            is RunEvent.ToolResult -> when {
+                postPending -> { postPending = false; activity = "Finishing…" }
+                phase == Phase.PREPARING -> { thinking = true; activity = thinkingLabel() }
             }
-            "result" -> {
+            is RunEvent.Finished -> {
                 phase = Phase.DONE
                 finished = now()
                 activity = "Done"
             }
+            else -> {}
         }
     }
 
-    private fun onStreamEvent(ev: JsonObject) {
-        when (ev.str("type")) {
-            "message_start" -> if (phase != Phase.WRITING) writeBlock = -1
-            "content_block_start" -> {
-                val block = ev["content_block"] as? JsonObject ?: return
-                when (block.str("type")) {
-                    "thinking" -> if (phase == Phase.PREPARING) { thinking = true; activity = thinkingLabel() }
-                    "tool_use" -> if (isPlan(block.str("name"))) {
-                        writes++
-                        if (writes == 1 && phase == Phase.PREPARING) {
-                            writeBlock = ev["index"]?.jsonPrimitive?.intOrNull ?: -1
-                            keys = if (block.str("name") == "Write") WRITE_KEYS else TOOL_KEYS
-                            writeStarted = now()
-                            barAtWriteStart = shown
-                            phase = Phase.WRITING
-                            thinking = false
-                            activity = "Writing the walkthrough…"
-                        } else {
-                            activity = "Fixing the walkthrough…"
-                        }
-                    }
-                }
-            }
-            "content_block_delta" -> {
-                if (phase != Phase.WRITING || ev["index"]?.jsonPrimitive?.intOrNull != writeBlock) return
-                val delta = ev["delta"] as? JsonObject ?: return
-                val part = delta.str("partial_json") ?: return
-                writeChars += part.length
-                // A key once per frame or step. Inside the `Write`'s input the plan is a JSON *string*, so its keys
-                // arrive with escaped quotes — which is what keeps a "keep" in the prose from counting. **Nearly
-                // every key is split across two deltas** (bench3 b1: 1 of 13 whole in one), so the scan carries the
-                // previous delta's tail, and counts only a match that ends in this delta — one lying wholly inside
-                // the carry was counted last time.
-                val scan = writeCarry + part
-                val fresh = writeCarry.length
-                writeFrames += keys.first.findAll(scan).count { it.range.last >= fresh }
-                writeSteps += keys.second.findAll(scan).count { it.range.last >= fresh }
-                writeCarry = scan.takeLast(CARRY)
-                activity = when {
-                    writeSteps > 0 -> "Writing the walkthrough — step $writeSteps…"
-                    writeFrames > 0 -> "Writing the walkthrough — frame $writeFrames…"
-                    else -> activity
-                }
-            }
-            "content_block_stop" -> if (phase == Phase.WRITING && ev["index"]?.jsonPrimitive?.intOrNull == writeBlock) {
-                writeEnded = now()
-                barAtWriteEnd = fraction()
-                checkFrom = max(shown, target(writeEnded))
-                phase = Phase.CHECKING
-                activity = "Checking the walkthrough…"
-            }
+    /** More of the plan call's input, as it streams (Claude only: ACP sends a call's input whole). */
+    private fun onWriteDelta(part: String) {
+        writeChars += part.length
+        // A key once per frame or step. Inside the `Write`'s input the plan is a JSON *string*, so its keys
+        // arrive with escaped quotes — which is what keeps a "keep" in the prose from counting. **Nearly
+        // every key is split across two deltas** (bench3 b1: 1 of 13 whole in one), so the scan carries the
+        // previous delta's tail, and counts only a match that ends in this delta — one lying wholly inside
+        // the carry was counted last time.
+        val scan = writeCarry + part
+        val fresh = writeCarry.length
+        writeFrames += keys.first.findAll(scan).count { it.range.last >= fresh }
+        writeSteps += keys.second.findAll(scan).count { it.range.last >= fresh }
+        writeCarry = scan.takeLast(CARRY)
+        activity = when {
+            writeSteps > 0 -> "Writing the walkthrough — step $writeSteps…"
+            writeFrames > 0 -> "Writing the walkthrough — frame $writeFrames…"
+            else -> activity
         }
     }
 
@@ -285,10 +273,15 @@ class ExplainProgress(private val expected: RunShape, private val now: () -> Dou
 
     fun activity(): String = activity
 
-    /** This run's own shape, to learn from — null unless a plan `Write` streamed start to end. */
+    /**
+     * This run's own shape, to learn from — null unless the plan's input arrived. An ACP agent can name the plan's
+     * call in the same message that carries its input (Qwen Code does), so a write of no length at all counts as
+     * [MIN_WRITE_SECONDS]: the plan was there at once, which is what the next run's bar should expect.
+     */
     fun observed(): RunShape? {
-        if (writeStarted.isNaN() || writeEnded.isNaN() || writeEnded <= writeStarted || writeChars == 0) return null
-        return RunShape(writeStarted - started, writeChars.toDouble(), writeChars / (writeEnded - writeStarted), 1)
+        if (writeStarted.isNaN() || writeEnded.isNaN() || writeEnded < writeStarted || writeChars == 0) return null
+        val took = (writeEnded - writeStarted).takeIf { it > 0 } ?: MIN_WRITE_SECONDS
+        return RunShape(writeStarted - started, writeChars.toDouble(), writeChars / took, 1)
     }
 
     /**
@@ -310,34 +303,33 @@ class ExplainProgress(private val expected: RunShape, private val now: () -> Dou
         )
     }
 
-    /** With its running token count — the one live sign of a long think, which streams no text. */
+    /**
+     * With its running token count — the one live sign of a long think, which on Claude streams no text. An ACP agent
+     * streams the text itself, so its count is characters.
+     */
     private fun thinkingLabel() = when {
+        thinkingTokens <= 0 && thinkingChars > 0 -> when {
+            thinkingChars < 1_000 -> "Thinking it through — $thinkingChars chars…"
+            else -> String.format(Locale.ROOT, "Thinking it through — %.1fk chars…", thinkingChars / 1000.0)
+        }
         thinkingTokens <= 0 -> "Thinking it through…"
         thinkingTokens < 1_000 -> "Thinking it through — $thinkingTokens tokens…"
         else -> String.format(Locale.ROOT, "Thinking it through — %.1fk tokens…", thinkingTokens / 1000.0)
     }
 
-    private fun toolLabel(name: String?, input: JsonObject?): String {
-        val path = input?.str("file_path")?.replace('\\', '/')
-        return when (name) {
-            "Read" -> when {
+    private fun toolLabel(tool: Tool): String = when (tool) {
+        is Tool.Read -> {
+            val path = tool.path?.replace('\\', '/')
+            when {
                 path == null -> "Reading the code…"
                 SKILL_DOCS in path -> "Reading the explainer's instructions…"
                 else -> "Reading ${path.substringAfterLast('/')}…"
             }
-            "Grep", "Glob" -> "Searching the code…"
-            "Task" -> "Exploring the code around it…"
-            else -> "Planning the walkthrough…"
         }
+        is Tool.Search -> "Searching the code…"
+        is Tool.Agent -> "Exploring the code around it…"
+        else -> "Planning the walkthrough…"
     }
-
-    /** The block that carries the plan: a `Write` of it, or the `set_plan` tool's call. */
-    private fun isPlan(name: String?) = name == "Write" || name == McpEndpoint.QUALIFIED_TOOL
-
-    private fun JsonObject.str(key: String): String? = (this[key] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-
-    private fun JsonObject.blocks(): List<JsonObject> =
-        runCatching { this["message"]!!.jsonObject["content"]!!.jsonArray.mapNotNull { it as? JsonObject } }.getOrDefault(emptyList())
 
     companion object {
         /** Seconds from the `Write`'s end until the plan is on screen — loaded from the `Write` itself, usually. */
@@ -346,6 +338,8 @@ class ExplainProgress(private val expected: RunShape, private val now: () -> Dou
         private const val CHECK_SECONDS = 10.0
         /** Seconds the bar takes to close most of the way to a new target. */
         const val GLIDE = 1.0
+        /** What a write of no length at all teaches as its length ([observed]). */
+        private const val MIN_WRITE_SECONDS = 1.0
         private const val CAP = 0.995
         private const val SKILL_DOCS = "/skills/audio-explainer/"
         private val WRITE_KEYS = Regex(Regex.escape("\\\"keep\\\"")) to Regex(Regex.escape("\\\"ttsText\\\""))

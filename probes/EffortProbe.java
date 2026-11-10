@@ -18,6 +18,8 @@ import com.audioexplainer.McpEndpoint;
 import com.audioexplainer.ProviderPreset;
 import com.audioexplainer.ProviderProfile;
 import com.audioexplainer.Providers;
+import com.audioexplainer.ClaudeStream;
+import com.audioexplainer.RunEvent;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -211,6 +213,21 @@ public final class EffortProbe {
                 kotlinx.serialization.json.Json.Default.parseToJsonElement(json));
     }
 
+    /** One `stream-json` line into [p], through the run's own parser — which keeps the message's block indices. */
+    static void feed(ClaudeStream s, ExplainProgress p, String line) {
+        for (RunEvent e : s.parse(line)) p.onEvent(e);
+    }
+
+    static void feed(ClaudeStream s, RunLog log, String line) {
+        for (RunEvent e : s.parse(line)) log.onEvent(e);
+    }
+
+    /** The retry a line carries, or null. */
+    static RunEvent.Retry retry(String line) {
+        for (RunEvent e : new ClaudeStream().parse(line)) if (e instanceof RunEvent.Retry r) return r;
+        return null;
+    }
+
     /** One JSON string literal's worth of escaping. */
     static String esc(String s) {
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
@@ -299,7 +316,8 @@ public final class EffortProbe {
         double[] clock = {0};
         ExplainProgress p = new ExplainProgress(new RunShape(30, input.length(), input.length() / 10.0, 1), () -> clock[0]);
         List<Double> seen = new ArrayList<>();
-        java.util.function.Consumer<String> feed = j -> { p.onEvent(ev(j)); seen.add(p.fraction()); };
+        ClaudeStream stream = new ClaudeStream();
+        java.util.function.Consumer<String> feed = j -> { feed(stream, p, j); seen.add(p.fraction()); };
         java.util.function.DoubleUnaryOperator at = t -> { clock[0] = t; double f = p.fraction(); seen.add(f); return f; };
 
         feed.accept("{\"type\":\"system\",\"subtype\":\"init\"}");
@@ -394,7 +412,7 @@ public final class EffortProbe {
         double[] c3 = {0};
         ExplainProgress whole3 = new ExplainProgress(mediumStd, () -> c3[0]);
         c3[0] = 20;
-        whole3.onEvent(ev(toolUse("Write", "{\"file_path\":\"p.json\",\"content\":\"{}\"}")));
+        feed(new ClaudeStream(), whole3, toolUse("Write", "{\"file_path\":\"p.json\",\"content\":\"{}\"}"));
         check("progress: without partial messages a whole Write still moves it on, and teaches nothing",
                 whole3.getPhase() == ExplainProgress.Phase.CHECKING && whole3.observed() == null);
     }
@@ -456,25 +474,26 @@ public final class EffortProbe {
         String plan = "{\"title\":\"t\",\"frames\":[{\"keep\":[]},{\"keep\":[]}],\"steps\":[{\"ttsText\":\"a\"},"
                 + "{\"ttsText\":\"b\"},{\"ttsText\":\"say \\\"keep\\\" and \\\"ttsText\\\"\"}]}";
         double[] clock = {0};
+        ClaudeStream ts = new ClaudeStream();
         ExplainProgress p = new ExplainProgress(new RunShape(30, plan.length(), plan.length() / 10.0, 1), () -> clock[0]);
-        p.onEvent(ev(MESSAGE_START));
+        feed(ts, p, MESSAGE_START);
         clock[0] = 30;
-        p.onEvent(ev(blockStart(1, McpEndpoint.QUALIFIED_TOOL)));
+        feed(ts, p, blockStart(1, McpEndpoint.QUALIFIED_TOOL));
         check("tool: the tool's call starting is the plan being written",
                 p.getPhase() == ExplainProgress.Phase.WRITING && "Writing the walkthrough…".equals(p.activity()));
         boolean sawFrame2 = false;
         int parts = (plan.length() + 2) / 3;
         for (int i = 0, k = 0; i < plan.length(); i += 3, k++) {
             clock[0] = 30 + 10.0 * (k + 1) / parts;
-            p.onEvent(ev(delta(plan.substring(i, Math.min(plan.length(), i + 3)))));
+            feed(ts, p, delta(plan.substring(i, Math.min(plan.length(), i + 3))));
             sawFrame2 |= p.activity().endsWith("frame 2…");
         }
         check("tool: 2 frames, then 3 steps — the prose's quoted \"keep\" and \"ttsText\" ignored",
                 sawFrame2 && "Writing the walkthrough — step 3…".equals(p.activity()));
-        p.onEvent(ev("{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_stop\",\"index\":1}}"));
-        p.onEvent(ev(toolUse(McpEndpoint.QUALIFIED_TOOL, plan)));
+        feed(ts, p, "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_stop\",\"index\":1}}");
+        feed(ts, p, toolUse(McpEndpoint.QUALIFIED_TOOL, plan));
         check("tool: its end is checking", p.getPhase() == ExplainProgress.Phase.CHECKING && "Checking the walkthrough…".equals(p.activity()));
-        p.onEvent(ev(TOOL_RESULT));
+        feed(ts, p, TOOL_RESULT);
         check("  and its result is finishing", "Finishing…".equals(p.activity()));
         RunShape observed = p.observed();
         check("tool: the run's shape is the tool's input — " + plan.length() + " chars in 10 s",
@@ -772,16 +791,17 @@ public final class EffortProbe {
     static void runLog() {
         double[] t = {100};
         RunLog log = new RunLog("Foo.cs", () -> t[0]);
+        ClaudeStream st = new ClaudeStream();
         String schema = "{\"file_path\":\"C:/skill/docs/plan-schema.md\"}";
-        log.onEvent(ev(tool("t1", "Read", schema, "Makora")));
+        feed(st, log, tool("t1", "Read", schema, "Makora"));
         t[0] = 101;
-        log.onEvent(ev("{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\"}}}"));
-        log.onEvent(ev("{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens_delta\":11400}"));
+        feed(st, log, "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\"}}}");
+        feed(st, log, "{\"type\":\"system\",\"subtype\":\"thinking_tokens\",\"estimated_tokens_delta\":11400}");
         t[0] = 170.4;
-        log.onEvent(ev("{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\"}}}"));
+        feed(st, log, "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\"}}}");
         // A 6000-line file paged in three disjoint reads: none is a re-read.
         for (int i = 0; i < 3; i++) {
-            log.onEvent(ev(tool("p" + i, "Read", "{\"file_path\":\"/src/Big.cs\",\"offset\":" + (1 + 2000 * i) + ",\"limit\":2000}", "Makora")));
+            feed(st, log, tool("p" + i, "Read", "{\"file_path\":\"/src/Big.cs\",\"offset\":" + (1 + 2000 * i) + ",\"limit\":2000}", "Makora"));
         }
         List<String> a = log.snapshot();
         check("run log: a read is its file name (" + a.get(1) + ")", a.get(1).endsWith("  Read plan-schema.md") && a.get(1).startsWith("    0.0s"));
@@ -791,21 +811,21 @@ public final class EffortProbe {
                 a.get(2).equals("    1.0s  Thinking 69.4s, ~11.4k tokens"));
         check("  a file paged in disjoint ranges is no re-read (" + a.get(3) + ")",
                 log.getRereads() == 0 && a.get(3).endsWith("Read Big.cs lines 1–2000"));
-        log.onEvent(ev(tool("r1", "Read", schema, "OpenInference")));
-        log.onEvent(ev(tool("r2", "Read", "{\"file_path\":\"C:/skill/docs/PLAN-SCHEMA.md\",\"offset\":120,\"limit\":150}", "OpenInference")));
-        log.onEvent(ev(tool("r3", "Read", "{\"file_path\":\"/src/Big.cs\",\"offset\":1500,\"limit\":100}", "OpenInference")));
+        feed(st, log, tool("r1", "Read", schema, "OpenInference"));
+        feed(st, log, tool("r2", "Read", "{\"file_path\":\"C:/skill/docs/PLAN-SCHEMA.md\",\"offset\":120,\"limit\":150}", "OpenInference"));
+        feed(st, log, tool("r3", "Read", "{\"file_path\":\"/src/Big.cs\",\"offset\":1500,\"limit\":100}", "OpenInference"));
         check("  overlapping reads count, path case ignored, and no warning yet at 3",
                 log.getRereads() == 3 && log.getWarning() == null);
         check("  a host change is logged", log.snapshot().stream().anyMatch(l -> l.endsWith("Host: OpenInference")));
-        log.onEvent(ev(tool("r4", "Read", schema, "OpenInference")));
+        feed(st, log, tool("r4", "Read", schema, "OpenInference"));
         List<String> b = log.snapshot();
         check("  the 4th re-read warns (" + log.getWarning() + ")",
                 log.getRereads() == 4 && "May be looping: 4 re-reads of files it already read (last plan-schema.md)".equals(log.getWarning())
                         && b.get(b.size() - 1).contains("⚠ The model keeps re-reading") && b.get(b.size() - 2).endsWith("⟲ re-read 4"));
-        log.onEvent(ev(tool("s1", McpEndpoint.QUALIFIED_TOOL, "{\"frames\":[{},{},{}],\"steps\":[{},{}]}", "OpenInference")));
-        log.onEvent(ev("{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"s1\",\"content\":[{\"type\":\"text\","
+        feed(st, log, tool("s1", McpEndpoint.QUALIFIED_TOOL, "{\"frames\":[{},{},{}],\"steps\":[{},{}]}", "OpenInference"));
+        feed(st, log, ("{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"s1\",\"content\":[{\"type\":\"text\","
                 + "\"text\":\"{\\\"ok\\\":true,\\\"frames\\\":3,\\\"steps\\\":2,\\\"issues\\\":[\\\"[info] relation.endpoint-not-kept — x\\\"]}\"}]}]}}"));
-        log.onEvent(ev("{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"r4\",\"is_error\":true,"
+        feed(st, log, ("{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"r4\",\"is_error\":true,"
                 + "\"content\":\"<tool_use_error>Page range exceeds maximum</tool_use_error>\"}]}}"));
         List<String> c = log.snapshot();
         int n = c.size();
@@ -923,15 +943,15 @@ public final class EffortProbe {
         String r429 = r401.replace("401", "429").replace("authentication_failed", "rate_limit");
         String r500 = r401.replace("401", "500"), r529 = r401.replace("401", "529");
         String init = "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s\",\"model\":\"api_retry-ish\"}";
-        Providers.Retry a = Providers.INSTANCE.retry(r401);
+        RunEvent.Retry a = retry(r401);
         check("retry: a 401 line stops the run (attempt 1 of 10)", a != null && a.getAuthRejected()
                 && Integer.valueOf(1).equals(a.getAttempt()) && Integer.valueOf(10).equals(a.getMaxRetries()));
-        check("  a 403 line does too", Providers.INSTANCE.retry(r403).getAuthRejected());
+        check("  a 403 line does too", retry(r403).getAuthRejected());
         check("  429, 500 and 529 retry without stopping",
-                !Providers.INSTANCE.retry(r429).getAuthRejected() && !Providers.INSTANCE.retry(r500).getAuthRejected()
-                        && !Providers.INSTANCE.retry(r529).getAuthRejected());
-        check("  a non-retry line (even one mentioning it) is not a retry", Providers.INSTANCE.retry(init) == null
-                && Providers.INSTANCE.retry("not json api_retry") == null);
+                !retry(r429).getAuthRejected() && !retry(r500).getAuthRejected()
+                        && !retry(r529).getAuthRejected());
+        check("  a non-retry line (even one mentioning it) is not a retry", retry(init) == null
+                && retry("not json api_retry") == null);
 
         String err = "⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set\n"
                 + "[claude-code:unrecognized_model] {\"model\":\"x\"}\nreal failure here";

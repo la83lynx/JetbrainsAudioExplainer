@@ -1,0 +1,4 @@
+# tool=1 provider=OpenRouter cancel=0
+1.193	{"type":"system","subtype":"init","model":"z-ai/glm-5.3-flash","mcp_servers":[{"name":"audio-explainer","status":"connected","source":"dynamic"}]}
+1.201	{"type":"system","subtype":"status","status":"requesting"}
+1.280	{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":558,"error_status":401,"error":"authentication_failed"}

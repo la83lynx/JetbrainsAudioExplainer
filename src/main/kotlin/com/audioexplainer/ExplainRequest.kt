@@ -22,7 +22,7 @@ enum class ExplainScope { CURSOR, FILE, DIRECTORY }
  * matching the plan/segment schema. [caretLine]/[selectionText] only carry meaning for [ExplainScope.CURSOR];
  * for the Solution-Explorer scopes the target is the whole [file] (plus [extraPaths] for a multi-selection).
  */
-data class ExplainRequest(
+data class ExplainRequest @JvmOverloads constructor(
     val projectBasePath: String?,
     val absolutePath: String,
     val file: String,
@@ -49,6 +49,13 @@ data class ExplainRequest(
      * A one-off never becomes the default: only the *history* of these is persisted, never the value.
      */
     val extraInstructions: String? = null,
+    /**
+     * Per-run agent from the "Explain This with…" dialog ([com.audioexplainer.acp.AgentPresets]), or null for the
+     * saved [AudioExplainerSettings.State.explainHarness].
+     */
+    val harness: String? = null,
+    /** Per-run provider profile id, "" for none (the agent's own setup), or null for the saved one. */
+    val provider: String? = null,
 ) {
     /** Bare file name, for progress/notification text. */
     val displayName: String

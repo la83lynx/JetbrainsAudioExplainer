@@ -1,12 +1,7 @@
 package com.audioexplainer
 
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.net.URI
 import java.util.UUID
 
@@ -50,8 +45,9 @@ class ProviderPreset(
 )
 
 /**
- * **Everything about a provider run that is a pure function** — the presets, the `--settings` JSON, the
- * `api_retry` classifier, the stderr filter — so `probes/EffortProbe.java` holds it with no IDE.
+ * **Everything about a provider run that is a pure function** — the presets, the `--settings` JSON, the stderr
+ * filter — so `probes/EffortProbe.java` holds it with no IDE. A provider's `api_retry` is a [RunEvent.Retry] now,
+ * read by [ClaudeStream].
  *
  * The mechanism (verified against OpenRouter, 2026-11-05): Claude Code is pointed at the provider through an `env` block
  * in a `--settings <file>`, which beats an `env` of the same key in `~/.claude/settings.json`. The prompt and
@@ -92,9 +88,13 @@ object Providers {
         it.preset = preset.id
     }
 
-    /** The selected profile, or null for Claude Code's own setup — including an id whose profile was removed. */
-    fun selected(state: AudioExplainerSettings.State): ProviderProfile? =
-        state.explainProvider.takeIf { it.isNotBlank() }?.let { id -> state.providers.firstOrNull { it.id == id } }
+    /**
+     * The selected profile — [override] (a per-run choice; "" = none) or the saved one — or null for the agent's own
+     * setup, including an id whose profile was removed.
+     */
+    @JvmOverloads
+    fun selected(state: AudioExplainerSettings.State, override: String? = null): ProviderProfile? =
+        (override ?: state.explainProvider).takeIf { it.isNotBlank() }?.let { id -> state.providers.firstOrNull { it.id == id } }
 
     fun needsKey(profile: ProviderProfile): Boolean = preset(profile.preset)?.needsKey ?: true
 
@@ -136,24 +136,6 @@ object Providers {
         env["ANTHROPIC_API_KEY"] = JsonPrimitive("")
         for (v in MODEL_VARS) env[v] = JsonPrimitive(profile.model.trim())
         return JsonObject(mapOf("env" to JsonObject(env))).toString()
-    }
-
-    /** One `system/api_retry` event: the CLI is about to retry a failed API call. */
-    class Retry(val status: Int?, val attempt: Int?, val maxRetries: Int?, val error: String?) {
-        /** A rejected key: the CLI would retry it 10 times with backoff to ~40 s, about 3 minutes for nothing. */
-        val authRejected: Boolean get() = status == 401 || status == 403
-    }
-
-    private val json = Json { ignoreUnknownKeys = true }
-
-    /** The [Retry] a `stream-json` line carries, or null for any other line. */
-    fun retry(line: String): Retry? {
-        if (!line.contains("api_retry")) return null
-        val obj = runCatching { json.parseToJsonElement(line.trim()).jsonObject }.getOrNull() ?: return null
-        fun str(k: String) = runCatching { obj[k]?.jsonPrimitive?.contentOrNull }.getOrNull()
-        fun int(k: String) = runCatching { obj[k]?.jsonPrimitive?.intOrNull }.getOrNull()
-        if (str("type") != "system" || str("subtype") != "api_retry") return null
-        return Retry(int("error_status"), int("attempt"), int("max_retries"), str("error"))
     }
 
     /**

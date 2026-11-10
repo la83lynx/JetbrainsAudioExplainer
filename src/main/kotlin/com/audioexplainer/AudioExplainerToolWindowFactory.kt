@@ -31,7 +31,9 @@ class AudioExplainerToolWindowFactory : ToolWindowFactory {
         }
         val content = ContentFactory.getInstance().createContent(component, "", false)
         toolWindow.contentManager.addContent(content)
-        // The last run's log, after the banner is gone — a run that succeeds clears it as its plan lands.
-        ActionManager.getInstance().getAction("AudioExplainer.ShowRunLog")?.let { toolWindow.setTitleActions(listOf(it)) }
+        // The last run's log, after the banner is gone — a run that succeeds clears it as its plan lands. Before it,
+        // the run's own stop while one is going (hidden otherwise), so cancelling needs no hunt for the status bar.
+        val am = ActionManager.getInstance()
+        toolWindow.setTitleActions(listOfNotNull(am.getAction("AudioExplainer.CancelExplain"), am.getAction("AudioExplainer.ShowRunLog")))
     }
 }

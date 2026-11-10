@@ -1,5 +1,6 @@
 package com.audioexplainer
 
+import com.audioexplainer.acp.AgentPresets
 import com.audioexplainer.tree.ChevronStyle
 import com.audioexplainer.tree.NestLeader
 import com.audioexplainer.tree.NodeDeemphasis
@@ -34,9 +35,11 @@ import com.intellij.ui.dsl.builder.bindIntValue
 import com.intellij.ui.dsl.builder.bindItem
 import com.intellij.ui.dsl.builder.bindSelected
 import com.intellij.ui.dsl.builder.bindText
+import com.intellij.ui.dsl.builder.columns
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.ui.DocumentAdapter
 import com.intellij.ui.layout.ComponentPredicate
+import com.intellij.ui.layout.and
 import com.intellij.ui.layout.not
 import com.intellij.openapi.observable.properties.AtomicBooleanProperty
 import com.intellij.openapi.util.text.StringUtil
@@ -183,12 +186,29 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
      */
     private val appearancePreview = AppearancePreview()
 
+    // ── The agent (Models.B.md B2b) ─────────────────────────────────────────────
+
+    private val harnessCombo: ComboBox<String> = ComboBox((listOf(AgentPresets.CLAUDE) + AgentPresets.ACP).toTypedArray()).apply {
+        renderer = SimpleListCellRenderer.create("") { AgentPresets.label(it ?: AgentPresets.CLAUDE) }
+        addActionListener { providerCombo.repaint() }
+    }
+
+    private fun harnessIs(vararg ids: String) = object : ComponentPredicate() {
+        override fun invoke() = (harnessCombo.selectedItem as? String ?: AgentPresets.CLAUDE) in ids
+        override fun addListener(listener: (Boolean) -> Unit) = harnessCombo.addActionListener { listener(invoke()) }
+    }
+
     // ── Provider profiles ──────────────────────────────────────────────────────
 
     /** Profile ids, `""` first for Claude Code; the renderer shows names. */
-    private val providerCombo = ComboBox<String>().apply {
+    private val providerCombo: ComboBox<String> = ComboBox<String>().apply {
         renderer = SimpleListCellRenderer.create("") { id ->
-            if (id.isNullOrEmpty()) "Claude Code (your own setup)" else state.providers.firstOrNull { it.id == id }?.name ?: id
+            if (id.isNullOrEmpty()) {
+                if ((harnessCombo.selectedItem as? String ?: AgentPresets.CLAUDE) == AgentPresets.CLAUDE) "Claude Code (your own setup)"
+                else "None — the agent's own setup"
+            } else {
+                state.providers.firstOrNull { it.id == id }?.name ?: id
+            }
         }
         addActionListener { loadProfileModel(); providerTestLabel.text = ""; providerTestShown.set(false) }
     }
@@ -349,6 +369,34 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         // for, how hard the agent thinks per turn, and which model does it. These are also the values the
         // per-run "Explain This (Audio) with…" dialog is seeded from.
         collapsibleGroup("Explanation") {
+            row("Agent:") {
+                cell(harnessCombo).bindItem(
+                    { state.explainHarness.takeIf { it == AgentPresets.CLAUDE || it in AgentPresets.ACP } ?: AgentPresets.CLAUDE },
+                    { state.explainHarness = it ?: AgentPresets.CLAUDE },
+                )
+            }.rowComment(
+                "Claude Code runs every walkthrough by default. An <b>ACP agent</b> — opencode, Qwen Code, or one " +
+                    "of your own — runs the same prompt and sends the plan through the same <code>set_plan</code> " +
+                    "tool, and may only read, search and send the plan: every other request is refused. " +
+                    "<b>Unsupported by Anthropic.</b>",
+            )
+            row("opencode:") {
+                textField().bindText(state::opencodePath).columns(36)
+            }.rowComment("Path to <code>opencode</code>; blank looks on PATH and where its installers put it.")
+                .visibleIf(harnessIs(AgentPresets.OPENCODE))
+            row("Qwen Code:") {
+                textField().bindText(state::qwenPath).columns(36)
+            }.rowComment("Path to <code>qwen</code>; blank looks on PATH and in npm's directory. Needs Node.js 22 or newer.")
+                .visibleIf(harnessIs(AgentPresets.QWEN))
+            row("Command:") {
+                textField().bindText(state::customAgentCommand).columns(36)
+            }.rowComment(
+                "The agent's command line, executable first, speaking ACP on stdio (for example " +
+                    "<code>gemini --experimental-acp</code>). It runs on its own setup; a provider's model is asked " +
+                    "of the session when the agent offers it, and its key is not passed. <b>Set it to ask before " +
+                    "edits, commands and fetches</b>: the plugin refuses what an agent asks about, but cannot stop " +
+                    "one that does not ask — it can only stop the run once it sees one.",
+            ).visibleIf(harnessIs(AgentPresets.CUSTOM))
             row("Depth:") {
                 comboBox(AudioExplainerSettings.DEPTH_LEVELS)
                     .bindItem(
@@ -391,7 +439,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                     .bindItem({ state.explainModel }, { state.explainModel = it?.trim() ?: "" })
                     .applyToComponent { renderer = SimpleListCellRenderer.create("") { modelLabel(it) } }
             }.rowComment("Blank keeps your own configured model, which is usually the right one.")
-                .visibleIf(providerSelected.not())
+                .visibleIf(providerSelected.not() and harnessIs(AgentPresets.CLAUDE))
             row("Model:") {
                 cell(profileModelCombo)
                     .onReset { pendingModels.clear(); loadProfileModel() }
