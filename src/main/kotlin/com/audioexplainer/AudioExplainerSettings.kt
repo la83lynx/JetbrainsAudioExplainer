@@ -347,7 +347,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         @JvmField var explainProvider: String = ""
 
         /**
-         * Which agent runs Explain This (`Models.B.md` B2b): [com.audioexplainer.acp.AgentPresets.CLAUDE] (the default) —
+         * Which agent runs Explain This: [com.audioexplainer.acp.AgentPresets.CLAUDE] (the default) —
          * Claude Code, as every run before it — or an ACP agent: `opencode`, `qwen`, `custom`.
          */
         @JvmField var explainHarness: String = "claude"

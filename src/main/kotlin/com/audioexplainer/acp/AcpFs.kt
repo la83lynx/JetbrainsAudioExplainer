@@ -8,7 +8,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 
 /**
- * **`fs/read_text_file`, answered from the IDE** (`Models.B.md` B2b): an agent that hands its reads to the client
+ * **`fs/read_text_file`, answered from the IDE**: an agent that hands its reads to the client
  * (Qwen Code does) reads the editor's text, so a walkthrough of a file with unsaved edits narrates the edits.
  *
  * Only inside the roots the permission policy allows ([AcpPolicy.inRoots]) — the project, the skill, the

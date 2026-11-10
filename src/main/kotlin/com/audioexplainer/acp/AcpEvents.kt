@@ -9,7 +9,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 
 /**
- * **An ACP agent's `session/update`s as [RunEvent]s** (`Models.B.md` B2b) — the second parser beside
+ * **An ACP agent's `session/update`s as [RunEvent]s** — the second parser beside
  * [com.audioexplainer.ClaudeStream], one instance per run.
  *
  * | update | events |

@@ -113,7 +113,7 @@ object ExplainPrompt {
      *
      * [docsAttached] is for an ACP agent the two docs are sent to as `resource` blocks beside this text ([SKILL_DOCS]):
      * the prompt says they are attached instead of asking for them to be read. One agent's reader truncated the
-     * schema at line 375 of 601 (`Models.B.md`), and every agent saves two tool calls. Every other prompt is
+     * schema at line 375 of 601, and every agent saves two tool calls. Every other prompt is
      * unchanged by it.
      */
     @JvmOverloads

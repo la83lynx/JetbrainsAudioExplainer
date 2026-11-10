@@ -10,7 +10,7 @@ import kotlinx.serialization.json.longOrNull
 
 /**
  * **The one place that knows Claude Code's `stream-json`**: each stdout line of a headless `claude -p` becomes
- * the [RunEvent]s it carries (`Models.B.md` B2a).
+ * the [RunEvent]s it carries.
  *
  * One instance per run, because the stream is not self-describing line by line: an argument delta names only
  * its block's index within the message, so the parser keeps which tool call each index of the current message is.

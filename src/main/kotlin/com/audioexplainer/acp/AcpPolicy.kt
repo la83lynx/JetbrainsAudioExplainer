@@ -9,7 +9,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
 /**
- * **What an ACP agent may do in an explain run: read, search, and send the plan** (`Models.B.md` B2b) — the answers
+ * **What an ACP agent may do in an explain run: read, search, and send the plan** — the answers
  * to `session/request_permission`, as a pure function so `probes/AcpProbe.java` can table-test it.
  *
  * Allowed, once each:

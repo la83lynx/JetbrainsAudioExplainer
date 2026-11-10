@@ -54,7 +54,7 @@ class ExplainOptionsDialog(project: Project?) : DialogWrapper(project) {
             .firstOrNull { it == settings.state.explainDepth } ?: AudioExplainerSettings.DEPTH_STANDARD
     }
 
-    /** The agent for this run, seeded from Settings (`Models.B.md` B2b). */
+    /** The agent for this run, seeded from Settings. */
     private val harnessCombo = ComboBox((listOf(AgentPresets.CLAUDE) + AgentPresets.ACP).toTypedArray()).apply {
         renderer = SimpleListCellRenderer.create("") { AgentPresets.label(it ?: AgentPresets.CLAUDE) }
         selectedItem = settings.state.explainHarness.takeIf { it == AgentPresets.CLAUDE || it in AgentPresets.ACP } ?: AgentPresets.CLAUDE

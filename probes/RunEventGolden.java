@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * **What a user sees of a Claude run, frozen** (`Models.B.md` B2a): each recorded `stream-json` run in
+ * **What a user sees of a Claude run, frozen**: each recorded `stream-json` run in
  * `probes/fixtures/stream/` replayed through the plugin's own reading of the stream, on the run loop's 200 ms
  * beat and the recording's own clock, and everything that reading produces written down — the bar and its
  * activity line at every tick that changed them, the warning, the run log, the `idea.log` timeline, the plans

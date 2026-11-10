@@ -6,7 +6,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
 /**
- * **One run's events, read the same way whichever harness produced them** (`Models.B.md` B2a): each one goes to
+ * **One run's events, read the same way whichever harness produced them**: each one goes to
  * the progress bar and the run log, and this keeps what the run itself needs — its timeline in `idea.log`, the
  * plan handed over the moment it is written, the result, whether the `set_plan` tool connected, and a
  * provider's retries.

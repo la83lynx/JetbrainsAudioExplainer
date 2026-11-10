@@ -186,7 +186,7 @@ class ClaudeExplainer {
     }
 
     /**
-     * **An Explain This run on an ACP agent** (`Models.B.md` B2b): the same request, skill, prompt, plan directory,
+     * **An Explain This run on an ACP agent**: the same request, skill, prompt, plan directory,
      * `set_plan` endpoint, bar and report as a Claude run, with [AcpHarness] in place of `claude -p`.
      *
      * The tool is the only way back for its plan: the read-only policy refuses the `Write` and the shell a POST needs,

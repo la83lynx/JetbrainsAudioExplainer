@@ -14,7 +14,7 @@ import java.io.InputStream
 import java.io.OutputStream
 
 /**
- * **One explain run's ACP session** (`Models.B.md` B2b), over any pair of streams: `initialize` → `session/new` with
+ * **One explain run's ACP session**, over any pair of streams: `initialize` → `session/new` with
  * the run's `set_plan` server → the model, when asked for one → `session/prompt` → its stop reason. The agent's
  * updates go to [onEvents] as [RunEvent]s ([AcpEvents]), its permission requests are answered by [AcpPolicy] (each
  * refusal reported to [onRefused]), and its file reads by [AcpFs] with [readText].

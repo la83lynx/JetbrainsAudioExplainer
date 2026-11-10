@@ -36,7 +36,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * **The ACP client, with no agent and no IDE** (`Models.B.md` B2b): the permission policy as a table, the client's
+ * **The ACP client, with no agent and no IDE**: the permission policy as a table, the client's
  * file reads, each preset's launch, the JSON-RPC framing against an in-process fake agent, and the two recorded
  * sessions in `probes/fixtures/acp/` (opencode and Qwen Code on this repo's `RunLog.kt`, 2026-11-06) replayed
  * through the real `AcpSession` into a `RunReader`, the run log and the bar — on the recording's own clock.

@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class AcpException(val code: Int, message: String) : RuntimeException(message)
 
 /**
- * **The Agent Client Protocol's wire** (`Models.B.md` B2b): JSON-RPC 2.0 over an agent's stdio, one message per line.
+ * **The Agent Client Protocol's wire**: JSON-RPC 2.0 over an agent's stdio, one message per line.
  *
  * Three kinds of traffic: our requests and their responses, matched by id ([request]); the agent's notifications
  * ([onNotification], `session/update` mostly); and the agent's requests to us ([onRequest] —

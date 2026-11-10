@@ -186,7 +186,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
      */
     private val appearancePreview = AppearancePreview()
 
-    // ── The agent (Models.B.md B2b) ─────────────────────────────────────────────
+    // ── The agent ───────────────────────────────────────────────────────────────
 
     private val harnessCombo: ComboBox<String> = ComboBox((listOf(AgentPresets.CLAUDE) + AgentPresets.ACP).toTypedArray()).apply {
         renderer = SimpleListCellRenderer.create("") { AgentPresets.label(it ?: AgentPresets.CLAUDE) }

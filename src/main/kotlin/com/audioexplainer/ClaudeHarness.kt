@@ -22,7 +22,7 @@ internal class RunResult(
 )
 
 /**
- * **Claude Code as the harness** (`Models.B.md` B2a): a headless `claude -p` whose `stream-json` stdout is split into
+ * **Claude Code as the harness**: a headless `claude -p` whose `stream-json` stdout is split into
  * lines, each parsed by [ClaudeStream] and read by a [RunReader]. Everything about the stream's format is in the
  * parser; what is here is the process and the run loop.
  *

@@ -18,7 +18,7 @@ class AgentLaunch(
 )
 
 /**
- * **The ACP agents Explain This knows how to start** (`Models.B.md` B2b), as a pure function of the preset, the
+ * **The ACP agents Explain This knows how to start**, as a pure function of the preset, the
  * provider profile, its key and the effort — so `probes/AcpProbe.java` holds every launch with no IDE.
  *
  * **The user's own agent config is never rewritten, and `HOME` is never redirected** — either would break the

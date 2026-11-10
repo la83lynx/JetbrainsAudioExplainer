@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * **An ACP agent as the harness** (`Models.B.md` B2b): the agent's process, one [AcpSession] over its stdio, and the
+ * **An ACP agent as the harness**: the agent's process, one [AcpSession] over its stdio, and the
  * same [RunLoop] Claude's runs use — so the bar, the run log, the stops and the result are the ones a Claude run
  * gets.
  *
