@@ -14,7 +14,7 @@ import kotlinx.serialization.json.putJsonObject
 import kotlinx.serialization.json.add
 
 /**
- * **The `set_plan` tool, spoken as MCP** — how a headless run hands the plugin its plan (`Speed.md` #3).
+ * **The `set_plan` tool, spoken as MCP** — how a headless run hands the plugin its plan.
  *
  * The run used to `Write` the plan to a file and POST the file with a helper script. A `Write` carries the plan
  * as a JSON *string*, every quote and newline escaped, and the POST was a turn of its own with a tail after it;

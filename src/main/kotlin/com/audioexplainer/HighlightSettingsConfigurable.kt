@@ -1299,7 +1299,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         /**
          * Label for an effort value; "" is the first item and is the *inherit* one.
          *
-         * The numbers are `Speed.md`'s, and only the measured stops carry one — `high` and `max` were never
+         * Only the measured stops carry a number — `high` and `max` were never
          * run, and a plausible-looking interpolation on a settings page reads as a result.
          */
         private fun effortLabel(value: String): String = when (value) {

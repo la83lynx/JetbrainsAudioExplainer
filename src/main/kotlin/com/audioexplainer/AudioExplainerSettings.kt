@@ -328,7 +328,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
          * user made elsewhere.** Blank-means-inherit is the safe default for [explainModel]; here it is
          * precisely the bug the speed round found — a `~/.claude/settings.json` `effortLevel` chosen for
          * interactive coding was costing a walkthrough four minutes where `medium` takes two and produces
-         * the same plan shape (Speed.md's table: 255s vs 118s). Blank stays reachable for the two people
+         * the same plan shape (measured: 255s vs 118s). Blank stays reachable for the two people
          * who want it.
          */
         @JvmField var explainEffort: String = EFFORT_MEDIUM
@@ -366,7 +366,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
          * How much walkthrough to ask for: [DEPTH_BRIEF], [DEPTH_STANDARD], [DEPTH_DETAILED] or [DEPTH_DEEP].
          * Prompt text only — nothing else in the pipeline reads it, and it narrows what `docs/plan-schema.md`
          * allows rather than adding to it. **Depth buys back wall-clock time by bounding reach**: at xhigh, Deep's
-         * extra time was opening other files and thinking about them, not writing a longer plan (`Speed.md`,
+         * extra time was opening other files and thinking about them, not writing a longer plan (measured
          * 2026-11-04) — which is why Detailed keeps Deep's annotations but not its reach.
          */
         @JvmField var explainDepth: String = DEPTH_STANDARD
@@ -483,7 +483,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
 
         const val DEPTH_BRIEF = "brief"
         const val DEPTH_STANDARD = "standard"
-        /** Deep's annotations with Standard's reach: frames only from the target (`Speed.md` #9). */
+        /** Deep's annotations with Standard's reach: frames only from the target. */
         const val DEPTH_DETAILED = "detailed"
         const val DEPTH_DEEP = "deep"
         val DEPTH_LEVELS = listOf(DEPTH_BRIEF, DEPTH_STANDARD, DEPTH_DETAILED, DEPTH_DEEP)

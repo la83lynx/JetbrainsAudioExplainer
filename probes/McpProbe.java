@@ -17,7 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * **The `set_plan` tool's endpoint, over a real socket** (`Speed.md` #3): the real `ExplainerServer`, started on
+ * **The `set_plan` tool's endpoint, over a real socket**: the real `ExplainerServer`, started on
  * loopback, spoken to as Claude Code's HTTP transport speaks to it — the `server/discover` probe it opens with,
  * `initialize`, the notification, the GET it tries for a stream, `tools/list`, `tools/call`.
  *

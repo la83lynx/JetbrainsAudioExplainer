@@ -589,7 +589,7 @@ public class BuildService
         check("focus: NOT inferred when stated (control)", !has(good, "frame.focus-inferred"));
 
         // ── 6. A step lighting a line its frame elides ──
-        // Just past a kept range: the loader widens it (Speed.md "widen keep") instead of a [warn] re-send.
+        // Just past a kept range: the loader widens it instead of a [warn] re-send.
         ResolvedPlan stray = PlanLoader.INSTANCE.resolve(plan(
                 Collections.singletonList(frame(0, "A.cs", null, 0, null, ctx(1, 3), focus(68, 87))),
                 Collections.singletonList(step(0, ctx(86, 90)))));
@@ -1219,7 +1219,7 @@ public class BuildService
                 Collections.singletonList(step(0, ctx(10, 20)))));
         check("relation: an endpoint on a line the frame does not keep is reported",
                 has(relUnkept, "relation.endpoint-not-kept"));
-        // **Dropped by the plugin, at info** (`Speed.md` #3): as a warn, an agent re-sent the whole plan to fix
+        // **Dropped by the plugin, at info**: as a warn, an agent re-sent the whole plan to fix
         // one arrow. The renderer must not get the relation, and the report must not read as "fix and re-send".
         check("relation: and it is dropped from the frame, reported at info rather than warn",
                 relUnkept.frame(0).getFrame().getRelations().isEmpty()

@@ -11,7 +11,7 @@ import com.intellij.openapi.components.service
  * **What each effort/depth/model combination has taken on this machine** — the [RunShape] the progress bar
  * expects, learned from finished runs and seeded by [RunShape.seed] until one has run.
  *
- * Learned rather than tabled because the spread is the user's to have: effort sets the thinking (Speed.md:
+ * Learned rather than tabled because the spread is the user's to have: effort sets the thinking (measured:
  * ~14 s at low, ~150 s at xhigh), depth the plan's size, the model both, and the code being explained all three.
  * Machine-local (`RoamingType.DISABLED`): timings depend on this machine's network and account, not on a
  * preference worth syncing.

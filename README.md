@@ -28,10 +28,10 @@ ships to users.
   identity and the unsaved prompt, cited from `SaveFlow`, `Walkthrough`, `WalkthroughStorage`,
   `ExplainPrompt`, `ClaudeExplainer`, the sidebar and both probes: `git show 4a54373:Saving.md`.
   **`SourceCheck.md` as well** — the plan for checking a plan against the code in the POST reply, and the
-  measurement that found no time to save at `medium`. Cited from `ExplainPrompt`, `Speed.md` and
+  measurement that found no time to save at `medium`. Cited from `ExplainPrompt` and
   `PlanProbe`: `git show 2d3d4df:SourceCheck.md`.
-  `Speed.md` stays in the tree until widening a stray `keep` is judged in a sandbox; its closed candidates are cut to
-  one-line verdicts there, with the full write-ups at `git show e12d4ab:Speed.md`.
+  **`Speed.md` as well** — where a run's time goes and the ten closed speed candidates, as one-line verdicts:
+  `git show 13bba05:Speed.md`; their full write-ups at `git show e12d4ab:Speed.md`.
   **`Models.md` as well** — the plan for other models (provider profiles behind Claude Code, then an ACP agent
   harness), both built: `git show 70ad9f8:Models.md`.
 - `build.gradle.kts` / `settings.gradle.kts` — Gradle + IntelliJ Platform Gradle Plugin 2.x, targeting Rider 2026.1.4 (branch 261).

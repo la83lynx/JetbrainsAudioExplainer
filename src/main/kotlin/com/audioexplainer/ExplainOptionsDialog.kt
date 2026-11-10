@@ -29,7 +29,7 @@ import javax.swing.JSlider
  * run is precisely the friction this dialog exists to remove.
  *
  * The line under the slider changes with the stop because the word on its own means nothing: `medium`
- * only tells you something next to what `xhigh` costs. The numbers on it are `Speed.md`'s measurements,
+ * only tells you something next to what `xhigh` costs. The numbers on it are measured ones,
  * and the stops it has no measurement for say so rather than guessing.
  */
 class ExplainOptionsDialog(project: Project?) : DialogWrapper(project) {
@@ -160,8 +160,8 @@ class ExplainOptionsDialog(project: Project?) : DialogWrapper(project) {
         const val RECENT_PLACEHOLDER = "Recent…"
 
         /**
-         * One line per stop, in [AudioExplainerSettings.EFFORT_LEVELS] order. The measured ones quote
-         * `Speed.md`'s table (one 200-line C# method, n = 1 per variant); the two that were never measured
+         * One line per stop, in [AudioExplainerSettings.EFFORT_LEVELS] order. The measured ones come from
+         * timed runs (one 200-line C# method, n = 1 per variant); the two that were never measured
          * say so instead of interpolating a number that would read as a result.
          */
         val EFFORT_NOTES = listOf(

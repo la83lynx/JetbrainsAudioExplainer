@@ -63,7 +63,7 @@ JetBrains re-signs on upload; the signature only proves integrity/authorship. To
   elsewhere** and needs a line in the release notes. Two deltas from the plan, both behavioural: `PowerShell`
   is now on `ALLOWED_TOOLS` (the plan had a diagnostic row and no fix, which would have shipped a check nobody
   could act on — `Bash` was already command-unrestricted, so it grants nothing new), and Depth's combo has no
-  blank item. Plan: `git show f873b3d:Effort.md`; measurements: `Speed.md`.
+  blank item. Plan: `git show f873b3d:Effort.md`; measurements: `git show 13bba05:Speed.md`.
 - **Re-check Japanese narration by ear.** Everything else in the narration tiers is judged — the `runIde`
   session of 2026-09-16 passed all seven checks plus the UX batch, the install console and the C++ row, and
   confirmed the three fixes from the round before (see `ExplainerLanguages.md`). The one thing it found is

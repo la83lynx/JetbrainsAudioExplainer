@@ -503,7 +503,7 @@ object PlanLoader {
 
     /**
      * **A step lighting a few lines just past its frame's `keep` widens the nearest kept range** instead of
-     * being a `[warn]` (`Speed.md`, "widen `keep`").
+     * being a `[warn]`.
      *
      * As a `[warn]` it sent the agent back to re-send the whole plan — ~25s at xhigh (2026-11-05,
      * `xhigh / detailed`: "step 3 lights lines 18-21 of frame 0, but 3 of them are not kept") — to fix what is
@@ -668,7 +668,7 @@ object PlanLoader {
      *
      * **An end on an elided line drops the relation** rather than drawing it into the placeholder, and says so
      * at `info`. It was a `warn` the author was asked to fix, and an agent sending the plan through a tool call
-     * fixed it by re-sending the whole plan — ~20s for one arrow (`Speed.md` #3). A link into nothing is
+     * fixed it by re-sending the whole plan — ~20s for one arrow. A link into nothing is
      * worse than no link, so the plugin takes the author's cheaper fix itself. Returns the frames with only
      * the relations left that can be drawn.
      */

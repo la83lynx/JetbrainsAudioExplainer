@@ -12,7 +12,7 @@ import kotlinx.serialization.json.contentOrNull
  * provider's retries.
  *
  * **The timeline** is a line per tool call with its elapsed time, and a closing line with the run's own
- * accounting. It exists because a sandbox round could not answer the two questions `Speed.md` keeps asking: how
+ * accounting. It exists because a sandbox round could not answer the two questions every speed measurement asks: how
  * long the run took, and what it spent the time on. INFO, so it reaches `idea.log` and stays out of the `runIde`
  * console.
  *

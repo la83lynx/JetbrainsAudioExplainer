@@ -50,7 +50,7 @@ data class RunShape(
         /**
          * The guess before a combination has run here. Medium/Standard is bench3 (six runs: the `Write` starts
          * at 27-48 s, ~8 000 chars at ~320/s); the rest is the 2026-10-13 sandbox round (medium/Brief ~15 s,
-         * high/Standard ~28 s, xhigh/Deep ~206 s) and `Speed.md`'s xhigh/Standard (~165 s).
+         * high/Standard ~28 s, xhigh/Deep ~206 s) and a timed xhigh/Standard run (~165 s).
          */
         fun seed(effort: String, depth: String): RunShape {
             val pre = when (effort.trim()) {

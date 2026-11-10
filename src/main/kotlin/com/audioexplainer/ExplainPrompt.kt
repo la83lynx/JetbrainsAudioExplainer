@@ -87,13 +87,13 @@ object ExplainPrompt {
         // OS, powershell on Windows, the .sh helper elsewhere) — tighten ALLOWED_TOOLS to narrow it.
         add("--allowedTools"); add(if (mcpConfig != null) TOOL_ALLOWED_TOOLS else ALLOWED_TOOLS)
         // **No MCP server of the user's loads**, only the run's own — none of theirs is on the allow-list, so each
-        // was startup spent on tools the run cannot call. Speed.md measured it at ~2.3s of startup (3.3-4.4s with
+        // was startup spent on tools the run cannot call. Measured at ~2.3s of startup (3.3-4.4s with
         // the dev machine's servers, 1.2-1.4s without). `--mcp-config` takes a list, so a flag must follow it.
         if (mcpConfig != null) { add("--mcp-config"); add(mcpConfig.toString()) }
         add("--strict-mcp-config")
         // **Two `if`s, and the argv is deliberately NOT what shipped.** Passing neither flag meant
         // every run inherited `~/.claude/settings.json`'s `effortLevel` — a value chosen for interactive
-        // coding, and the four-minute walkthrough Speed.md measured. Blank still means inherit, for the
+        // coding, and a measured four-minute walkthrough. Blank still means inherit, for the
         // two people who want it; it is simply no longer the default.
         if (effort.isNotBlank()) { add("--effort"); add(effort.trim()) }
         if (settings != null) { add("--settings"); add(settings.toString()) }
@@ -193,7 +193,7 @@ object ExplainPrompt {
                     )
                     appendLine()
                 }
-                // **Detailed bounds reach, not output** (`Speed.md`, 2026-11-04): at xhigh, Deep's extra three
+                // **Detailed bounds reach, not output** (measured 2026-11-04): at xhigh, Deep's extra three
                 // minutes were spent opening other files for nested callees, not writing the plan. So this is
                 // Deep's annotations with every frame in the target, and one read beyond it at most.
                 AudioExplainerSettings.DEPTH_DETAILED -> {
@@ -443,7 +443,7 @@ object ExplainPrompt {
                         "(an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.",
                 )
                 // **The reply is the validation** (`SourceCheck.md`). Told to verify its own tokens and lines, the
-                // agent wrote and ran a script for it on every run — ~16 s and three turns, measured (`Speed.md` #4).
+                // agent wrote and ran a script for it on every run — ~16 s and three turns, measured.
                 // The server checks the same things against the same text now, so the prompt says not to.
                 appendLine(
                     "   The reply checks every token and line number against the source files, so do NOT write or " +

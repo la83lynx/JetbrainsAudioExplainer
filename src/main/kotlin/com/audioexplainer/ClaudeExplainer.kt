@@ -32,7 +32,7 @@ import java.nio.file.Path
  * sidebar. The C# symbol is NOT resolved in-plugin (decision 2); that's Claude's job.
  *
  * **When the tool does not connect, the run is started again the old way** — the agent `Write`s the plan
- * and POSTs it with a helper script. The tool is ~12 s faster (`Speed.md` #3), but the POST is the path
+ * and POSTs it with a helper script. The tool is ~12 s faster, but the POST is the path
  * that needs nothing from the CLI's MCP support or the user's policy on it.
  *
  * Runs on the background thread of [ExplainThisAction]'s `Task.Backgroundable`. The process and its output are
@@ -473,7 +473,7 @@ class ClaudeExplainer {
      *
      * The `Write` that holds the plan is in the stream as soon as it is generated, and the agent then spends
      * 10-15 s on a shell call to POST the same file and a closing summary — time the reader spent looking at a
-     * spinner over a walkthrough that already existed (`Speed.md`, bench2 and bench3). So the plugin takes it
+     * spinner over a walkthrough that already existed. So the plugin takes it
      * from the stream and loads it through the server's own validation.
      *
      * **Only a clean plan loads early** ([ExplainerServer.preload]): one whose reply would carry an `[error]` or

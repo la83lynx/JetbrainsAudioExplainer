@@ -418,7 +418,7 @@ public final class EffortProbe {
     }
 
     /**
-     * **The `set_plan` tool's run** (`Speed.md` #3): the argv grants the tool and nothing that writes or runs, the
+     * **The `set_plan` tool's run**: the argv grants the tool and nothing that writes or runs, the
      * prompt names the tool and never the POST, and the bar reads the tool's plain-JSON input as it read the
      * `Write`'s escaped one. The POST run is every control — it is also the fallback, so it must not have moved.
      */

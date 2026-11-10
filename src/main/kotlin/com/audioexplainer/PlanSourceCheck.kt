@@ -16,7 +16,7 @@ fun interface SourceLines {
  *
  * It exists because the loader's silence about the code was being filled by the agent: `plan-schema.md` told it
  * to verify its own tokens and lines before POSTing, and it did, with a script it wrote and ran every time —
- * measured at ~16 s and three turns of a run (`Speed.md` #4). Every one of those checks is a string comparison
+ * measured at ~16 s and three turns of a run. Every one of those checks is a string comparison
  * the server can make in microseconds, against the same text the tree will render, and report in the same
  * `issues` array the agent already reads. So the agent stops checking, and the check stops being optional.
  *
