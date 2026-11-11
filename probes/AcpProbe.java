@@ -38,7 +38,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * **The ACP client, with no agent and no IDE**: the permission policy as a table, the client's
  * file reads, each preset's launch, the JSON-RPC framing against an in-process fake agent, and the two recorded
- * sessions in `probes/fixtures/acp/` (opencode and Qwen Code on this repo's `RunLog.kt`, 2026-11-06) replayed
+ * sessions in `probes/fixtures/acp/` (opencode and Qwen Code on this repo's `RunLog.kt`) replayed
  * through the real `AcpSession` into a `RunReader`, the run log and the bar — on the recording's own clock.
  */
 public final class AcpProbe {
@@ -79,7 +79,7 @@ public final class AcpProbe {
 
     // ── what the policy cannot answer: a call never asked about ────────────────
 
-    /** opencode as a Custom agent writing `notes.txt` (sandbox, 2026-11-09), its three updates verbatim but the content. */
+    /** opencode as a Custom agent writing `notes.txt`, its three updates verbatim but the content. */
     static final String[] WRITE = {
         "{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"call_w\",\"title\":\"write\",\"kind\":\"edit\",\"status\":\"pending\",\"locations\":[],\"rawInput\":{}}",
         "{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"call_w\",\"status\":\"in_progress\",\"kind\":\"edit\",\"title\":\"write\","
@@ -201,7 +201,7 @@ public final class AcpProbe {
                         && own.getEnv().get("OPENCODE_CONFIG_CONTENT").contains("\"bash\":\"deny\""));
         check("  opencode leaves Claude Code's skills out, with a profile and without",
                 "1".equals(own.getEnv().get("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS")) && "1".equals(oc.getEnv().get("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS")));
-        // The sandbox round of 2026-11-09: Qwen Code with no profile, verbatim.
+        // Qwen Code's own refusal with no profile, verbatim.
         String qwenAuth = "Authentication required: Use /auth to sign in or configure a model first.";
         String ownHint = AgentPresets.INSTANCE.authHint(qwenAuth, "Qwen Code 0.26.8", null);
         check("an agent's auth refusal with no provider says to choose one — " + ownHint,
@@ -445,9 +445,9 @@ public final class AcpProbe {
         check(name + ": each set_plan is a line with its sizes, and its reply under it", all.matches("(?s).*set_plan: \\d+ frame\\(s\\), \\d+ step\\(s\\)\n[^\n]*→ ok, .*"));
         check(name + ": the last reply is clean", lines.stream().filter(l -> l.contains("→ ")).reduce((x, y) -> y).orElse("").endsWith(", clean"));
         List<String> oursAsked = ourAnswers.values().stream().filter(v -> v.contains("\"outcome\"")).toList();
-        List<String> spikeAsked = recordedAnswers.values().stream().filter(v -> v.contains("\"outcome\"")).toList();
-        check(name + ": nothing was refused (" + refused + "), and each of the " + spikeAsked.size()
-                + " permission(s) answered as the spike's client did — " + oursAsked, refused.isEmpty() && !spikeAsked.isEmpty() && oursAsked.equals(spikeAsked));
+        List<String> recordedAsked = recordedAnswers.values().stream().filter(v -> v.contains("\"outcome\"")).toList();
+        check(name + ": nothing was refused (" + refused + "), and each of the " + recordedAsked.size()
+                + " permission(s) answered as the recording's client did — " + oursAsked, refused.isEmpty() && !recordedAsked.isEmpty() && oursAsked.equals(recordedAsked));
         check(name + ": the run's end is ok and its last words kept — " + reader.getFinalText(),
                 !reader.isError() && reader.getFinalText() != null && all.contains("Finished: ") && all.contains("cost n/a (" + provider + ")"));
         check(name + ": the tool counted as connected", RunReader.CONNECTED.equals(reader.getToolStatus()));

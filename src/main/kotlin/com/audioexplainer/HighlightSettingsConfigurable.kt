@@ -14,8 +14,6 @@ import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.components.service
-import com.intellij.openapi.editor.colors.EditorColorsManager
-import com.intellij.openapi.editor.colors.EditorFontType
 import com.intellij.openapi.options.BoundConfigurable
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
@@ -47,7 +45,6 @@ import com.intellij.util.ui.UIUtil
 import javax.swing.JTextField
 import javax.swing.event.DocumentEvent
 import java.awt.Color
-import java.awt.Font
 import com.intellij.util.ui.JBUI
 import java.awt.FlowLayout
 import java.awt.GraphicsEnvironment
@@ -61,7 +58,7 @@ import javax.swing.text.DefaultFormatterFactory
 import javax.swing.text.NumberFormatter
 
 /**
- * Settings page for the editor spotlight appearance (Phase 3.5), shown under
+ * Settings page for the editor spotlight appearance, shown under
  * **Settings/Preferences → Tools → Audio Explainer** (registered as an `applicationConfigurable`
  * with `parentId="tools"`; the page's id comes from that EP registration). Reads/writes
  * [AudioExplainerSettings]; on apply it also re-styles the live walkthrough (if one is showing) so a
@@ -114,7 +111,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     }
 
     init {
-        // Off the EDT: discover Windows SAPI voices (Phase L7) so the language/voice combos below include
+        // Off the EDT: discover Windows SAPI voices so the language/voice combos below include
         // them + any SAPI-only languages, and warm the Kokoro prerequisite probe (both `refresh = false`,
         // so they only run a subprocess if never probed — usually already warm). Then fill the "Audio
         // engines" status labels with `ModalityState.any()` so the update lands even though the Settings
@@ -155,10 +152,9 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     private lateinit var arrowSquareCheck: JBCheckBox
     private lateinit var arrowLabelsCheck: JBCheckBox
 
-    // ── The code tree (Phase 4) ────────────────────────────────────────────────
-    // §1c's verdict table has a column saying, per alternative, whether it became a setting; these eight are
-    // that column. What is missing from it is deliberate and is listed in the group's own comment, because a
-    // reader looking for the chrome switch should find out here that it is a rule rather than hunt for it.
+    // ── The code tree ──────────────────────────────────────────────────────────
+    // What is missing here (e.g. a chrome switch) is deliberate and listed in the group's own comment: it is
+    // a rule, not a setting.
     private lateinit var treeLeaderCombo: ComboBox<String>
     private lateinit var treeChevronCombo: ComboBox<String>
     private lateinit var treeStepFoldCombo: ComboBox<String>
@@ -243,11 +239,11 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         })
     }
 
-    /** The narration voice combo (Phase L7 cleanup) — its items are rebuilt to match the currently-selected
+    /** The narration voice combo — its items are rebuilt to match the currently-selected
      *  explanation language, so it always shows only voices valid for that language. */
     private lateinit var voiceCombo: ComboBox<String>
 
-    /** Per-engine status labels in the "Audio engines" group (Phase L7 cleanup) — filled from the cached
+    /** Per-engine status labels in the "Audio engines" group — filled from the cached
      *  TTS status / SAPI discovery and re-filled by the "Re-check" / "Rescan" buttons. Nullable because the
      *  background warm-up in [init] may fire before [createPanel] builds them (the setters then no-op). */
     private var kokoroStatusLabel: JBLabel? = null
@@ -262,9 +258,8 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         // section collapses, and the ones you rarely reopen start collapsed, so the page opens as a
         // readable table of contents instead of one long scroll.
 
-        // **Setup first.** Per-engine status, provisioning and engine-specific info/links (Phase L7
-        // cleanup), one sub-group per synthesizer tier. Replaces the old modal "Set up TTS" chooser.
-        // Only Kokoro — the primary tier — is open by default; the other three are opt-in.
+        // **Setup first.** Per-engine status, provisioning and engine-specific info/links, one sub-group
+        // per synthesizer tier. Only Kokoro — the primary tier — is open by default; the other three are opt-in.
         collapsibleGroup("Audio engines") {
             collapsibleGroup("Kokoro — neural (local, primary)") {
                 row {
@@ -463,7 +458,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                     .bindItem({ state.explanationLanguage }, { state.explanationLanguage = it ?: Languages.DEFAULT_CODE })
                     .applyToComponent {
                         renderer = SimpleListCellRenderer.create("") { languageLabel(it) }
-                        // Live-filter the voice combo to this language (Phase L7 cleanup), like the sidebar.
+                        // Live-filter the voice combo to this language, like the sidebar.
                         addActionListener {
                             if (this@HighlightSettingsConfigurable::voiceCombo.isInitialized) {
                                 rebuildVoiceCombo(selectedItem as? String)
@@ -472,9 +467,8 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                     }
             }.rowComment("Language for NEW ‘Explain This’ generations — a loaded walkthrough keeps its own. Each entry lists the voice tiers it offers; Japanese & Chinese need extra packs (Audio engines, above).")
             row {
-                // The old "Engine" combo only ever meant on/off (the synthesizer tier is per-voice), so it's
-                // just a checkbox now. `ttsEngine` still stores kokoro/off under the hood for back-compat and
-                // the "Turn off audio" setup action.
+                // On/off only — the synthesizer tier is per-voice. `ttsEngine` stores kokoro/off under the
+                // hood for back-compat and the "Turn off audio" setup action.
                 checkBox("Enable narration (audio)")
                     .bindSelected({ state.ttsEngine != ENGINE_OFF },
                         { state.ttsEngine = if (it) ENGINE_KOKORO else ENGINE_OFF })
@@ -789,8 +783,8 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 "On by default: capping the outermost node puts a second scrollbar inside the first. Nested " +
                     "hosts are always sized to their excerpt plus whatever is embedded in them.",
             )
-            // Was the group's own rowComment; a rowComment on a collapsible header keeps showing while
-            // the section is folded, so the note lives inside the fold it belongs to.
+            // Not the group's rowComment: one on a collapsible header keeps showing while the section is
+            // folded, so the note lives inside the fold it belongs to.
             row {
                 comment(
                     "Three things about the tree are <b>not</b> here, and each was decided rather than " +
@@ -849,10 +843,9 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
                 // Empty, not "the derived colour" — see [arrowSlotPanels]. Reset restores the *rule* that
                 // produces the palette, which is the only thing that can survive a change of accent.
                 arrowSlotPanels.forEach { it.selectedColor = null }
-                // **The tree's defaults are the judged verdicts** (§1c), so this button restores the shape
-                // nine sandbox rounds settled rather than a set of neutral starting values. That is the
-                // whole reason they are constants on the settings class instead of literals in `TreeStyle`:
-                // Reset and the style resolver have to read the same number.
+                // The tree's defaults are the tuned shape, not neutral starting values. They are constants on
+                // the settings class instead of literals in `TreeStyle` because Reset and the style resolver
+                // have to read the same number.
                 treeLeaderCombo.selectedItem = AudioExplainerSettings.DEF_TREE_LEADER
                 treeChevronCombo.selectedItem = AudioExplainerSettings.DEF_TREE_CHEVRON
                 treeStepFoldCombo.selectedItem = AudioExplainerSettings.DEF_TREE_STEP_FOLD
@@ -994,18 +987,13 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     /**
      * Re-style the currently-showing walkthrough (if any) with the new settings.
      *
-     * This used to find `EditorHighlighter`s. When the in-place surface was deleted the filter would have
-     * matched nothing and Apply would have become a silent no-op — the settings would take effect only on the
-     * next render, which for an open tree could be never.
-     *
-     * Every *colour* is derived per render (constraint 11), so re-rendering the current step is the re-style
+     * Every *colour* is derived per render, so re-rendering the current step is the re-style
      * for those. The **tree's shape** is not: the leader mode decides which border edges are drawn at all, and
      * painting a step never revisits them. `TreePlanController.refresh` is where the two are told apart, and
      * this call is the same either way.
      *
-     * **The sidebar needs telling too, and did not used to be told** (K6). Its accent is a CSS variable the
-     * plugin writes from `accentColor`, but only when the page is built or the IDE's LAF changes — so an
-     * Apply moved the tree and left the panel on the old colour. Same listener list, same reason it works:
+     * **The sidebar needs telling too.** Its accent is a CSS variable the plugin writes from `accentColor`,
+     * otherwise only when the page is built or the IDE's LAF changes. Same listener list, same reason it works:
      * a `Walkthrough` outlives any one tool window, so whoever is registered is whoever is open.
      */
     private fun refreshLiveWalkthrough() {
@@ -1015,7 +1003,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     }
 
     /**
-     * Repopulate [voiceCombo] with the voices eligible for [langCode] (Phase L7 cleanup), keeping the
+     * Repopulate [voiceCombo] with the voices eligible for [langCode], keeping the
      * current selection if it's still valid, otherwise selecting that language's default voice. Called on
      * reset and whenever the explanation-language combo changes.
      */
@@ -1030,7 +1018,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     private fun validVoiceFor(langCode: String?, voiceId: String?): String =
         if (Languages.isVoiceValidFor(langCode, voiceId)) voiceId!! else Languages.defaultVoiceFor(langCode)
 
-    // ── Audio engines section (Phase L7 cleanup) ──────────────────────────────
+    // ── Audio engines section ──────────────────────────────────────────────────
 
     private fun anyOpenProject(): Project? = ProjectManager.getInstance().openProjects.firstOrNull()
 
@@ -1079,7 +1067,6 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         }
     }
 
-    /** "Re-check engines": re-probe Kokoro prerequisites + rescan SAPI voices off the EDT, then refresh. */
     /**
      * Run [ExplainerDiagnostics] off the EDT behind a modal progress, then show the rows.
      *
@@ -1205,6 +1192,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
         providerTestShown.set(true)
     }
 
+    /** "Re-check engines": re-probe Kokoro prerequisites + rescan SAPI voices off the EDT, then refresh. */
     private fun recheckAll() {
         kokoroStatusLabel?.text = "Checking…"
         piperStatusLabel?.text = "Checking…"
@@ -1278,7 +1266,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
     private fun plural(n: Int) = if (n == 1) "" else "s"
 
     companion object {
-        /** NaturalVoiceSAPIAdapter — the third-party SAPI5 provider the Windows-SAPI section links to (L7). */
+        /** NaturalVoiceSAPIAdapter — the third-party SAPI5 provider the Windows-SAPI section links to. */
         private const val ADAPTER_URL = "https://github.com/gexgd0419/NaturalVoiceSAPIAdapter"
         private const val BUILD_TOOLS_URL = "https://visualstudio.microsoft.com/visual-cpp-build-tools/"
 
@@ -1289,7 +1277,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
 
         /**
          * All language codes for the menu, from the canonical [Languages] registry. Computed at panel-build
-         * time (not class-load) so runtime-discovered Windows SAPI voices + SAPI-only languages (Phase L7)
+         * time (not class-load) so runtime-discovered Windows SAPI voices + SAPI-only languages
          * are included — the [init] block warms the discovery cache first.
          */
         private fun languageCodes(): List<String> = Languages.allLanguages().map { it.code }
@@ -1357,7 +1345,7 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
             else -> "Bar — accent bar down the left"
         }
 
-        // ── The code tree's combos (Phase 4) ───────────────────────────────────
+        // ── The code tree's combos ─────────────────────────────────────────────
         //
         // **The items come off the enums, not out of a list here.** A hand-written list is a second
         // enumeration of the same fact, and the one that silently goes stale is always the one further from
@@ -1474,10 +1462,8 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
  *
  * `JSpinner`'s number editor gives its formatter the model's min/max, so `InternationalFormatter`
  * answers out-of-range *text* with `ParseException("Value not within min/max range")` — and the
- * settings dialog commits every formatted field in `doOKAction`. One typed digit outside the range
- * (a 0 in a 0..100-now, 20..100-then opacity spinner, say) therefore threw from OK: the dialog
- * refused to close and the platform logged a SEVERE against whichever plugin owned the page. Every
- * spinner here was exposed, not just the appearance ones.
+ * settings dialog commits every formatted field in `doOKAction`. Unclamped, one typed digit outside the
+ * range throws from OK: the dialog refuses to close and the platform logs a SEVERE against this plugin.
  *
  * Clamping in `stringToValue` keeps the bounds meaningful — type 500 and the commit rewrites the
  * field to the maximum, so you see what you got — while making OK unblockable. Unparseable text

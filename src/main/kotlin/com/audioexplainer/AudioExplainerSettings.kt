@@ -13,7 +13,7 @@ import com.intellij.util.xmlb.XmlSerializerUtil
  * [AudioExplainerSettings.State] — one per variant (`ae_f`/`ae_m`). Split: **runtime** params
  * (pitch/range/wordGap → `espeak_SetParameter`) + **Layer-2** params (consonants/roughness/flutter/breath →
  * regenerate the variant file). `roughness` is espeak-native (0 = smoothest; the dialog shows it inverted
- * as "Smoothness"). See `ExplainerLanguages.md` §12 and `tts_server.py` `_build_variant`.
+ * as "Smoothness"). See `tts_server.py` `_build_variant`.
  */
 class EspeakProfile {
     @JvmField var pitch: Int = 50        // runtime PITCH, 0..100
@@ -26,7 +26,7 @@ class EspeakProfile {
 }
 
 /**
- * Persisted, user-tunable appearance settings for the editor spotlight (Phase 3.5).
+ * Persisted, user-tunable appearance settings for the editor spotlight.
  *
  * App-level (IDE-wide, not per-project) so one set of preferences applies wherever a walkthrough runs.
  * Values survive restarts in `audioExplainer.xml`. [SpotlightRenderer] reads [state] on every render,
@@ -61,8 +61,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
 
         /**
          * Give non-active highlight lines their OWN cue — a faint [accentColor] background tint — so they
-         * no longer read identically to gap lines (which only carry the gutter bar). Addresses the
-         * Phase 3 readability complaint directly.
+         * don't read identically to gap lines (which only carry the gutter bar).
          */
         @JvmField var nonActiveTint: Boolean = true
         @JvmField var nonActiveTintPercent: Int = DEF_NONACTIVE_TINT
@@ -77,7 +76,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         @JvmField var calloutTintPercent: Int = DEF_CALLOUT_TINT
 
         /**
-         * How opaque that background is. 100 = solid (the default, and how the box has always looked).
+         * How opaque that background is. 100 = solid (the default).
          * Lower it and code or a relation arrow underneath the box reads through it — which matters when an
          * arrow's leg has nowhere to run but across the box, on an editor too narrow to route around it.
          */
@@ -85,7 +84,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
 
         /**
          * How the box is drawn *around* its text: [CALLOUT_FRAME_BAR] (accent bar down the left, the
-         * original), [CALLOUT_FRAME_OUTLINE] (accent border), [CALLOUT_FRAME_SOLID] (tinted panel alone),
+         * default), [CALLOUT_FRAME_OUTLINE] (accent border), [CALLOUT_FRAME_SOLID] (tinted panel alone),
          * [CALLOUT_FRAME_NONE] (text with no panel at all — the lightest thing to put over code) or
          * [CALLOUT_FRAME_COMMENT] (no panel either, but every line prefixed `//` and painted in the scheme's
          * own comment colour, so the aside reads as a comment somebody wrote in the file).
@@ -98,7 +97,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
 
         /**
          * Font family for the callout's *description* text — the prose aside and the relation pointer lines.
-         * Blank = the editor's own font, which is what it has always used. The worked example ignores this
+         * Blank = the editor's own font. The worked example ignores this
          * and stays on the editor font deliberately: it is code, and code that isn't in the code font reads
          * as prose about code.
          *
@@ -134,10 +133,8 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         /**
          * **One colour per link slot** — `LinkArt.SLOTS` of them, in slot order, blank meaning *derive*.
          *
-         * This replaced an `arrowUseAccent` flag plus a single `arrowColor`, which could only ever move the
-         * *base* of the hue rotation: five links on one step took five hues off it whether the reader liked
-         * those hues or not. What a reader actually wants to fix is a specific slot that reads badly against
-         * their theme, and that is a picker per slot.
+         * A picker per slot, because what a reader wants to fix is a specific slot that reads badly against
+         * their theme; a single base colour could only move the whole hue rotation.
          *
          * **Blank is not "no colour", it is "the derived one"**, and it is the default for every slot, so out
          * of the box this changes nothing: `LinkArt.color(accent, slot)` still answers, slot 0 is still the
@@ -150,10 +147,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         /**
          * Link line width in tenths of a px.
          *
-         * **10, not the 14 it was.** Until the K1 round this value was parsed into a style object nothing
-         * read, so the number here and the 1.0 px `LinkArt` actually strokes had been free to disagree —
-         * and had. Wiring the knob up moved the default to the drawing rather than the drawing to the
-         * default: 1 px is what shipped and what nine rounds judged.
+         * Defaults to 10 (1 px), the width `LinkArt` was tuned at.
          */
         @JvmField var arrowThicknessTenths: Int = DEF_ARROW_THICKNESS
 
@@ -169,28 +163,15 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
          */
         @JvmField var arrowLabels: Boolean = true
 
-        // **There is no "Step decorations" group any more, and that is deliberate.**
-        //
-        // `callout`, `calloutExample`, `tokenFlash`, `tokenFlashMs` and `relations` were five switches over
-        // four things the *narrator* had already decided to say. Every one of them was inert on a step that
-        // carried no `note` / `example` / `token` / `relations` — which is most steps — so what they actually
-        // offered was the power to silence a step that did have something to add. A walkthrough's author put
-        // it there; hiding it is not a preference, it is a way to be shown less than you were told.
-        //
-        // They are gone rather than pinned to `true`: a setting that only has one useful value is a row in a
-        // dialog, a field in `audioExplainer.xml` and a branch in the renderer, all of them costing reading
-        // for nothing. The flash's duration went with them — `DEF_TOKEN_FLASH_MS` is now simply what the
-        // fade takes, and it stayed a named constant so `SpotlightRenderer` and its KDoc still agree on one
-        // number.
+        // No switches for a step's note / example / token flash / relations, deliberately: they are what the
+        // narrator chose to say, so hiding them only shows the reader less. The token flash's fade time is
+        // the fixed `DEF_TOKEN_FLASH_MS`.
 
-        // ── The code tree (Phase 4) ────────────────────────────────────────────
+        // ── The code tree ──────────────────────────────────────────────────────
         //
-        // **Every default here is a judged verdict, not a starting point**, which is what makes Reset-to-
-        // defaults restore the shape the reader actually approved across G1c′–G1c⁷ rather than whatever a
-        // constructor happened to say. `TreeStyle` is the one place these strings become the enums, and
-        // `PlanProbe` asserts each default names a real constant *and* agrees with `NestStyle()` /
-        // `CodeNodeStyle()`'s own default — two transcriptions of one verdict is exactly the drift this
-        // project keeps paying for.
+        // The defaults here are the tuned tree shape, which is what Reset-to-defaults restores. `TreeStyle`
+        // is the one place these strings become the enums, and `PlanProbe` asserts each default names a real
+        // constant *and* agrees with `NestStyle()` / `CodeNodeStyle()`'s own default, so the two cannot drift.
         //
         // Values are the enum constant names (case-insensitively), so there is no second vocabulary to keep
         // in step. An unrecognised one degrades to the default rather than failing the load: a settings file
@@ -199,7 +180,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         /**
          * **The leader mode** — `CORNERS` / `BRACE` / `ARROW`, and the headline setting of this whole group.
          *
-         * One choice with three values and **no fourth**: constraint 16 makes the leader carry the token
+         * One choice with three values and **no fourth**: the leader carries the token
          * box's bottom edge and the child frame's top edge in the two joining modes, so "no leader" would
          * leave a bottomless box above a topless frame with nothing between them. Chrome travels with it and
          * is *not* offered beside it for the same reason — see [com.audioexplainer.tree.NodeChrome].
@@ -208,8 +189,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
 
         /**
          * Which shape carries a nesting's collapse/expand gesture: `HORIZONTAL` / `VERTICAL` /
-         * `BOTTOM_BORDER` / `NONE`. Asked for outright — *"we should allow other configurations"* — and
-         * `NONE` is the control that shows what the click was reaching.
+         * `BOTTOM_BORDER` / `NONE`.
          */
         @JvmField var treeChevron: String = DEF_TREE_CHEVRON
 
@@ -234,50 +214,47 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
 
         /**
          * How a node the step is not talking about is pushed back: `NONE` / `TINT` / `BORDER` /
-         * `TINT_AND_BORDER`. Every value is a **background** — constraint 1 leaves no foreground option to
-         * offer, because a foreground dim flattens each dimmed row to one grey and destroys the semantic
+         * `TINT_AND_BORDER`. Every value is a **background** — there is no foreground option,
+         * because a foreground dim flattens each dimmed row to one grey and destroys the semantic
          * colour the whole architecture exists to keep.
          */
         @JvmField var treeDeemphasis: String = DEF_TREE_DEEMPHASIS
 
         /**
          * How an elided run is drawn, and whether the reader can open it: `OPENABLE` (plain fold +
-         * placeholder) or `SEALED` (prettier, and shut for good — constraint 6, measured).
+         * placeholder) or `SEALED` (prettier, and shut for good).
          */
         @JvmField var treeElision: String = DEF_TREE_ELISION
 
         /**
-         * The **ceiling** on a node's height in px, not its size: constraint 8 orders it
+         * The **ceiling** on a node's height in px, not its size: a node's height is
          * `min(excerpt, content, this + embedded + callout)`, so a short member gets its own few lines and
          * only a long one meets this number.
          */
         @JvmField var treeMaxHeight: Int = DEF_TREE_MAX_HEIGHT
 
         /**
-         * Let **every** node grow to its content instead of capping it. Off by default, and constraint 19 is
-         * why it is worth a warning rather than a shrug: a node with no viewport smaller than its content
-         * cannot be scrolled, so switching this on switches off the per-node reveal that Phase 3's attention
-         * policy is built out of.
+         * Let **every** node grow to its content instead of capping it. Off by default, with a warning: a node
+         * with no viewport smaller than its content cannot be scrolled, so switching this on switches off the
+         * per-node reveal the attention policy is built out of.
          */
         @JvmField var treeGrowNodes: Boolean = false
 
         /**
          * Grow a **top-level** node that hosts a nesting, rather than capping it (`NestStyle.growHosts`).
          *
-         * Narrowed to the root by the G1c′ round and left on: capping the root gives it an inner scrollbar
-         * inside the outer pane — two scrollbars for one node. Off is the comparison it has always been:
-         * the root at [treeMaxHeight] plus whatever is embedded, against the whole caller.
+         * Root only, and on by default: capping the root gives it an inner scrollbar inside the outer pane —
+         * two scrollbars for one node. Off caps the root at [treeMaxHeight] plus whatever is embedded.
          */
         @JvmField var treeGrowHosts: Boolean = true
 
-        // ── TTS / narration (Phase 7) ──────────────────────────────────────────
+        // ── TTS / narration ──────────────────────────────────────────────────────
 
         /**
          * Narration on/off: [ENGINE_KOKORO] (on — the default; the running Kokoro server also hosts the
-         * espeak robotic tier (L6) and, on Windows, the System.Speech tier (L7), chosen **per voice** via
-         * [ttsVoice]), or [ENGINE_OFF] (silent: the walkthrough still loads + highlights). [ENGINE_SAPI] is
-         * a **retired** value (the old global-SAPI stub, Phase 7b) — kept only so an old persisted "sapi"
-         * decodes without error; it's treated as on ([NarrationController] gates solely on off vs. ready).
+         * espeak robotic tier and, on Windows, the System.Speech tier, chosen **per voice** via
+         * [ttsVoice]), or [ENGINE_OFF] (silent: the walkthrough still loads + highlights). Any other
+         * value (an older file may hold `sapi`) counts as on: [NarrationController] gates on off vs. ready.
          */
         @JvmField var ttsEngine: String = ENGINE_KOKORO
 
@@ -314,21 +291,21 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
 
         /**
          * Whether the guided first-run TTS setup has been offered already, so triggering audio does
-         * not re-prompt on every play. Reset by "Set up TTS" to force the prompt again.
+         * not re-prompt on every play.
          */
         @JvmField var ttsSetupPrompted: Boolean = false
 
-        // ── Explanation generation (Effort.md) ────────────────────
+        // ── Explanation generation ─────────────────────────────────
 
         /**
          * `claude --effort` for an Explain This run: "" (inherit the CLI's own default), or one of
          * [EFFORT_LEVELS].
          *
          * **It ships `medium`, and that is the one place this plugin deliberately overrides a setting the
-         * user made elsewhere.** Blank-means-inherit is the safe default for [explainModel]; here it is
-         * precisely the bug the speed round found — a `~/.claude/settings.json` `effortLevel` chosen for
-         * interactive coding was costing a walkthrough four minutes where `medium` takes two and produces
-         * the same plan shape (measured: 255s vs 118s). Blank stays reachable for the two people
+         * user made elsewhere.** Blank-means-inherit is the safe default for [explainModel]; here it
+         * is a trap — a `~/.claude/settings.json` `effortLevel` chosen for interactive coding can cost a
+         * walkthrough four minutes where `medium` takes two and produces the same plan shape (measured: 255s
+         * vs 118s). Blank stays reachable for the two people
          * who want it.
          */
         @JvmField var explainEffort: String = EFFORT_MEDIUM
@@ -348,7 +325,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
 
         /**
          * Which agent runs Explain This: [com.audioexplainer.acp.AgentPresets.CLAUDE] (the default) —
-         * Claude Code, as every run before it — or an ACP agent: `opencode`, `qwen`, `custom`.
+         * Claude Code — or an ACP agent: `opencode`, `qwen`, `custom`.
          */
         @JvmField var explainHarness: String = "claude"
 
@@ -366,8 +343,8 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
          * How much walkthrough to ask for: [DEPTH_BRIEF], [DEPTH_STANDARD], [DEPTH_DETAILED] or [DEPTH_DEEP].
          * Prompt text only — nothing else in the pipeline reads it, and it narrows what `docs/plan-schema.md`
          * allows rather than adding to it. **Depth buys back wall-clock time by bounding reach**: at xhigh, Deep's
-         * extra time was opening other files and thinking about them, not writing a longer plan (measured
-         * 2026-11-04) — which is why Detailed keeps Deep's annotations but not its reach.
+         * extra time was opening other files and thinking about them, not writing a longer plan (measured)
+         * — which is why Detailed keeps Deep's annotations but not its reach.
          */
         @JvmField var explainDepth: String = DEPTH_STANDARD
 
@@ -420,8 +397,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
     override fun loadState(state: State) = XmlSerializerUtil.copyBean(state, myState)
 
     companion object {
-        // Defaults re-tuned from the original hardcoded 0.35 / 0.55 (a ~20-pt gap that read as identical)
-        // to a ~40-pt gap, plus the new non-active tint — the Phase 3.5 "ship better defaults" quick win.
+        // A ~40-pt gap between the outside and within dims: a ~20-pt gap reads as identical.
         const val DEF_OUTSIDE_DIM = 22
         const val DEF_WITHIN_DIM = 62
         const val DEF_ACTIVE_GLOW = 10
@@ -429,11 +405,10 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         const val DEF_GAP_WIDTH = 3
         const val DEF_CALLOUT_TINT = 18
 
-        /** Solid, i.e. the box exactly as it looked before opacity was a setting. */
+        /** Solid. */
         const val DEF_CALLOUT_OPACITY = 100
 
-        // Callout/arrow geometry defaults. These were renderer constants until they became settings; the
-        // values are unchanged, so a fresh install draws exactly what it drew before.
+        // Callout/arrow geometry defaults.
         const val DEF_CALLOUT_ARC = 6
         const val DEF_CALLOUT_BAR_W = 3
         const val DEF_CALLOUT_TEXT_SCALE = 100
@@ -446,21 +421,12 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         const val CALLOUT_FRAME_NONE = "none"
         const val CALLOUT_FRAME_COMMENT = "comment"
 
-        // The tree's shipped defaults (Phase 4). Enum constant names, resolved in `TreeStyle`; each one is
-        // asserted against the enum *and* against the style class's own default, so the two cannot drift.
-        //
-        // Six of the nine are §1c's judged verdicts. **Three are not, and saying so is the point**: the leader
-        // and the collapse control were changed to `BRACE` / `BOTTOM_BORDER` by the reader before the Phase
-        // 3/4 round, where nine earlier rounds had run on `CORNERS` / `HORIZONTAL`; and the step fold arrives
-        // at `ALWAYS` from a K3 observation rather than from a comparison — *"for some steps explainer keeps
-        // expanded items, though it's not required and only takes up space"* — so `OVER_BUDGET`, the value that
-        // shipped, is on the page as the control that says whether it was the budget doing the work. A
-        // preference stated in advance is not the same kind of thing as a verdict a round produced, and Reset
-        // restores whichever one is here — so which it is has to be written down.
+        // The tree's shipped defaults. Enum constant names, resolved in `TreeStyle`; each one is asserted
+        // against the enum *and* against the style class's own default, so the two cannot drift.
+        // `ALWAYS` folds the nestings a step is not narrating, which otherwise only take up space.
         const val DEF_TREE_LEADER = "BRACE"
         const val DEF_TREE_CHEVRON = "BOTTOM_BORDER"
         const val DEF_TREE_STEP_FOLD = "ALWAYS"
-        // Not yet a verdict: the 2026-10-14 round asked for more folding, and `LINKS` is the middle of the four.
         const val DEF_TREE_CONDENSE = "LINKS"
         const val DEF_TREE_PATH = "PROJECT_RELATIVE"
         const val DEF_TREE_DEEMPHASIS = "TINT"
@@ -471,7 +437,7 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
         const val DEF_ACTIVE_GLOW_COLOR = "FFFFFF"
         const val DEF_ACCENT_COLOR = "FFBE3C"
 
-        // Explanation generation (Effort.md). `--effort` exists from CLI 2.1.274; `--model` takes an alias.
+        // Explanation generation. `--effort` exists from CLI 2.1.274; `--model` takes an alias.
         const val EFFORT_LOW = "low"
         const val EFFORT_MEDIUM = "medium"
         const val EFFORT_HIGH = "high"
@@ -493,9 +459,8 @@ class AudioExplainerSettings : PersistentStateComponent<AudioExplainerSettings.S
 
         const val MAX_INSTRUCTION_HISTORY = 8
 
-        // TTS defaults (Phase 7)
+        // TTS defaults
         const val ENGINE_KOKORO = "kokoro"
-        const val ENGINE_SAPI = "sapi"
         const val ENGINE_OFF = "off"
         const val DEF_TTS_VOICE = "af_heart"
         const val DEF_TTS_SPEED_PERCENT = 100

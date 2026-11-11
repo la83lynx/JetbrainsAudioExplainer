@@ -19,11 +19,8 @@ import java.io.File;
  * The link bench: mock nodes, up to five links at once, both anchors, both joins, both directions, resting
  * and hovered.
  *
- * This is the spike the reader asked for in round 3 — *"another dedicated spike to test how it should look,
- * with several simultaneously visible links on the screen"* — but it is not a standalone the way the deleted
- * {@code spikes/} were. It imports {@link LinkArt} and draws with it, so it cannot disagree with what the
- * editor paints; the spikes re-derived their geometry and agreed with production only until one of the two was
- * edited.
+ * It imports {@link LinkArt} and draws with it, so it cannot disagree with what the editor paints: there is no
+ * re-derived geometry here to drift from production.
  *
  * <p><b>What it is for.</b> One question is a matter of taste and one is a matter of fact, and they need
  * different instruments:
@@ -38,16 +35,14 @@ import java.io.File;
  *       differing; and the ink each route puts on top of a glyph.</li>
  * </ul>
  *
- * <p><b>Round 7 — routing that fits.</b> Round 6 stepped every lane by a whole portal, which needed 124 px of
- * clear width for five links and got clamped into one column in every node that had less — *"vertical
- * connections are not separated horizontally, all 5 overlap"*. Five claims are new, and all five are
- * measurable here:
+ * <p><b>Routing that fits.</b> Stepping every lane by a whole portal would need 124 px of clear width for five
+ * links and clamp them into one column in any node with less. The routing claims measured here:
  *
  * <ul>
  *   <li><b>Lanes are sized to what they carry</b> ({@link LinkArt#laneAxes}): 4 px for a same-editor
  *       vertical, a whole portal for a portal, {@code LANE_GAP} between the outer edges. The three routing
- *       rules the reader gave — no two verticals on one x, no two portals overlapping, no line through
- *       another's portal — are asserted directly against the drawn geometry, for every layout of five.</li>
+ *       rules — no two verticals on one x, no two portals overlapping, no line through another's portal —
+ *       are asserted directly against the drawn geometry, for every layout of five.</li>
  *   <li><b>Same-editor lanes come first</b>, so the thin ones sit nearest the code and the fan fits.</li>
  *   <li><b>A line end runs along the row's middle</b> for the whole span, and hops onto its rail only in the
  *       last {@code uRun} px — so a same-editor line link never leaves the row's middle at all, and a portal
@@ -57,12 +52,12 @@ import java.io.File;
  *   <li><b>The tint brightens on hover</b>, so the whole link lights as one object.</li>
  * </ul>
  *
- * <p><b>Round 6 is still measured</b>: a {@link LinkJoin#LINE} pair paints no portal and runs its leg to the
- * partner's rail; the four anchor × join combinations really differ; and a resting link is <b>much</b> nearer
- * its own colour than the background, which is *"reduce default dimming"* as a number rather than an opinion.
+ * <p>Also measured: a {@link LinkJoin#LINE} pair paints no portal and runs its leg to the partner's rail; the
+ * four anchor × join combinations really differ; and a resting link is <b>much</b> nearer its own colour than
+ * the background.
  *
- * <p><b>Rounds 4 and 5 are still measured here</b>, because a fix nobody keeps measuring is a fix that comes
- * back: the hole is proved transparent by painting over a colour nothing else uses; the leg is proved to cross
+ * <p><b>Regression guards</b>, because a fix nobody keeps measuring is a fix that comes back: the hole is
+ * proved transparent by painting over a colour nothing else uses; the leg is proved to cross
  * it; both ovals are proved odd-width and exactly concentric on the <i>rendered pixels</i>, column by mirrored
  * column, with an even-width control that fails; the width is proved a real proportion of the row; and a token
  * end's ink is proved to begin on the token's own edge.
@@ -70,12 +65,12 @@ import java.io.File;
  * <p>What it cannot answer needs a live editor: whether {@code offsetToXY} puts the channel where this bench
  * assumes inside a nested node, whether the cross-editor hover relay fires, whether the align group's
  * screen-origin basis survives a real nest, whether {@code targetBelowFor} agrees with what the reader sees,
- * and whether a link survives a fold. Those are the judged round's.
+ * and whether a link survives a fold. Those need a {@code runIde} check.
  *
- * <p>Node widths come from the caps in {@code TreeOfCode.rules.md}: 1584 px at the widest, 550 px at the narrowest.
+ * <p>Node widths are the tree's node-width caps: 1584 px at the widest, 550 px at the narrowest.
  *
  * <p><b>Usage:</b> {@code java … LinkBench [outputDir]} — the PNGs go to {@code build/probe} unless a
- * directory is named, which is how a judged round gets them somewhere it can actually open them.
+ * directory is named.
  */
 public final class LinkBench {
 
@@ -139,8 +134,8 @@ public final class LinkBench {
                 hex(LinkArt.INSTANCE.color(GOLD, 0)));
         check("slots wrap rather than running out",
                 LinkArt.INSTANCE.color(GOLD, 5).equals(LinkArt.INSTANCE.color(GOLD, 0)), "slot 5 == slot 0");
-        // The control: at the three-slot palette's 0.55 saturation floor a grey accent collapses, which is
-        // both why the floor exists and why round 6 had to raise it when the palette grew to five.
+        // The control: at a 0.55 saturation floor a grey accent's five slots collapse, which is why the
+        // floor is 0.70.
         Color[] weak = new Color[5];
         float[] hsb = Color.RGBtoHSB(GREY.getRed(), GREY.getGreen(), GREY.getBlue(), null);
         float[] offs = {0f, 0.4f, 0.8f, 0.2f, 0.6f};
@@ -167,8 +162,8 @@ public final class LinkBench {
                         String.format("%.0f from background vs %.0f from hovered", toBg, toHover));
             }
         }
-        // The control, and the reason this section exists: the previous 0.45 blend put a resting link nearer
-        // the background than its own colour for at least one slot in at least one theme.
+        // The control: a 0.45 blend puts a resting link nearer the background than its own colour for at
+        // least one slot in at least one theme.
         int wouldFail = 0;
         for (Color themeBg : new Color[]{BG, LIGHT_BG}) {
             for (int slot = 0; slot < 5; slot++) {
@@ -186,10 +181,10 @@ public final class LinkBench {
         header("the portal — an oval half as tall as the disc it replaces, plus a hole");
         Rectangle below = LinkArt.INSTANCE.outer(400, 30, ROW_H, true, SHIPPED);
         Rectangle above = LinkArt.INSTANCE.outer(400, 30, ROW_H, false, SHIPPED);
-        check("is CENTRED on its lane's axis, not parked left of it (round 7)",
+        check("is CENTRED on its lane's axis, not parked left of it",
                 below.x + below.width / 2 == 400 && above.x + above.width / 2 == 400,
                 below.toString());
-        check("round 5's size: 23x11 on a 20px row", below.width == 23 && below.height == 11,
+        check("size: 23x11 on a 20px row", below.width == 23 && below.height == 11,
                 below.width + "x" + below.height);
         check("is flattened ~2x — an oval, not the round disc", below.width / 2 == below.height,
                 below.width + "x" + below.height);
@@ -212,7 +207,7 @@ public final class LinkBench {
                 LinkArt.INSTANCE.inner(new Rectangle(0, 0, 4, 2)).width >= 3,
                 "4x2 outer -> hole " + LinkArt.INSTANCE.inner(new Rectangle(0, 0, 4, 2)).width);
         // The room check, both sides of it, so a green tick cannot come from a check that says null to
-        // everything. Round 6 measures it on the AXIS rather than the band's left edge — see MIN_RUN.
+        // everything. Measured on the AXIS rather than the band's left edge — see MIN_RUN.
         check("an axis too close to the anchor is refused, not drawn on top of it",
                 token(300, 300, 30, 310, true, false, LinkJoin.PORTAL, 0) == null, "10px of run");
         check("and one with room is drawn (so the refusal is a decision, not a constant)",
@@ -271,8 +266,8 @@ public final class LinkBench {
                         + LinkArt.INSTANCE.railSpace(5, ROW_H) + "px");
         check("and it scales with the row", LinkArt.INSTANCE.railSpace(5, 40) > LinkArt.INSTANCE.railSpace(5, 20),
                 "row 40 -> " + LinkArt.INSTANCE.railSpace(5, 40) + "px");
-        // The control: round 6 reserved nothing at all, so the outermost rail was drawn inside the row above.
-        check("(round 6 bought none of it, which is why a rail landed in the neighbouring row — the control)",
+        // The control: without the reservation the outermost rail is drawn inside the row above.
+        check("(a uniform pitch buys none of it, which is why a rail would land in the neighbouring row — the control)",
                 reach > 0, "the fan really does leave the row by " + reach + "px");
 
         header("THE LANES — 'cannot overlap in sections … portals cannot overlap … not their portal'");
@@ -293,8 +288,8 @@ public final class LinkBench {
         check("two portals are more than a whole portal apart, so they cannot overlap", portalGap,
                 (portalAxes[1] - portalAxes[0]) + "px apart, portal is "
                         + LinkArt.INSTANCE.outerWidth(ROW_H) + "px");
-        // **Every layout of five**, because the mixed ones are the cases round 6 got wrong — and the rules
-        // are the reader's own three, checked against the drawn rectangles rather than against the pitch.
+        // **Every layout of five**, because the mixed ones are the hard cases — and the three rules are
+        // checked against the drawn rectangles rather than against the pitch.
         int layouts = 0, worstClear = Integer.MAX_VALUE;
         boolean noneOverlap = true, noneThrough = true;
         for (int bits = 0; bits < 32; bits++) {
@@ -342,9 +337,8 @@ public final class LinkBench {
                 span5line * 2 < span5portal,
                 String.format("%dpx vs %dpx — %.1fx", span5line, span5portal,
                         span5portal / (double) span5line));
-        // The control, and the round's whole reason: round 6 gave every lane a portal's width, so the
-        // five-link steps of link-fan.json — all of them same-editor — asked for three times what they need
-        // and got clamped into one column in a 550px node.
+        // The control: giving every lane a portal's width makes five same-editor links ask for three times
+        // what they need, so they get clamped into one column in a 550px node.
         int oldPitch = LinkArt.INSTANCE.outerWidth(ROW_H) + 8;
         int oldSpan = oldPitch * 4 + LinkArt.INSTANCE.outerWidth(ROW_H);
         int codeEnds = 380, roomIn550 = NARROW_NODE - 40;
@@ -352,7 +346,7 @@ public final class LinkBench {
         check("five same-editor links FIT in a 550px node past 380px of code",
                 base + span5line <= roomIn550,
                 "needs " + (base + span5line) + "px, room is " + roomIn550 + "px");
-        check("(and WOULD NOT at round 6's uniform pitch — this is 'all 5 overlap' as arithmetic)",
+        check("(and WOULD NOT at a uniform pitch — this is 'all 5 overlap' as arithmetic)",
                 base + oldSpan > roomIn550,
                 "would have needed " + (base + oldSpan) + "px, room is " + roomIn550 + "px");
 
@@ -367,7 +361,7 @@ public final class LinkBench {
                 endPortal.getAnchorY() == endPortal.getRowMid() && endPortal.getHasHop()
                         && endPortal.getRailY() != endPortal.getRowMid(),
                 "anchorY " + endPortal.getAnchorY() + ", railY " + endPortal.getRailY());
-        check("and one joined by a LINE never leaves it — 'just turn to target', no U-turn (round 7)",
+        check("and one joined by a LINE never leaves it — 'just turn to target', no U-turn",
                 endLine.getRailY() == endLine.getRowMid() && !endLine.getHasHop(),
                 "railY " + endLine.getRailY() + " == rowMid " + endLine.getRowMid());
         check("both share one rail, so the finish into the portal is the same drawing",
@@ -391,8 +385,8 @@ public final class LinkBench {
                 "TOKEN/LINE_END x LINE/PORTAL");
         header("CENTRE ROUTING — 'route them in the center of the line for the whole horizontal span'");
         // On the pixels: a line-end end must run along the row's MIDDLE for the whole span, where a token end
-        // must place no ink there at all. Round 6 hopped at the text end and ran the span on the rail, so
-        // this measurement is what tells the two rounds apart.
+        // must place no ink there at all. Hopping at the text end and running the span on the rail would
+        // fail this.
         int endRun = inkAlongRowMid(GOLD, LinkAnchor.LINE_END, LinkJoin.PORTAL);
         int tokenRun = inkAlongRowMid(GOLD, LinkAnchor.TOKEN, LinkJoin.PORTAL);
         check("a LINE_END end really runs along the row's middle, the whole way to its hop",
@@ -442,10 +436,10 @@ public final class LinkBench {
             Point mid = new Point(Math.round((ep[i] + ep[i + 2]) / 2), Math.round((ep[i + 1] + ep[i + 3]) / 2));
             if (!LinkArt.INSTANCE.hit(endPortal, mid, endPortal.getLegEndY())) everySegmentHit = false;
         }
-        check("and the middle of EVERY segment is hittable, including the hop round 7 added",
+        check("and the middle of EVERY segment is hittable, including the hop",
                 everySegmentHit, "4 segments");
 
-        header("SYMMETRY — round 5's 'it looks unsymmetric in horizontal direction', still measured");
+        header("SYMMETRY — 'it looks unsymmetric in horizontal direction', still measured");
         check("BOTH widths are odd, so (outer - inner) / 2 divides exactly",
                 below.width % 2 == 1 && hole.width % 2 == 1,
                 "outer " + below.width + ", hole " + hole.width);
@@ -463,7 +457,7 @@ public final class LinkBench {
         check("and WOULD NOT at an even width (so the odd rule is load-bearing)", evenWorst > 0,
                 "worst column mismatch " + evenWorst + "px with a 22px oval");
 
-        header("FONT SCALING — round 5's 'scaling along with main editor font scaling', still measured");
+        header("FONT SCALING — 'scaling along with main editor font scaling', still measured");
         int w20 = LinkArt.INSTANCE.outerWidth(20);
         int w30 = LinkArt.INSTANCE.outerWidth(30);
         int w40 = LinkArt.INSTANCE.outerWidth(40);
@@ -486,9 +480,9 @@ public final class LinkBench {
                 "row 400 -> w=" + LinkArt.INSTANCE.outerWidth(400));
 
         header("AN OBSTRUCTION THE FAN CANNOT GET PAST — K5's far-right routing");
-        // A LINE leg is routed clear of every block inlay it crosses, because an inlay paints over it. K5
-        // found the rule paying that price where it cannot buy anything: a nested code node is an inlay as
-        // wide as the editor, so no lane clears it and the demand only pins the fanWidth against the viewport.
+        // A LINE leg is routed clear of every block inlay it crosses, because an inlay paints over it. That
+        // rule buys nothing for a nested code node: it is an inlay as wide as the editor, so no lane clears
+        // it and the demand would only pin the fan against the viewport's right edge.
         //
         // The two obstructions are the two real ones, at the geometry each actually has, and the assertion is
         // that they come out DIFFERENTLY — the predicate has to keep the case it was written for.
@@ -580,11 +574,10 @@ public final class LinkBench {
         check("its leading edge sits ~8px short of the turn, so a bigger head cannot reach the bend",
                 Math.round(sb.getCentreXf() - (sb.getIndicatorX() + 7 / 2f)) == 8,
                 "turn at " + sb.getCentreXf() + ", head edge at " + (sb.getIndicatorX() + 3.5f));
-        // **The defect the taxonomy panel showed**, and the reason CHANNEL_GAP moved: a line end on the
-        // LONGEST row of a step sits one channel gap from its own channel and spends the first few pixels of
-        // rail turning onto it, so a fixed 8px gap plus two heads of clearance did not fit — and the one form
-        // the reader asked to be made uniform was the one form with no indicator at all. Both directions,
-        // because the incoming end also spends 7px on the arrowhead at its anchor.
+        // **Why CHANNEL_GAP is 22**: a line end on the LONGEST row of a step sits one channel gap from its own
+        // channel and spends the first few pixels of rail turning onto it, so a fixed 8px gap plus two heads
+        // of clearance would not fit and that end would get no indicator. Both directions, because the
+        // incoming end also spends 7px on the arrowhead at its anchor.
         for (boolean incoming : new boolean[]{false, true}) {
             int text = 300;
             LinkShape tight = lineEnd(text, text, 30,
@@ -610,7 +603,7 @@ public final class LinkBench {
                 cramped != null && !cramped.getHasIndicator(),
                 cramped == null ? "no shape" : String.format("%.1fpx of rail", cramped.getRailRun()));
 
-        header("FLUSH against the token — round 5's 'remove the space between the line and the highlight'");
+        header("FLUSH against the token — 'remove the space between the line and the highlight'");
         check("an outgoing token end's connector starts on the token's own edge",
                 inkStartsAt(GOLD, false, LinkAnchor.TOKEN) == 30,
                 "first ink at x=" + inkStartsAt(GOLD, false, LinkAnchor.TOKEN) + ", asked for 30");
@@ -672,8 +665,8 @@ public final class LinkBench {
         lg.dispose();
         check("it draws when there is room right of the portal", drew, "690px of room");
         check("and refuses rather than ellipsising to nothing when there is not", !refused, "20px of room");
-        // Round 7's item 7: it used to sit on the RAIL, so a diving link labelled itself a row's leading
-        // above the code it named. Measured on the drawn glyphs, not on the call.
+        // On the RAIL a diving link would label itself a row's leading above the code it names. Measured on
+        // the drawn glyphs, not on the call.
         int[] band = labelInkBand(h, "the amount handed down", labelFont, labelFm);
         int labelMid = (band[0] + band[1]) / 2;
         check("and its text is centred on the row's MIDDLE, not on the rail it turned off",
@@ -682,8 +675,8 @@ public final class LinkBench {
         check("(the rail is far enough from the middle for that to be a real distinction — the control)",
                 Math.abs(h.getRowMid() - h.getRailY()) >= 8,
                 Math.abs(h.getRowMid() - h.getRailY()) + "px apart");
-        // Item 7's other half: a same-editor link is drawn by one renderer for both its ends, and it draws
-        // the same label through the same call — nothing about paintLabel is portal-only.
+        // A same-editor link is drawn by one renderer for both its ends, and it draws the same label through
+        // the same call — nothing about paintLabel is portal-only.
         BufferedImage lineLabelImg = new BufferedImage(700, 60, BufferedImage.TYPE_INT_RGB);
         Graphics2D llg = lineLabelImg.createGraphics();
         boolean drewLine = LinkArt.INSTANCE.paintLabel(llg, token(120, 200, 30, 400, true, false,
@@ -691,9 +684,8 @@ public final class LinkBench {
         llg.dispose();
         check("a SAME-EDITOR link labels itself through the same call — 'only portal links do' was the bug",
                 drewLine, "LinkJoin.LINE draws its label too");
-        // **Where the label goes** — round 8 chose it, round 11 reweighed it; see THE LABEL'S OWN END
-        // below for the rule and LinkArt.paintLabel for why. Here: it draws in both positions, and in
-        // neither does it vanish.
+        // **Where the label goes** — see THE LABEL'S OWN END below for the rule and LinkArt.paintLabel for
+        // why. Here: it draws in both positions, and in neither does it vanish.
         LinkShape inner = token(120, 200, 30, 300, true, false, LinkJoin.PORTAL, 0);
         int farFan = 560;
         int wide = 900, narrow = 600;
@@ -715,9 +707,9 @@ public final class LinkBench {
                 "pixels behind the glyphs differ from the canvas");
 
         header("THE LABEL'S OWN END — 'short link text feels detached'");
-        // The reader's round-11 numbers: two same-editor links on one step, one turning ~520px out and the
-        // other ~820px, and BOTH labels started at ~820 — beside the furthest link rather than beside their
-        // own. The note is a real one, off `link-fan.json`.
+        // Two same-editor links on one step, one turning ~520px out and the other ~820px: each label must
+        // start beside its own link, not both at ~820 beside the furthest one. The note is a real one, off
+        // `link-fan.json`.
         String note = "the shortest reach of the five - two 49-column rows, so this lane routes furthest left";
         LinkShape near = token(120, 200, 30, 520, true, false, LinkJoin.LINE, 0);
         int ownEnd = near.getOuter().x + near.getOuter().width + 8;
@@ -732,14 +724,14 @@ public final class LinkBench {
                 "ink starts at " + atOwn + ", own end at " + ownEnd + ", far lane at " + farLane);
         check("(the same call, told the fan is cheap to clear, still goes out past it — the control)",
                 atFan > farLane, "ink starts at " + atFan);
-        // Why it also answers round 8's own report: `mine` can never have less room than `clear`.
+        // And beside its own end it is trimmed less: `mine` can never have less room than `clear`.
         int shownOwn = labelInkWidth(near, note, labelFont, labelFm, 1000, farLane, spreadSpan);
         int shownFan = labelInkWidth(near, note, labelFont, labelFm, 1000, farLane, 1000);
         check("  and beside its own end it shows MORE of its words — 'labels are always trimmed' again",
                 shownOwn > shownFan, shownOwn + "px of glyph ink beside its end vs " + shownFan + "px past the fan");
 
-        // A BUNCHED fan is the case round 8 was right about: five lanes at minimum pitch are 52px across,
-        // so getting past all of them costs 38px and crosses no line at all.
+        // A BUNCHED fan is the case where clearing the fan is right: five lanes at minimum pitch are 52px
+        // across, so getting past all of them costs 38px and crosses no line at all.
         java.util.List<LinkJoin> bunchedFan = lanes(LinkJoin.LINE, 5);
         int bunchedSpan = LinkArt.INSTANCE.laneSpan(bunchedFan, ROW_H);
         int bunchedRight = 520 + LinkArt.INSTANCE.laneRightEdge(
@@ -772,11 +764,9 @@ public final class LinkBench {
                     allBrighter, "5 lanes");
             check("  and still stays behind the connector's own weight, so the code reads through it",
                     allReadable, "tint < link");
-            // **Round 8 turned it down**: *"Highlight brightening on-hover is too bright … in this
-            // brightness level makes token text not visible."* The measurable form of "still a background"
-            // is that the hovered tint stays nearer the background than the link's own colour — under half
-            // of the way. Round 7's 0.58 was past that mark by construction, so this check is the one that
-            // would have caught it, and it needs no reconstruction of the old constant to say so.
+            // Too bright a hovered tint makes the token text unreadable. The measurable form of "still a
+            // background" is that the hovered tint stays nearer the background than the link's own colour —
+            // under half of the way. A 0.58 blend fails this by construction.
             Color lane0 = LinkArt.INSTANCE.color(GOLD, 0);
             double full = dist(lane0, themeBg);
             double rest0 = dist(LinkArt.INSTANCE.tint(lane0, themeBg), themeBg);
@@ -785,7 +775,7 @@ public final class LinkBench {
                     theme[0], 100 * rest0 / full, 100 * hot0 / full);
             check("  the " + theme[0] + " hovered tint stays under half way to the link's own colour",
                     hot0 < full / 2,
-                    String.format("%.0f%% of %.0f — round 7's 0.58 blend was 58%%", hot0, full));
+                    String.format("%.0f%% of %.0f — a 0.58 blend would be 58%%", hot0, full));
             check("  and it is still a visible lift over the resting tint", hot0 > rest0 * 1.15,
                     String.format("%.0f -> %.0f", rest0, hot0));
         }
@@ -814,9 +804,9 @@ public final class LinkBench {
                         + " >= " + demandA);
         check("an empty layout says so rather than answering 0",
                 LinkArt.INSTANCE.alignedLaneAxes(originA, lanes(), new int[0], 9999, 0, ROW_H) == null, "null");
-        // **Round 7's addition, and round 6's item 8**: the narrow node could not fit the fan at the wide
-        // node's demand, so it clamped — its portal moved left and the two ends stopped lining up. The
-        // column now takes the narrow node's room into account, so BOTH ends move together or neither does.
+        // **The fit constraint**: a narrow node that cannot fit the fan at the wide node's demand must not
+        // clamp on its own, or its portal moves left and the two ends stop lining up. The column takes the
+        // narrow node's room into account, so BOTH ends move together or neither does.
         int[] tightRooms = {originA + 1200, originB + demandB + fanSpan - 30};
         int[] fitA = groupAxes(originA, fanLayout, demands, tightRooms, 0);
         int[] fitB = groupAxes(originB, fanLayout, demands, tightRooms, 0);
@@ -826,13 +816,13 @@ public final class LinkBench {
         check("and the columns it lands on are ones the narrow node can hold the whole fan in",
                 originB + LinkArt.INSTANCE.laneRightEdge(fanLayout, fitB, ROW_H) <= tightRooms[1],
                 (originB + LinkArt.INSTANCE.laneRightEdge(fanLayout, fitB, ROW_H)) + " <= " + tightRooms[1]);
-        // The control: clamping per node — which is what round 6 did — puts the two ends on different columns.
+        // The control: clamping per node puts the two ends on different columns.
         int clampedB = Math.min(originB + demandB, tightRooms[1] - fanSpan);
         check("(clamping each node on its own WOULD have split them — this is the control)",
                 originA + axesA[0] != clampedB,
                 "A at " + (originA + axesA[0]) + ", B clamped to " + clampedB);
-        // And the case round 6 could not express at all: a node holding a same-editor link AND a portal, and
-        // a node holding only that portal. The layout is the STEP's, so both put the portal on lane 1.
+        // A node holding a same-editor link AND a portal, and a node holding only that portal. The layout is
+        // the STEP's, so both put the portal on lane 1.
         java.util.List<LinkJoin> mixed = lanes(LinkJoin.LINE, LinkJoin.PORTAL);
         int[] mixedA = groupAxes(originA, mixed, demands, rooms, 0);
         int[] mixedB = groupAxes(originB, mixed, demands, rooms, 0);
@@ -840,14 +830,14 @@ public final class LinkBench {
                 originA + mixedA[1] == originB + mixedB[1], "both at " + (originA + mixedA[1]));
 
         header("PER-LANE ROUTING — 'route them nearer to the left … evading columns taken by other links'");
-        // Round 7 gave the whole step ONE demand — the widest row any of its links touched — so a link off a
-        // short row was routed out past a long one and the hovered label after it had nothing left to be
-        // drawn in. Here each lane answers for its own link's rows.
+        // ONE demand for the whole step — the widest row any of its links touched — would route a link off a
+        // short row out past a long one, leaving its hovered label no room. Here each lane answers for its own
+        // link's rows.
         java.util.List<LinkJoin> mix5 =
                 lanes(LinkJoin.LINE, LinkJoin.LINE, LinkJoin.LINE, LinkJoin.PORTAL, LinkJoin.PORTAL);
         int[] perLane = {520, 180, 300, 210, 210};
         int[] uniform = new int[5];
-        java.util.Arrays.fill(uniform, 520);              // what round 7 would have used: the widest row
+        java.util.Arrays.fill(uniform, 520);              // one demand for the step: the widest row
         int[] axesNew = LinkArt.INSTANCE.laneAxes(mix5, perLane, ROW_H);
         int[] axesOld = LinkArt.INSTANCE.laneAxes(mix5, uniform, ROW_H);
         int rightNew = LinkArt.INSTANCE.laneRightEdge(mix5, axesNew, ROW_H);
@@ -873,7 +863,7 @@ public final class LinkBench {
         check("and no lane is routed left of its own code, whatever the reorder", clearsOwn,
                 "all 5 clear their own demand");
         check("portals stay outside every same-editor lane, whatever the demands say", portalsOutside,
-                "the judged turn order survives the reorder");
+                "the turn order survives the reorder");
         // **The three rules again, this time with demands that reorder the columns.** The 32-layout sweep
         // above runs at zero demand, where column order IS lane order; a reorder that broke a rule would
         // pass it and fail here.
@@ -917,10 +907,9 @@ public final class LinkBench {
                 "32 layouts x 8 demand vectors, closest pair " + worstDemandClear + "px");
         check("(and the demands really do reorder them — otherwise the sweep proves nothing)",
                 reordered > 0, reordered + " of 256 vectors put a later lane left of an earlier one");
-        // **The degradation round 8 introduced, and has to answer for.** Per-lane demands can make a fan
-        // WIDER than the viewport where one demand for the whole step could not: two lanes 700 px apart pack
-        // 700 px apart, and shifting that block left does not narrow it. Falling back to round 7's layout is
-        // plainly better than the alternative the shift-clamp reaches on its own, which is to draw nothing.
+        // **The fallback.** Per-lane demands can make a fan WIDER than the viewport: two lanes 700 px apart
+        // pack 700 px apart, and shifting that block left does not narrow it. Falling back to the minimum-pitch
+        // layout is plainly better than what the shift-clamp reaches on its own, which is to draw nothing.
         java.util.List<LinkJoin> pair = lanes(LinkJoin.LINE, LinkJoin.LINE);
         int[] farApart = {100, 800};
         int tightRoom = 600;
@@ -954,7 +943,7 @@ public final class LinkBench {
             flat.add(lineEnd(20, 20, 30, 200 + fiveAxes[i], true, false, LinkJoin.LINE, 0).getRailY());
         }
         check("five runs leaving one row sit on five different y", ys.size() == 5, "y = " + ys);
-        check("(all five on ONE y is what round 7 drew — the control)", flat.size() == 1,
+        check("(all five on ONE y is the flat drawing — the control)", flat.size() == 1,
                 "control y = " + flat);
         check("and every one of them stays inside its own row", insideRow,
                 "worst |dy| " + Math.max(Math.abs(ys.first() - 30), Math.abs(ys.last() - 30))
@@ -1028,11 +1017,10 @@ public final class LinkBench {
                 allFannedTokensStemmed(), "all 4 fans x 2 directions x 2 joins");
 
         header("THE SCREEN BASIS — 'all links are routed to the far right side'");
-        // The numbers are the live ones, off the round-10 trace: a five-link step in a node whose editor is
-        // on a monitor SB_LEFT of the primary, so every locationOnScreen the group exchanges is negative.
-        // Round 8's exchange used 0 for "this lane asks for nothing", the merge took the max, and no
-        // negative demand ever won it — so every lane fell back to the minimum-pitch fan and the clamp
-        // pinned that fan against the viewport's right edge. In one node. On one monitor. Same build.
+        // The numbers are real ones from a trace: a five-link step in a node whose editor is on a monitor
+        // left of the primary, so every locationOnScreen the group exchanges is negative. With 0 as "this
+        // lane asks for nothing" and a max merge, no negative demand ever wins — so every lane falls back to
+        // the minimum-pitch fan and the clamp pins it against the viewport's right edge.
         java.util.List<LinkJoin> sbFive = lanes(LinkJoin.LINE, 5);
         final int SB_ORIGIN = -2339, SB_ROOM = -729, SB_LEFT = -2339;   // 1610 px of viewport, 2339 px left of 0
         int[] sbLocal = {300, 620, 640, 660, 680};               // each lane's own code, in content x
@@ -1080,7 +1068,7 @@ public final class LinkBench {
         for (int i = 0; i < 5; i++) if (sbRaw[i] < sbScreen[i]) sbClears = false;
         check("laneAxes clamps no demand to 0 any more, so a negative basis packs like any other", sbClears,
                 java.util.Arrays.toString(sbRaw) + " against " + java.util.Arrays.toString(sbScreen));
-        check("  and with base 0 it is byte-for-byte round 8's answer for a positive basis",
+        check("  and with base 0 it is byte-for-byte the full-extent answer for a positive basis",
                 java.util.Arrays.equals(LinkArt.INSTANCE.laneAxes(sbFive, sbLocal.clone(), ROW_H),
                         LinkArt.INSTANCE.laneAxes(sbFive, sbLocal.clone(), ROW_H, 0)),
                 "the width measurement is unchanged");
@@ -1092,8 +1080,8 @@ public final class LinkBench {
         check("a node docked under the lower row is not between the two rows",
                 !LinkArt.INSTANCE.crossesRowGap(r38 + ROW_H, r39, childY, childH),
                 "gap [" + (r38 + ROW_H) + ", " + r39 + "), node at " + childY);
-        check("(round 8's band was the two rows' full extent, and counted it — the control)",
-                round8CrossedIt(r38, r39 + ROW_H, childY, childH), "counted, at " + childY);
+        check("(a band of the two rows' full extent counts it — the control)",
+                fullExtentCrossesIt(r38, r39 + ROW_H, childY, childH), "counted, at " + childY);
         check("  so two adjacent rows with nothing between them have an empty gap",
                 !LinkArt.INSTANCE.crossesRowGap(r38 + ROW_H, r39, 0, 10_000),
                 "nothing can be between them");
@@ -1120,9 +1108,9 @@ public final class LinkBench {
         check("STRAIGHT does cross the code, which is why it is only the control", straight > 0, straight + " px");
         check("the shipped route all but eliminates it (>90% less)", shipped < straight / 10,
                 shipped + " px vs " + straight + " px");
-        // **Round 6's open question, and round 7's answer as a control.** These are the pixels a fan puts on
-        // the neighbouring row's glyphs *when the row has not bought itself any space* — which is exactly what
-        // round 6 shipped, and what `railSpace` now prevents. The bench draws without the spacer inlay,
+        // **The control for `railSpace`.** These are the pixels a fan puts on the neighbouring row's glyphs
+        // *when the row has not bought itself any space*, which `railSpace` prevents. The bench draws without
+        // the spacer inlay,
         // because a spacer is an editor's block inlay and there is no editor here; so this is the size of the
         // problem the reservation exists to remove, measured.
         for (int n = 1; n <= 5; n++) {
@@ -1175,7 +1163,7 @@ public final class LinkBench {
                         && outward.getFromX() == outward.getInkX(),
                 "mutual +" + (bothA.getFromX() - bothA.getInkX()) + "px, flow outgoing +"
                         + (outward.getFromX() - outward.getInkX()) + "px");
-        // Everything else is round 6's, and this must not have spent any of it.
+        // Everything else is unchanged by `mutual`.
         check("backforth changes nothing but the direction: same rail, same axis, same portal",
                 bothA.getRailY() == outward.getRailY() && bothA.getAxisX() == outward.getAxisX()
                         && bothA.getOuter().equals(outward.getOuter()),
@@ -1280,10 +1268,10 @@ public final class LinkBench {
     }
 
     /**
-     * Round 8's band, kept verbatim as the control: the two rows' full extent, with an inlay merely touching
-     * it counting as an obstruction. Only this bench calls it.
+     * The rejected band, kept as the control: the two rows' full extent, with an inlay merely touching it
+     * counting as an obstruction. Only this bench calls it.
      */
-    private static boolean round8CrossedIt(int topRowY, int bottomRowEndY, int inlayY, int inlayHeight) {
+    private static boolean fullExtentCrossesIt(int topRowY, int bottomRowEndY, int inlayY, int inlayHeight) {
         return !(inlayY + inlayHeight < topRowY || inlayY > bottomRowEndY);
     }
 
@@ -1351,9 +1339,8 @@ public final class LinkBench {
     /**
      * Pixels of ink <b>along the row's own middle</b>, between the anchor and the lane.
      *
-     * Round 7's item 4 as a measurement: a line end runs the whole span there and a token end places nothing
-     * there at all. Round 6 would have answered a handful of pixels for the line end — the vertical of its
-     * turn at the text end — and this now answers hundreds, which is the difference between the two rounds.
+     * A line end runs the whole span there and a token end places nothing there at all. A line end that
+     * hopped onto its rail at the text end would answer only a handful of pixels; this one answers hundreds.
      */
     private static int inkAlongRowMid(Color accent, LinkAnchor anchor, LinkJoin join) {
         BufferedImage img = new BufferedImage(400, 60, BufferedImage.TYPE_INT_RGB);
@@ -1377,7 +1364,6 @@ public final class LinkBench {
         return n;
     }
 
-    /** Top and bottom of the label's drawn glyphs, so "centred on the row" is measured rather than claimed. */
     /** Glyph ink the label actually put on the canvas, ignoring its backdrop. */
     private static int labelInkWidth(LinkShape s, String text, Font font, FontMetrics fm,
                                      int roomRight, int fanRight, int fanSpan) {
@@ -1436,6 +1422,7 @@ public final class LinkBench {
         return backdrop > 200;
     }
 
+    /** Top and bottom of the label's drawn glyphs, so "centred on the row" is measured rather than claimed. */
     private static int[] labelInkBand(LinkShape s, String text, Font font, FontMetrics fm) {
         BufferedImage img = new BufferedImage(700, 60, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
@@ -1457,8 +1444,8 @@ public final class LinkBench {
     }
 
     /**
-     * <b>Worst per-column ink mismatch when the drawn portal is folded about its own centre</b> — round 5's
-     * complaint, turned into a number and kept.
+     * <b>Worst per-column ink mismatch when the drawn portal is folded about its own centre</b> — horizontal
+     * symmetry as a number.
      *
      * Only the rows the portal itself occupies are counted, which is what makes the measurement clean: for a
      * target below the rail runs along the row's <i>top</i> and the portal sits at its bottom, so the one
@@ -1505,10 +1492,8 @@ public final class LinkBench {
     /**
      * Leftmost inked column on the rail, against the {@code inkX} the shape reports.
      *
-     * Round 5's *"there is several pixels of space between link line ending and the highlight"* was
-     * {@code SpotlightRenderer} handing the portal the in-file arrow's 3 px stub. This proves the drawing adds
-     * none of its own for a token anchor — and adds exactly three for a line end, which is where that stub
-     * belongs and now lives.
+     * Proves the drawing leaves no gap between a token anchor and its line — and exactly three pixels for a
+     * line end, which is where that stub belongs.
      */
     private static int inkStartsAt(Color accent, boolean incoming, LinkAnchor anchor) {
         LinkShape s = anchor == LinkAnchor.LINE_END
@@ -1560,9 +1545,8 @@ public final class LinkBench {
      * ink in both. The token tint is deliberately <b>not</b> in the text pass: the tint is meant to be on the
      * token, and counting it would drown the thing being measured.
      *
-     * <p><b>Both nodes, and a row of code above and below them</b> — round 5's correction to the instrument
-     * rather than to the drawing. It used to render the parent alone from y=0, which measured only the
-     * diving ends, and measured the topmost one against an empty margin.
+     * <p><b>Both nodes, and a row of code above and below them</b>: rendering the parent alone from y=0 would
+     * measure only the diving ends, and the topmost one against an empty margin.
      */
     private static int strikeCount(LinkRoute route) {
         Row[] parent = parentRows();
@@ -1593,8 +1577,8 @@ public final class LinkBench {
      * Reported rather than asserted at zero, because it is not zero and pretending otherwise would be the
      * exact failure this bench exists to prevent. Slot 0 sits inside its own row's leading and touches
      * nothing; slot 4 sits {@code 4 · railStep} px beyond the row's bound, which at the default row height is
-     * inside the neighbouring row's ascenders. The reader's own rule allows it — *"lines can pass other lines
-     * or portals, different color will handle this"* — and `link-fan.png` is where that gets judged.
+     * inside the neighbouring row's ascenders. Links may pass other lines or portals — colour tells them
+     * apart — and `link-fan.png` is where that is checked by eye.
      */
     private static int fanStrike(int links) {
         String filler = "        problems.Add(Problem.For(payload, Qty, jgpqy JGPQY));";
@@ -1807,8 +1791,8 @@ public final class LinkBench {
     /**
      * <b>The taxonomy, at 4×</b>: token × line-end against line × portal, each over real glyphs.
      *
-     * This is the round's headline claim as a picture — that the four forms are one drawing from the rail
-     * onward, and that a line-end anchor's `∩` turn reads as a turn onto that rail rather than as a kink.
+     * The claim as a picture: the four forms are one drawing from the rail onward, and a line-end anchor's
+     * `∩` turn reads as a turn onto that rail rather than as a kink.
      */
     private static void forms(String path, Color accent) throws Exception {
         int scale = 4, cellW = 250, bandH = ROW_H * 5, pad = 6;
@@ -1870,7 +1854,7 @@ public final class LinkBench {
     }
 
     /**
-     * <b>Five links off one row, at 3×</b> — the round's open question as a picture.
+     * <b>Five links off one row, at 3×.</b>
      *
      * Lane <i>k</i>'s vertical is {@link LinkArt#laneAxes} px right of the base column and its rail is its
      * <i>fan</i> — its rank among the ends leaving this row <b>on this side</b> — times {@code railStep}
@@ -1879,8 +1863,8 @@ public final class LinkBench {
      * right, exactly as the editor would.
      *
      * <p>Note the fan indices: three of these dive and two rise, so the rails are 0,1,2 on one side and 0,1
-     * on the other rather than 0..4 on one. Round 7 counts the fan per row and per side, which is the whole
-     * reason {@link LinkArt#railSpace} can buy a row 7 px instead of 13.
+     * on the other rather than 0..4 on one. The fan is counted per row and per side, which is why
+     * {@link LinkArt#railSpace} can buy a row 7 px instead of 13.
      */
     private static void fan(String path, Color accent) throws Exception {
         int scale = 3, rows = 7, panelW = 430;
@@ -1949,15 +1933,13 @@ public final class LinkBench {
     }
 
     /**
-     * <b>A spread fan, one short link hovered, and both label positions</b> — round 11's question as a
-     * picture, at 2×.
+     * <b>A spread fan, one short link hovered, and both label positions</b>, at 2×.
      *
      * Two same-editor links on one node: the first spans two <i>short</i> rows, the second two <i>long</i>
-     * ones, so per-lane demands put their columns ~200 px apart — the reader's <i>"link 1 spans 500px from
-     * left, link 2 spans 800px from left"</i>. The first link is hovered in both panels, and the only
-     * difference between them is the {@code fanSpan} argument to {@link LinkArt#paintLabel}: the left panel
-     * is told the fan is cheap to clear (round 8's position, past every lane) and the right one is told the
-     * truth (round 11's, beside its own end). Same call, same geometry, one number.
+     * ones, so per-lane demands put their columns ~200 px apart. The first link is hovered in both panels, and
+     * the only difference between them is the {@code fanSpan} argument to {@link LinkArt#paintLabel}: the left
+     * panel is told the fan is cheap to clear (past every lane) and the right one is told the truth (beside
+     * its own end). Same call, same geometry, one number.
      *
      * <p>What the eye has to say is whether the right panel's words read as belonging to the link they sit
      * beside — including where they cross the outer lane — and the left panel's do not.
@@ -2045,19 +2027,19 @@ public final class LinkBench {
         Graphics2D bg = big.createGraphics();
         bg.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 13));
         bg.setColor(new Color(0x9A, 0x76, 0x28));
-        bg.drawString("round 8 — past the whole fan, beside the OTHER link", 10, 18);
-        bg.drawString("round 11 — beside its own end", panelW * scale + 10, 18);
+        bg.drawString("before — past the whole fan, beside the OTHER link", 10, 18);
+        bg.drawString("now — beside its own end", panelW * scale + 10, 18);
         bg.dispose();
         write(path, big);
     }
 
     /**
-     * <b>Three same-editor links and two portals off one row, at 3×</b> — round 7's new fixture steps as a
-     * picture, and the one the routing has to be judged on.
+     * <b>Three same-editor links and two portals off one row, at 3×</b> — the picture the routing is checked
+     * against by eye.
      *
      * The same-editor lanes are innermost and 12 px apart; the portal lanes are outermost and a whole portal
      * apart. Nothing is drawn on anything, nothing passes through a portal that is not its own, and the whole
-     * fan is 92 px wide where round 6 would have asked for 147. Resting on the left, lane 3 — the first
+     * fan is 92 px wide where uniform portal-width lanes would ask for 147. Resting on the left, lane 3 — the first
      * portal — hovered on the right.
      */
     private static void lanePicture(String path, Color accent) throws Exception {
@@ -2121,7 +2103,7 @@ public final class LinkBench {
                 g2.dispose();
             }
             if (panel == 1) {
-                // The hovered link's label, where round 7 puts it: right of its lane, on the row's middle.
+                // The hovered link's label: right of its lane, on the row's middle.
                 Font italic = new Font(Font.SANS_SERIF, Font.ITALIC, 9);
                 LinkShape hovered = LinkArt.INSTANCE.shape(LinkAnchor.TOKEN, LinkJoin.PORTAL, 3, 3,
                         tokenRight, ox + 4 + widest, rowMid, laneAxis(base, 3, layout), ROW_H,
@@ -2203,8 +2185,8 @@ public final class LinkBench {
     }
 
     /**
-     * The same end at four editor font sizes, 3× — round 5's *"can we consider portal shape scaling along
-     * with main editor font scaling"*, drawn rather than argued.
+     * The same end at four editor font sizes, 3× — the portal scaling with the editor font, drawn rather
+     * than argued.
      */
     private static void fontScale(String path, Color accent) throws Exception {
         int[] rowHs = {14, 20, 28, 36};

@@ -29,10 +29,9 @@ import javax.swing.SwingUtilities
  *
  * It exists because the progress bar is not a diagnosis. Everything a failing install actually says — a
  * permission denied on the model directory, a proxy refusing the index, a C extension with no wheel asking
- * for a compiler — arrived on `indicator.text2`, one line at a time, each overwriting the last, and was gone
- * the moment the task ended. The notification then said *"see the IDE log"*, which until this round held
- * nothing at all, and even now holds only the tail and only on failure. This is the place the user can read
- * it while it happens, and copy it.
+ * for a compiler — otherwise only reaches `indicator.text2`, one line at a time, each overwriting the last,
+ * gone the moment the task ends; the IDE log holds only the tail, and only on failure. This is the place the
+ * user can read it while it happens, and copy it.
  *
  * **Non-modal, and closing it does not cancel.** The install is a background task with its own progress bar
  * and its own ✕; this window is a view of it. A modal console would block the IDE for the length of a 340 MB
@@ -92,7 +91,7 @@ class InstallConsoleDialog : DialogWrapper {
     private val pending = StringBuilder()
     private var flushScheduled = false
 
-    /** Set by the first [finish]; later calls are ignored so an early `return` cannot overwrite a verdict. */
+    /** Set by the first [finish]; later calls are ignored so an early `return` cannot overwrite a result. */
     @Volatile private var finished = false
 
     override fun getDimensionServiceKey(): String = "AudioExplainer.InstallConsoleDialog"
@@ -129,8 +128,8 @@ class InstallConsoleDialog : DialogWrapper {
     }
 
     /**
-     * Close the console's account of the run: a verdict on the status line, and the button relabelled from
-     * the neutral "Close" to something that says it is over. Idempotent — the first verdict wins.
+     * Close the console's account of the run: a result on the status line, and the OK button relabelled
+     * "Close". Idempotent — the first result wins.
      */
     fun finish(ok: Boolean, summary: String) {
         if (finished) return
@@ -142,7 +141,7 @@ class InstallConsoleDialog : DialogWrapper {
         }, ModalityState.any())
     }
 
-    /** The default verdict, for a path that returned without stating one. No-op once [finish] has run. */
+    /** The default result, for a path that returned without stating one. No-op once [finish] has run. */
     fun finishQuietly() = finish(true, "Finished.")
 
     private fun flushNow() {

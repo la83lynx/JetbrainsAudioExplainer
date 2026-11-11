@@ -1,14 +1,11 @@
 """Does scripts/explainer.ps1 deliver the plan's bytes intact?
 
-The baseline run answered "no" by accident: the helper POSTed 14213 bytes that would not decode as
-UTF-8, printed nothing at all, and the agent silently fell back to curl. This isolates that.
-
-It matters more than a retry: `ExplainerServer` decodes with `String(bytes, UTF_8)`, and Java
+A regression here is silent: `ExplainerServer` decodes with `String(bytes, UTF_8)`, and Java
 SUBSTITUTES U+FFFD for bad bytes rather than throwing. So in the IDE the POST does not fail -- the
 walkthrough loads with corrupted text. Every em dash in English narration, and every character of a
 Japanese or Russian one, goes through that path.
 
-Run only when no sweep is in flight: it takes over ~/.claude-explainer-{port,token}, and restores
+Do not run against a live sandbox: it takes over ~/.claude-explainer-{port,token}, and restores
 whatever was there.
 """
 import json

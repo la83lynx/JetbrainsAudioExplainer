@@ -38,7 +38,7 @@ import java.nio.file.Path
 import javax.swing.JComponent
 
 /**
- * The JCEF-backed sidebar (Phase 4) — the JetBrains analogue of code-explainer's VS Code webview.
+ * The JCEF-backed sidebar — the JetBrains analogue of code-explainer's VS Code webview.
  *
  * Hosts a [JBCefBrowser] loading the reused `sidebar.{html,css,js}` (assembled into one document),
  * and bridges the two directions the webview expects:
@@ -48,7 +48,7 @@ import javax.swing.JComponent
  *    (and `saved_list` on request) by calling `window.__audioExplainerReceive(json)` — the same shape
  *    the upstream `window.addEventListener("message", …)` handler consumes.
  *
- * Audio is driven by a [NarrationController] (Phase 7): walkthrough status/segment changes are relayed
+ * Audio is driven by a [NarrationController]: walkthrough status/segment changes are relayed
  * to it, and it pushes `highlight_advance` + `audio_chunk`/`audio_end` back through [postToWebview] while
  * streaming Kokoro TTS. The code rendering is driven independently by [TreePlanController], the
  * walkthrough's other listener.
@@ -67,13 +67,13 @@ class AudioExplainerSidebar(
     private val browser = JBCefBrowser()
     private val jsQuery = JBCefJSQuery.create(browser as JBCefBrowserBase)
 
-    /** Phase 7 audio driver. Pushes audio/highlight messages through [postToWebview]. */
+    /** The audio driver. Pushes audio/highlight messages through [postToWebview]. */
     private val narration = NarrationController(project, walkthrough, ::postToWebview, parentDisposable)
 
     /** The open robotic-voice editor dialog, if any (closed/replaced when a new one opens). */
     private var voiceDialog: EspeakVoiceDialog? = null
 
-    /** Phase 7.5 #5 — in-flight generation signal, rendered as the loading banner. */
+    /** In-flight generation signal, rendered as the loading banner. */
     private val tracker = ExplainSessionTracker.getInstance(project)
     private val trackerListener = ExplainSessionTracker.Listener { pushGenerationStatus(it) }
 
@@ -92,7 +92,7 @@ class AudioExplainerSidebar(
         })
         tracker.addListener(trackerListener)
 
-        // Phase 7.5 #10 — follow live IDE theme changes: when the LAF (light/dark, or a new theme) switches
+        // Follow live IDE theme changes: when the LAF (light/dark, or a new theme) switches
         // while the tool window is open, re-inject the CSS variables so the panel tracks it without a reload.
         ApplicationManager.getApplication().messageBus.connect(parentDisposable)
             .subscribe(LafManagerListener.TOPIC, object : LafManagerListener {
@@ -116,17 +116,17 @@ class AudioExplainerSidebar(
                 pushUpdate()
                 // Restore the persisted voice/speed into the webview controls so they match the engine.
                 pushSettings()
-                // Populate the voice combo for the loaded walkthrough's language (Phase L3); authoritative
+                // Populate the voice combo for the loaded walkthrough's language; authoritative
                 // over pushSettings' voice, so it comes after.
                 pushVoiceOptions()
-                // Runtime-discovered voices — Windows SAPI (L7) and downloaded Piper models (L8) — arrive via
+                // Runtime-discovered voices — Windows SAPI and downloaded Piper models — arrive via
                 // async probes that may finish after this first push; re-push once they're in so they appear
                 // without reopening the tool window.
                 scheduleDiscoveredVoiceRefresh()
                 // Push the saved-walkthroughs list now that we're loaded. The webview's own initial
                 // request_saved_list is fired from its first render() BEFORE `loaded` flips true, so that
                 // request is dropped by postToWebview's guard; this authoritative push is what populates the
-                // idle-view list on first open (Phase 7.5 #16).
+                // idle-view list on first open.
                 pushSavedList()
                 // Catch up on a generation already in flight (the tool window may have just been opened
                 // by ClaudeExplainer to show this banner) and any pending undo offer.
@@ -138,8 +138,8 @@ class AudioExplainerSidebar(
         // Point per-workspace storage at THIS project BEFORE the webview loads, so the first pushSettings()
         // / pushSavedList() in onLoadEnd already have the save directory and saved list available. It's also
         // set by ServerStartupActivity on project open, but that ProjectActivity coroutine can race the tool
-        // window's creation (e.g. a tool window restored at startup) — setting it here removes that race for
-        // the sidebar, which is what fixes the missing save-dir tooltips + empty saved-list on first load.
+        // window's creation (e.g. a tool window restored at startup); setting it here removes that race, which
+        // would otherwise leave the save-dir tooltips missing and the saved list empty on first load.
         project.basePath?.let { server.setWorkspaceRoot(Path.of(it)) }
 
         browser.loadHTML(buildHtml())
@@ -151,7 +151,7 @@ class AudioExplainerSidebar(
     override fun onPlan(state: WalkthroughSnapshot) {
         pushUpdate()
         // A newly loaded plan may be a different language → repopulate the voice combo and reconcile the
-        // voice BEFORE narration (re)streams, so playback uses a voice valid for the new language (Phase L3).
+        // voice BEFORE narration (re)streams, so playback uses a voice valid for the new language.
         pushVoiceOptions()
         narration.onPlanChanged()
         // A non-empty plan was replaced → offer a one-level Undo instead of silently clobbering it.
@@ -161,10 +161,8 @@ class AudioExplainerSidebar(
     /**
      * **The position moved — the one navigation callback, and the sidebar consumes it.**
      *
-     * Round 3's one defect was this method's ancestor not existing: the sidebar learned its sub-step position
-     * from the narration controller's `highlight_advance` alone, so the outline tracked sub-steps only while
-     * a TTS server was engaged. There is one event now and one position in it, so an outline row cannot
-     * survive a move it did not hear about and no listener can consume half the walk.
+     * The outline's position comes from this event, not from the narration controller's
+     * `highlight_advance`, so it tracks sub-steps whether or not a TTS server is engaged.
      */
     override fun onStep(index: Int) {
         pushUpdate()
@@ -177,7 +175,7 @@ class AudioExplainerSidebar(
     }
 
     /**
-     * **Saved, or its unsaved content discarded** (`Saving.md` C) — the Save button's tooltip follows the new
+     * **Saved, or its unsaved content discarded** — the Save button's tooltip follows the new
      * identity, and a save may have added a row to the saved list. Narration is not told: nothing it plays
      * changed.
      */
@@ -202,7 +200,7 @@ class AudioExplainerSidebar(
             // and the one place a file and a line survive (the location link).
             put("now", if (now != null) json.encodeToJsonElement(now) else JsonNull)
             put("status", state.status)
-            // The Save split button's state (`Saving.md` C): which file Save writes, and whether it has
+            // The Save split button's state: which file Save writes, and whether it has
             // anything to write.
             put("savedAs", state.savedAs?.let { JsonPrimitive(it) } ?: JsonNull)
             put("unsaved", state.unsaved)
@@ -214,7 +212,7 @@ class AudioExplainerSidebar(
 
     /**
      * Push the current walkthrough language's eligible voices + the effective selection to the webview
-     * (Phase L3). Reconciles the persisted voice to the language first (see [reconcileVoice]), so the
+     * Reconciles the persisted voice to the language first (see [reconcileVoice]), so the
      * combo and the narration engine agree. Called on (re)load and whenever a new plan lands.
      */
     private fun pushVoiceOptions() {
@@ -227,7 +225,7 @@ class AudioExplainerSidebar(
             put("autonym", lang.autonym)
             put("requiresExtraDeps", lang.requiresExtraDeps)
             // Each voice carries whether it is robotic (espeak) so the webview can toggle the robotic
-            // controls purely client-side when the dropdown changes — engine is per-voice now.
+            // controls purely client-side when the dropdown changes — engine is per-voice.
             putJsonArray("voices") {
                 lang.voices.forEach { v ->
                     add(buildJsonObject {
@@ -248,8 +246,8 @@ class AudioExplainerSidebar(
     }
 
     /**
-     * Runtime-discovered voices — Windows SAPI (Phase L7, a PowerShell probe) and downloaded Piper models
-     * (Phase L8, which ride the `--check` probe) — may be found after the initial [pushVoiceOptions]. Kick
+     * Runtime-discovered voices — Windows SAPI (a PowerShell probe) and downloaded Piper models
+     * (which ride the `--check` probe) — may be found after the initial [pushVoiceOptions]. Kick
      * both off (cached → at most one probe app-wide each) and re-push the voice options on the EDT if either
      * added voices for the current language, so they appear without a reopen. No churn when nothing changed.
      */
@@ -337,7 +335,7 @@ class AudioExplainerSidebar(
     }
 
     /**
-     * Baseline voice-memory policy (ExplainerLanguages.md §5): keep the single "last voice"; if it isn't
+     * Voice-memory policy: keep the single "last voice"; if it isn't
      * valid for [langCode], reset it to that language's default so a Spanish walkthrough can't be spoken
      * by an English voice. Persists the fallback (narration reads `ttsVoice` at speak-time) and returns
      * the effective voice. Pure persist — the live re-stream on a *user* voice change stays in `voice_change`.
@@ -350,7 +348,7 @@ class AudioExplainerSidebar(
         return fallback
     }
 
-    /** Push the current generation phase to the webview's loading banner (Phase 7.5 #5). */
+    /** Push the current generation phase to the webview's loading banner. */
     private fun pushGenerationStatus(state: ExplainSessionState) {
         postToWebview(buildJsonObject {
             put("type", "generation_status")
@@ -363,7 +361,7 @@ class AudioExplainerSidebar(
         })
     }
 
-    /** Tell the webview to show the "New walkthrough loaded — Keep / Undo" banner (Phase 7.5 #5). */
+    /** Tell the webview to show the "New walkthrough loaded — Keep / Undo" banner. */
     private fun pushPlanReplaced() {
         postToWebview(buildJsonObject {
             put("type", "plan_replaced")
@@ -371,7 +369,7 @@ class AudioExplainerSidebar(
         })
     }
 
-    /** Re-push the live IDE theme colours into the webview's `#ae-theme-vars` style element (Phase 7.5 #10). */
+    /** Re-push the live IDE theme colours into the webview's `#ae-theme-vars` style element. */
     private fun pushTheme() {
         postToWebview(buildJsonObject { put("type", "theme"); put("css", themeVars()) })
     }
@@ -379,20 +377,14 @@ class AudioExplainerSidebar(
     /**
      * Re-push the theme because a **setting** changed rather than the IDE's LAF — Settings ▸ Apply.
      *
-     * [themeVars] has always read `accentColor`, so the panel was designed to follow it; what was missing is
-     * anyone telling it. K6 found that from the other side: *"changing accent color only changed tree of
-     * code default color, not the color of audio explainer window accents"* — the play button, the playback
-     * fill, the volume slider and the read-along wash all kept the old gold until the tool window was
-     * rebuilt or the IDE theme changed, because `pushTheme`'s only caller was `lookAndFeelChanged`. A
-     * setting labelled *Accent colour* that reaches half the plugin's surfaces is a defect in the half that
-     * does not move, not a narrower setting than it looks.
+     * [themeVars] reads `accentColor`, so without this the play button, playback fill, volume slider and
+     * read-along wash would keep the old accent until the tool window was rebuilt or the IDE theme changed.
      */
     fun refreshTheme() = pushTheme()
 
     /**
-     * Push the persisted voice + speed so the webview controls reflect them on (re)load (Phase 7.5), plus
-     * the walkthroughs save directory so the Save button / "Saved Walkthroughs" label can show it on hover
-     * (Phase 7.5 #14 task 5).
+     * Push the persisted voice + speed so the webview controls reflect them on (re)load, plus
+     * the walkthroughs save directory so the Save button / "Saved Walkthroughs" label can show it on hover.
      */
     private fun pushSettings() {
         val st = AudioExplainerSettings.getInstance().state
@@ -430,47 +422,43 @@ class AudioExplainerSidebar(
         val obj = json.parseToJsonElement(request).jsonObject
         when (obj["type"]?.jsonPrimitive?.content) {
             "play_pause" -> walkthrough.togglePlayPause()
-            // **By plan step, not by segment** (G2 round 2). These used to call `next`/`prev`, which move by
-            // *segment* — a run of consecutive steps in one frame — so each press skipped whatever sub-steps
-            // the current frame held. Routed through the narration controller rather than straight at
+            // **By plan step, not by segment** — a segment is a run of consecutive steps in one frame, so
+            // moving by segment would skip the current frame's sub-steps. Routed through the narration controller rather than straight at
             // `walkthrough.nextStep()` so a *playing* walkthrough re-narrates the step it lands on; the
             // controller falls back to the same `nextStep`/`prevStep` when narration is not engaged.
             "next" -> narration.userAdvance(+1)
             "prev" -> narration.userAdvance(-1)
-            // Outline navigation (Phase 7.5 #4, revised): jump to a plan step, PRESERVING play/pause
-            // status — a click navigates, it doesn't force-play (mirrors Prev/Next). One message where
-            // there were two: with a flat position a group header and a step row both name a step index,
-            // so a header click is simply its first step.
+            // Outline navigation: jump to a plan step, PRESERVING play/pause status — a click navigates, it
+            // doesn't force-play (mirrors Prev/Next). A group header click is simply its first step.
             "goto_step" -> obj.intField("index")?.let { narration.gotoStep(it) }
             // Clicking the "file:lines" location under Now Playing re-opens that file and scrolls to it —
             // useful after the user navigated elsewhere in the editor. Does not touch playback.
             "reveal_location" -> obj.stringField("file")?.let { revealLocation(it, obj.intField("start") ?: 1) }
-            "restart" -> walkthrough.restart()
-            // Asked about first when it holds unsaved work (`Saving.md` D); Cancel leaves it showing.
+            // Asked about first when it holds unsaved work; Cancel leaves it showing.
             "close_walkthrough" -> onClose()
-            // Phase 7.5 #5 — undo/keep the walkthrough that a generation just replaced.
+            // Undo/keep the walkthrough that a generation just replaced.
             "restore_previous" -> walkthrough.restorePrevious()
             "dismiss_replace" -> walkthrough.clearPrevious()
             "show_run_log" -> ApplicationManager.getApplication().invokeLater {
                 if (!project.isDisposed) RunLogWindow.show(project, ExplainSessionTracker.getInstance(project).lastLog)
             }
             "request_saved_list" -> pushSavedList()
-            // The split button (`Saving.md` C): Save writes the file this walkthrough already is, or asks once;
+            // The split button: Save writes the file this walkthrough already is, or asks once;
             // the caret's Save As… always asks.
             "save" -> onSave(saveAs = false)
             "save_as" -> onSave(saveAs = true)
-            // **No unsaved prompt here, deliberately** (`Saving.md` D): loading from the saved list is the one
+            // **No unsaved prompt here, deliberately**: loading from the saved list is the one
             // replacement made on the list itself, and the replace-and-Undo banner already covers it.
             "load" -> obj.stringField("name")?.let { onLoad(it) }
             // Saved-list management: delete one (confirmed) / delete all (confirmed). Confirmation is a
             // native Messages dialog — JCEF's off-screen renderer doesn't reliably show `window.confirm`.
             "delete_walkthrough" -> obj.stringField("name")?.let { onDelete(it, obj.stringField("title") ?: it) }
             "delete_all_walkthroughs" -> onDeleteAll()
-            // Narration feedback + TTS knobs (Phase 7).
+            // Narration feedback + TTS knobs.
             "playback_complete" -> narration.onPlaybackComplete()
             // The webview's Web Audio playhead has reached this step's first buffer — i.e. the user is NOW
             // hearing it. Only the webview knows this moment: the plugin's own "first chunk" callback is
-            // synthesis/enqueue time, measured 1.8–6.0 s early (MoreUI.md §2.8). Routed straight to the
+            // synthesis/enqueue time, measured 1.8–6.0 s early. Routed straight to the
             // surface, which is where the time-sensitive decoration lives. The flash is checked against the
             // step showing before it fires, so a stale one from a replaced plan is dropped.
             "playback_started" -> {
@@ -513,7 +501,7 @@ class AudioExplainerSidebar(
                     narration.onRateChanged()
                 }
             }
-            // Phase 7.5 #6 — the webview asks us to force a native CEF repaint after a layout change (or via
+            // The webview asks us to force a native CEF repaint after a layout change (or via
             // the manual "Refresh UI" button), to defeat JCEF's flaky partial invalidation leaving ghost pixels.
             "repaint" -> forceBrowserRepaint()
             // Volume + mute act locally in the webview; chunk_played is a fine-grained progress ping.
@@ -536,12 +524,12 @@ class AudioExplainerSidebar(
 
     /**
      * Open [filePath] (relative to this project's base path, or absolute) and scroll to [line1] (1-based),
-     * focusing the editor — the Now-Playing location link (Phase 7.5). File resolution (a VFS refresh) is
+     * focusing the editor — the Now-Playing location link. File resolution (a VFS refresh) is
      * a slow op forbidden on the EDT, so it runs on a pooled thread; only the editor open is marshalled back.
      */
     private fun revealLocation(filePath: String, line1: Int) {
         // While a tree is showing, this file is already on screen inside a node — so reveal it there rather
-        // than opening a tab in front of the tree (the round-1 defect, reached from a different click).
+        // than opening a tab in front of the tree.
         // Asked on the EDT because it touches editors, and before any VFS work because the tree needs none.
         ApplicationManager.getApplication().invokeLater {
             if (disposed || project.isDisposed) return@invokeLater
@@ -575,7 +563,7 @@ class AudioExplainerSidebar(
     }
 
     /**
-     * Force the JCEF surface to repaint (Phase 7.5 #6). CEF's off-screen invalidation is flaky — after a
+     * Force the JCEF surface to repaint. CEF's off-screen invalidation is flaky — after a
      * layout change (a docked banner appearing/disappearing, a view switch, the outline shrinking) it can
      * leave stale "ghost" pixels until an input event forces a repaint. The webview requests this via the
      * `repaint` message (both from automatic layout transitions and the manual "Refresh UI" button); we hit
@@ -723,7 +711,7 @@ $body
     /**
      * Build the live IDE theme as a `:root{…}` block. Injected LAST in the document head (after sidebar.css'
      * own `:root` fallback) so these live values win the cascade, and re-pushed on LAF changes via [pushTheme]
-     * so the panel tracks light/dark switches while open (Phase 7.5 #10).
+     * so the panel tracks light/dark switches while open.
      */
     private fun themeVars(): String {
         fun hex(c: Color) = "#%02x%02x%02x".format(c.red, c.green, c.blue)
@@ -741,7 +729,7 @@ $body
         val btn = if (isDark(bg)) bg.brighter() else bg.darker()
         val btnHover = if (isDark(bg)) btn.brighter() else btn.darker()
         // A soft wash of the accent over the panel — used for the transcript read-along word highlight so the
-        // moving cursor stays gentle and the text stays readable on top of it (Phase 7.5 #12).
+        // moving cursor stays gentle and the text stays readable on top of it.
         val accentSoft = blend(accent, panel, 0.34)
         return ":root{" +
             "--ae-bg:${hex(bg)};" +

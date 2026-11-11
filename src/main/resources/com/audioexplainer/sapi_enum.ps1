@@ -1,4 +1,4 @@
-# Phase L7 — enumerate installed Windows SAPI5 voices for the plugin (TtsService.probeSapiVoices).
+# Enumerate installed Windows SAPI5 voices for the plugin (TtsService.probeSapiVoices).
 # Emits one compact JSON array on stdout: [{name, culture, english, native, gender}, ...].
 # `english`/`native` are the LANGUAGE names (neutral culture, so "Tamil" not "Tamil (India)") for menu
 # labels + badges. System.Speech is .NET Framework, so this is run via Windows PowerShell 5.1.

@@ -21,8 +21,7 @@ import java.util.Locale;
  * offered early, the stops, and the result.
  *
  * `record` writes `<fixture>.golden.txt`; without it the probe compares and fails on the first line that moved.
- * The golden was recorded from the code before the `RunEvent` refactor, which is the point: the refactor must
- * not change a byte of it.
+ * A change to how a run is read must not move a byte of it unless it means to — and then it is re-recorded.
  *
  * A fixture is `t<TAB>line` per stdout line, after one `#` header: `tool=0|1 provider=<name>|- cancel=0|1`.
  */
@@ -30,7 +29,7 @@ public final class RunEventGolden {
 
     static final List<String> INFO = new ArrayList<>();
 
-    /** Captures the INFO lines the run code logs; the timeline is one of the things a round reads. */
+    /** Captures the INFO lines the run code logs; the timeline is part of what the golden freezes. */
     static final class Capture extends Logger {
         final String category;
         Capture(String category) { this.category = category; }

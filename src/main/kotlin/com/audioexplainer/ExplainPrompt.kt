@@ -17,10 +17,9 @@ import java.nio.file.Path
  * milliseconds and assert on the exact bytes. [ClaudeExplainer] keeps the parts that need an IDE: the
  * settings lookup, the voice discovery warm-up, the process, the notifications.
  *
- * **Standard depth with no extra instructions is byte-identical to the prompt that shipped before
- * depth existed** — `probes/prompt-standard.txt` is that prompt, frozen, and the probe compares
- * against it. An upgrade must not silently change what every user who never opens the new controls
- * gets asked for.
+ * **Standard depth with no extra instructions is frozen**: `probes/prompt-standard.txt` holds that prompt
+ * byte for byte and the probe compares against it, so a change cannot silently alter what a user who
+ * never opens the depth or instructions controls gets asked for.
  */
 object ExplainPrompt {
 
@@ -29,35 +28,32 @@ object ExplainPrompt {
      *
      * **`PowerShell` is on it because the docs send the agent there.** On Windows `docs/explain-at-cursor.md`
      * tells it to POST the plan with `powershell -File explainer.ps1`, and the tool it reaches for first is
-     * the `PowerShell` one — which this list forbade, so the call was refused and the turn was spent
-     * discovering that. It grants nothing new: `Bash` is here and is command-unrestricted, so the same
-     * command was always reachable, just not by the name the agent tried first.
+     * the `PowerShell` one; without it that call is refused and a turn is wasted. It grants nothing new:
+     * `Bash` is here and is command-unrestricted, so the same command is reachable either way.
      * `ExplainerDiagnostics`' "`PowerShell` tool allowed" row is the guard that keeps the two in step.
      */
     const val ALLOWED_TOOLS = "Read Grep Glob Task Write TodoWrite Bash PowerShell"
 
-    /**
-     * The allow-list of a run that sends its plan with the `set_plan` tool ([McpEndpoint]): no `Write`, no shell.
-     * The plan was the only thing the run wrote and the POST the only thing it ran, so the tool replaces both —
-     * and a run that cannot write or execute is one a hostile comment in the code under explanation cannot
-     * talk into doing either.
-     */
     /** The skill's docs an ACP run attaches to its prompt ([buildPrompt]'s `docsAttached`), relative to the skill dir. */
     val SKILL_DOCS = listOf("docs/explain-at-cursor.md", "docs/plan-schema.md")
 
+    /**
+     * The allow-list of a run that sends its plan with the `set_plan` tool ([McpEndpoint]): no `Write`, no shell.
+     * The plan is the only thing a POST run writes and the POST the only thing it runs, so the tool replaces both —
+     * and a run that cannot write or execute is one a hostile comment in the code under explanation cannot
+     * talk into doing either.
+     */
     const val TOOL_ALLOWED_TOOLS = "Read Grep Glob Task TodoWrite ${McpEndpoint.QUALIFIED_TOOL}"
 
     private const val MAX_SELECTION_CHARS = 4000
 
     /**
-     * [planDir] is the run's own directory for the JSON it POSTs (`Saving.md` B), granted with `--add-dir`:
-     * it is outside the working directory by design. On the dev machine a headless `Write` there succeeded
-     * with or without the flag (measured 2026-09-23); it is passed anyway so the grant is explicit rather
-     * than resting on whatever permission settings the user has, where a refused `Write` would have no one
-     * to ask. **Last**, because `--add-dir` takes a variadic list and would swallow whatever positional came
-     * after it. Null adds nothing, so the argv `EffortProbe` measures is unchanged.
-     */
-    /**
+     * [planDir] is the run's own directory for the JSON it POSTs, granted with `--add-dir`: it is outside the
+     * working directory by design. A headless `Write` there can succeed without the flag; it is passed anyway
+     * so the grant is explicit rather than resting on whatever permission settings the user has, where a
+     * refused `Write` would have no one to ask. **Last**, because `--add-dir` takes a variadic list and would
+     * swallow whatever positional came after it. Null adds nothing.
+     *
      * [mcpConfig] is the run's `--mcp-config` file ([McpEndpoint.config]): given, the plan comes back through the
      * `set_plan` tool, the allow-list is [TOOL_ALLOWED_TOOLS], and [planDir] is not granted — the agent writes
      * nothing.
@@ -91,10 +87,9 @@ object ExplainPrompt {
         // the dev machine's servers, 1.2-1.4s without). `--mcp-config` takes a list, so a flag must follow it.
         if (mcpConfig != null) { add("--mcp-config"); add(mcpConfig.toString()) }
         add("--strict-mcp-config")
-        // **Two `if`s, and the argv is deliberately NOT what shipped.** Passing neither flag meant
-        // every run inherited `~/.claude/settings.json`'s `effortLevel` — a value chosen for interactive
-        // coding, and a measured four-minute walkthrough. Blank still means inherit, for the
-        // two people who want it; it is simply no longer the default.
+        // **Effort is passed explicitly.** Without `--effort` a run inherits `~/.claude/settings.json`'s
+        // `effortLevel` — a value chosen for interactive coding, which can make a walkthrough take minutes.
+        // Blank still means inherit; it is just not the default.
         if (effort.isNotBlank()) { add("--effort"); add(effort.trim()) }
         if (settings != null) { add("--settings"); add(settings.toString()) }
         else if (model.isNotBlank()) { add("--model"); add(model.trim()) }
@@ -102,7 +97,7 @@ object ExplainPrompt {
     }
 
     /**
-     * [planDir] is where the agent writes the JSON it POSTs (`Saving.md` B) — a per-run directory outside the
+     * [planDir] is where the agent writes the JSON it POSTs — a per-run directory outside the
      * project, because a payload written inside it lands in `.walkthroughs/` often enough to fill the user's
      * saved list with blank rows. Null (no directory could be made) leaves the line out rather than naming a
      * directory that does not exist.
@@ -129,7 +124,7 @@ object ExplainPrompt {
     ): String {
         val skillPath = skillDir?.toString()?.replace('\\', '/')
         val planPath = planDir?.toString()?.replace('\\', '/')
-        // Scope-specific framing (Phase 5): the editor cursor flow vs. a file / folder-or-project chosen in
+        // Scope-specific framing: the editor cursor flow vs. a file / folder-or-project chosen in
         // the Solution Explorer. The set_plan schema is identical — only what Claude is asked to cover differs.
         val intro = when (request.scope) {
             ExplainScope.CURSOR ->
@@ -179,9 +174,8 @@ object ExplainPrompt {
                 )
                 appendLine()
             }
-            // **Depth (Effort.md).** Standard emits nothing here at all — that is what keeps the prompt
-            // of a user who never opens the new control byte-identical to the one that shipped before depth
-            // existed. Brief and Deep say what shape to aim for; neither ever contradicts
+            // **Depth.** Standard emits nothing here at all — that is what keeps its prompt byte-identical to
+            // `probes/prompt-standard.txt`. The others say what shape to aim for; none ever contradicts
             // docs/plan-schema.md, which stays the authority on what the fields mean.
             when (depth) {
                 AudioExplainerSettings.DEPTH_BRIEF -> {
@@ -193,8 +187,8 @@ object ExplainPrompt {
                     )
                     appendLine()
                 }
-                // **Detailed bounds reach, not output** (measured 2026-11-04): at xhigh, Deep's extra three
-                // minutes were spent opening other files for nested callees, not writing the plan. So this is
+                // **Detailed bounds reach, not output**: at xhigh, Deep's extra minutes go to opening other
+                // files for nested callees, not to writing the plan. So this is
                 // Deep's annotations with every frame in the target, and one read beyond it at most.
                 AudioExplainerSettings.DEPTH_DETAILED -> {
                     appendLine(
@@ -306,8 +300,8 @@ object ExplainPrompt {
                             "`scene` are on screen together and a step in another scene replaces them. A " +
                             "`parent` must be in the same `scene`.",
                     )
-                    // **Standard is the branch that must not move**, so it is the shipped paragraph
-                    // verbatim rather than a reassembly of it — `probes/EffortProbe.java` compares what
+                    // **Standard is the branch that must not move**, so it is one literal paragraph
+                    // rather than a reassembly of the others — `probes/EffortProbe.java` compares what
                     // it produces against `probes/prompt-standard.txt` byte for byte.
                     else -> {
                         appendLine(
@@ -343,7 +337,7 @@ object ExplainPrompt {
                 // read. This inline copy is the FALLBACK mirror only — keep it in sync with that doc, which
                 // stays the source of truth for every other caller.
                 // The shape phrase is the ONE part of the mirror depth moves; Standard interpolates to
-                // "usually 1-2 frames", which is the wording that shipped.
+                // "usually 1-2 frames", the frozen wording.
                 val shape = when (depth) {
                     AudioExplainerSettings.DEPTH_BRIEF -> "ONE frame, at most 4 steps"
                     AudioExplainerSettings.DEPTH_DETAILED -> "up to 3 frames, every one from the target"
@@ -442,17 +436,16 @@ object ExplainPrompt {
                         "degraded — READ IT: an [error] there means the user cannot see part of what you wrote " +
                         "(an unresolvable path, a step naming a frame that does not exist), so fix it and re-POST.",
                 )
-                // **The reply is the validation** (`SourceCheck.md`). Told to verify its own tokens and lines, the
-                // agent wrote and ran a script for it on every run — ~16 s and three turns, measured.
-                // The server checks the same things against the same text now, so the prompt says not to.
+                // **The reply is the validation.** Told to verify its own tokens and lines, the agent writes and
+                // runs a script for it on every run — ~16 s and three turns. The server checks the same things
+                // against the same text, so the prompt says not to.
                 appendLine(
                     "   The reply checks every token and line number against the source files, so do NOT write or " +
                         "run a script to validate the plan yourself — POST it and read the reply.",
                 )
             }
-            // **Where the POSTed JSON goes** (`Saving.md` B). "A temp file" with no directory is how payloads
-            // ended up in the project's `.walkthroughs/` and showed as blank rows in the saved list, so the
-            // prompt names one. In the shared tail, so the no-skill fallback does not lose it.
+            // **Where the POSTed JSON goes.** "A temp file" with no directory lets payloads land in the
+            // project's `.walkthroughs/` and show as blank rows in the saved list, so the prompt names one. In the shared tail, so the no-skill fallback does not lose it.
             if (planPath != null && !viaTool) {
                 appendLine(
                     "   Write the JSON file you POST in $planPath/ — " +

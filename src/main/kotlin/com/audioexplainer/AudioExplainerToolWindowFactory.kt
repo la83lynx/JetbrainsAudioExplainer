@@ -10,7 +10,7 @@ import com.intellij.ui.jcef.JBCefApp
 import javax.swing.JComponent
 
 /**
- * Builds the "Audio Explainer" tool window (Phase 4). Prefers the JCEF sidebar (the reused webview UI);
+ * Builds the "Audio Explainer" tool window. Prefers the JCEF sidebar (the reused webview UI);
  * falls back to a plain Swing control panel when JCEF is unavailable or fails to initialise. Both
  * variants tie their walkthrough-listener + browser lifetime to [ToolWindow.getDisposable].
  */

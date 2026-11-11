@@ -9,7 +9,7 @@ import com.intellij.openapi.ui.InputValidator
 import com.intellij.openapi.ui.Messages
 
 /**
- * **Save, Save As… and the unsaved prompt** (`Saving.md` C and D) — the dialogs, in one place, so the
+ * **Save, Save As… and the unsaved prompt** — the dialogs, in one place, so the
  * sidebar's split button and the three moments that can lose a walkthrough all save the same way.
  *
  * Everything here is modal and runs **on the EDT**. The state it reads and writes is [Walkthrough]'s own
@@ -119,7 +119,7 @@ object SaveFlow {
 
 /**
  * **The project is closing, or the IDE is exiting** — the third moment that can lose a walkthrough
- * (`Saving.md` D). A `projectCloseHandler` because [ProjectCloseHandler.canClose] is vetoable: Cancel keeps
+ * A `projectCloseHandler` because [ProjectCloseHandler.canClose] is vetoable: Cancel keeps
  * the project open, which a `projectClosing` listener could not do.
  *
  * The walkthrough is app-wide, so with two projects open both close handlers see it. The first answer

@@ -3,13 +3,11 @@ package com.audioexplainer.tree
 import com.audioexplainer.AudioExplainerSettings
 
 /**
- * **The one place a persisted setting becomes a tree style** — Phase 4's settings column, resolved.
+ * **The one place a persisted setting becomes a tree style.**
  *
- * §1c's verdict table has a *"Phase 4"* column saying, per row, whether the alternative became a user setting
- * or was settled by a rule. This is that column as code: eight values out of [AudioExplainerSettings.State],
- * and nothing else. Chrome, the token box, the nesting indent, the collapse affordance's *place* and the
- * layout are all absent on purpose — each is derived by a rule or was rejected outright, and a knob the
- * reader has already turned down is a comparison the *user* would have to redo.
+ * Only the tree options that are user settings are read here, out of [AudioExplainerSettings.State]. Chrome,
+ * the token box, the nesting indent, the collapse affordance's *place* and the layout are absent on purpose:
+ * each is derived by a rule, not a preference.
  *
  * **Why the settings hold enum names rather than a private vocabulary.** `calloutFrame` invented `"bar"` /
  * `"outline"` / `"solid"`, which is a second spelling of a fact the enum already states; here the persisted
@@ -19,10 +17,9 @@ import com.audioexplainer.AudioExplainerSettings
  *
  * **Why every function takes the state.** The no-argument overloads reach the application service, which
  * needs a running IDE; the ones that take a [AudioExplainerSettings.State] need nothing at all, so
- * `PlanProbe` can assert that each shipped default resolves to the enum constant §1c judged **and** to the
- * same value the style class's own constructor default says. Two transcriptions of one verdict is the drift
- * this project keeps paying for — see constraint 16's *"the specification was right and the transcription
- * lost it"* — so the two are checked against each other rather than trusted to agree.
+ * `PlanProbe` can assert that each shipped default resolves to the same value the style class's own
+ * constructor default says. The defaults are written down twice, so the two are checked against each other
+ * rather than trusted to agree.
  */
 object TreeStyle {
 
@@ -37,10 +34,9 @@ object TreeStyle {
     fun node(): CodeNodeStyle = node(AudioExplainerSettings.getInstance().state)
 
     /**
-     * The nest-level style [state] asks for, leaving every field §1c did not make a setting at its own
-     * default — `gapBelow`, `gap`, `inset`, `bottomSlack`, `boxPadBelow` and `nodeSlack` are measured or
-     * judged numbers, not preferences, and `boxPadBelow`'s own KDoc says why its `0` is a control rather
-     * than an option.
+     * The nest-level style [state] asks for, leaving every field that is not a setting at its own default —
+     * `gapBelow`, `gap`, `inset`, `bottomSlack`, `boxPadBelow` and `nodeSlack` are tuned numbers, not
+     * preferences.
      */
     fun nest(state: AudioExplainerSettings.State): NestStyle = NestStyle(
         leader = enumOr(state.treeLeader, NestLeader.entries, builtinNest().leader),
@@ -65,10 +61,10 @@ object TreeStyle {
     )
 
     /**
-     * **The style classes' own constructor defaults**, so the two transcriptions of §1c's verdicts can be
-     * compared instead of assumed to agree.
+     * **The style classes' own constructor defaults**, so the two copies of the defaults can be compared
+     * instead of assumed to agree.
      *
-     * There are genuinely two: `NestStyle()` / `CodeNodeStyle()` — which the spike benches and every internal
+     * There are genuinely two: `NestStyle()` / `CodeNodeStyle()` — which the benches and every internal
      * caller get — and `AudioExplainerSettings.DEF_TREE_*`, which a fresh install gets and Reset restores.
      * They are not derivable from one another (the settings hold strings and cannot import an enum's default
      * without dragging the tree package into the state class), so `PlanProbe` asserts equality. Kotlin default
@@ -76,8 +72,7 @@ object TreeStyle {
      *
      * **They are also this object's own fallbacks**, so the degrade path is not a third transcription of the
      * same decisions. Changing a default is then one edit here plus one in `AudioExplainerSettings`, and the
-     * probe is what says the two moved together — which is exactly the drift the Phase 4 change to `BRACE` /
-     * `BOTTOM_BORDER` would otherwise have introduced.
+     * probe is what says the two moved together.
      */
     fun builtinNest(): NestStyle = NestStyle()
 

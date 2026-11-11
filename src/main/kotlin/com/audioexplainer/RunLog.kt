@@ -16,8 +16,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  * all, for the run log window ([RunLogWindow]).
  *
  * **The loop warning.** A model that has lost the task re-reads what it already has: two runs seen looping read
- * the schema doc again 6 and 7 times, while clean runs re-read nothing and Claude's runs at most 3 times (67
- * transcripts, 2026-11-06). A `Read` that overlaps a range already read counts as a re-read; at [REREAD_WARN]
+ * the schema doc again 6 and 7 times, while clean runs re-read nothing and Claude's runs at most 3 times (across
+ * 67 run transcripts). A `Read` that overlaps a range already read counts as a re-read; at [REREAD_WARN]
  * the run gets a [warning], which the status bar and the banner show beside Stop.
  *
  * Fed from the run's reader under its lock ([onEvent]) and from the run's own code ([note], [end]); listeners

@@ -60,19 +60,10 @@ class AcpSession @JvmOverloads constructor(
      */
     fun open(cwd: String, server: McpServer, model: String? = null, clientVersion: String = "1"): Boolean {
         try {
-            val init = connection.request("initialize", buildJsonObject {
-                put("protocolVersion", 1)
-                put("clientCapabilities", buildJsonObject {
-                    put("fs", buildJsonObject { put("readTextFile", true); put("writeTextFile", false) })
-                    put("terminal", false)
-                })
-                put("clientInfo", buildJsonObject { put("name", "audio-explainer"); put("version", clientVersion) })
-            }, INIT_TIMEOUT_MS) as? JsonObject
-            val info = init?.obj("agentInfo")
-            agent = listOfNotNull(info?.str("title") ?: info?.str("name"), info?.str("version")).joinToString(" ").ifBlank { null }
-            val caps = init?.obj("agentCapabilities")
-            embeddedContext = caps?.obj("promptCapabilities")?.str("embeddedContext") == "true"
-            if (caps?.obj("mcpCapabilities")?.str("http") != "true") {
+            val init = connection.request("initialize", initializeParams(clientVersion), INIT_TIMEOUT_MS) as? JsonObject
+            agent = agentLabel(init)
+            embeddedContext = init?.obj("agentCapabilities")?.obj("promptCapabilities")?.str("embeddedContext") == "true"
+            if (!supportsHttpMcp(init)) {
                 fail("${agent ?: "The agent"} cannot connect to an HTTP MCP server, which the run's set_plan tool is")
                 return false
             }
@@ -177,6 +168,26 @@ class AcpSession @JvmOverloads constructor(
                 })
             }
         }
+
+        /** `initialize`'s params: files may be read, never written, and there is no terminal. */
+        fun initializeParams(clientVersion: String): JsonObject = buildJsonObject {
+            put("protocolVersion", 1)
+            put("clientCapabilities", buildJsonObject {
+                put("fs", buildJsonObject { put("readTextFile", true); put("writeTextFile", false) })
+                put("terminal", false)
+            })
+            put("clientInfo", buildJsonObject { put("name", "audio-explainer"); put("version", clientVersion) })
+        }
+
+        /** `agentInfo` from an `initialize` reply as one label ("OpenCode 1.19.5"), or null. */
+        fun agentLabel(init: JsonObject?): String? {
+            val info = init?.obj("agentInfo")
+            return listOfNotNull(info?.str("title") ?: info?.str("name"), info?.str("version")).joinToString(" ").ifBlank { null }
+        }
+
+        /** Whether an `initialize` reply says the agent connects to HTTP MCP servers. */
+        fun supportsHttpMcp(init: JsonObject?): Boolean =
+            init?.obj("agentCapabilities")?.obj("mcpCapabilities")?.str("http") == "true"
 
         const val INIT_TIMEOUT_MS = 30_000L
         const val NEW_TIMEOUT_MS = 60_000L

@@ -7,7 +7,7 @@ out/
 .intellijPlatform/
 __pycache__/
 *.pyc
-# Phase 0 spike artefacts (PNGs + report) — evidence, not source.
+# Local scratch output.
 scratchpad/
-# Secrets — the OpenRouter key for the other-model spikes. Never commit.
+# Secrets — a local OpenRouter key. Never commit.
 OpenRouter.info

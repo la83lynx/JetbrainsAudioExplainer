@@ -29,7 +29,7 @@ import javax.swing.JComponent
  * the frame is a step ahead of Apply rather than a step behind it. The box and its tail come from
  * [SpotlightRenderer.paintCalloutFrame] / [SpotlightRenderer.drawCalloutLeader], the bar from
  * [SpotlightRenderer.paintGapGutter], the face from [SpotlightRenderer.calloutFont], and the arrow from
- * [LinkArt] — which needed no change at all, having been extracted for `probes/LinkBench.java` already.
+ * [LinkArt].
  *
  * **What is the preview's own** is the stage: which row is active, what the sample says, where the arrow
  * runs. Production takes those from a plan and a live editor, neither of which exists in a modal dialog.
@@ -104,7 +104,7 @@ internal class AppearancePreview : JComponent() {
 
         /**
          * Height is the same whichever way the box is docked — the band is simply above the rows or below
-         * them. Reserving it on one side only is what clipped the box off the canvas at `Dock below`.
+         * them. Reserving it on one side only would clip the box off the canvas at `Dock below`.
          */
         fun preferredHeight(codeFm: FontMetrics, proseFm: FontMetrics): Int =
             calloutBand(proseFm) + ROWS.size * codeFm.height + 2 * PAD
@@ -231,8 +231,8 @@ internal class AppearancePreview : JComponent() {
             val fm = g2.getFontMetrics(ink.prose)
             val barW = SpotlightRenderer.barWidth(style)
             // Clamped to the room there is, which is what production does too — it wraps the aside to the
-            // editor's viewport. The frame answers `Text size` by growing taller; letting it also grow wider
-            // than the canvas just pushed the sample off the right edge at 160%.
+            // editor's viewport. The frame answers `Text size` by growing taller; growing wider than the
+            // canvas would push the sample off the right edge at 160%.
             val w = (barW + 2 * CALLOUT_PAD_X + fm.stringWidth(ASIDE)).coerceAtMost(width - x - PAD - RULER_W)
             val h = fm.height + 2 * CALLOUT_PAD_Y
             // Docked below, the box moves under the rows and its tail points up at them.

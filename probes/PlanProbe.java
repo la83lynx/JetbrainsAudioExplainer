@@ -3,7 +3,7 @@ import com.audioexplainer.tree.*;
 import java.util.*;
 
 /**
- * Phase 2/3 probe — runs the REAL PlanLoader and PlanOutline over hand-built plans and asserts what each
+ * Plan probe — runs the REAL PlanLoader and PlanOutline over hand-built plans and asserts what each
  * degrade does. It imports the production classes rather than re-deriving their arithmetic, which is the
  * one property that stops a probe drifting from the code it measures.
  *
@@ -84,11 +84,11 @@ public final class PlanProbe {
         return new Plan("t", "en", frames, steps);
     }
 
-    // ── 11b. The saved list accepts exactly what the saver could have written (`Saving.md` A) ──
+    // ── 11b. The saved list accepts exactly what the saver could have written ──
     //
-    // Agents told only "a temp file" left their POST payloads in `.walkthroughs/`, and the old `list()` decoded
-    // each leniently into a Plan with a blank title — the blank rows that errored on open. The payload that
-    // matters most is the `set_plan` one: it HAS a title and frames, so only its `type` gives it away.
+    // An agent told only "a temp file" may leave its POST payload in `.walkthroughs/`; decoded leniently it is
+    // a Plan with a blank title — a blank row that errors on open. The payload that matters most is the
+    // `set_plan` one: it HAS a title and frames, so only its `type` gives it away.
 
     static void writeJson(java.nio.file.Path dir, String name, String json) throws java.io.IOException {
         java.nio.file.Files.createDirectories(dir);
@@ -141,7 +141,7 @@ public final class PlanProbe {
                 listed2.size() == 1 && "Ref plan".equals(listed2.get(0).getTitle()));
     }
 
-    // ── 11c. Save gets an identity (`Saving.md` C/D) ──
+    // ── 11c. Save gets an identity ──
     //
     // `savedAs` + `unsaved` live on the REAL Walkthrough, which is pure, so every transition the Save button
     // and the unsaved prompt read is reachable here with no IDE.
@@ -259,10 +259,10 @@ public final class PlanProbe {
         return new Relation(kind, from, to, "note");
     }
 
-    // ── 15. The source check (`SourceCheck.md`): the plan against the files it names ──
+    // ── 15. The source check: the plan against the files it names ──
     //
-    // The loader never opens a file, so these were the agent's to check, with a script, every run. Now the
-    // server checks them; here the "files" are a map, which is the whole reason SourceLines is an interface.
+    // The loader never opens a file, so the server checks these; here the "files" are a map, which is the
+    // whole reason SourceLines is an interface.
 
     static long count(List<PlanIssue> issues, String code) {
         return issues.stream().filter(i -> i.getCode().equals(code)).count();
@@ -652,7 +652,7 @@ public class BuildService
         boolean order = seen.size() == revisit.getSteps().size();
         for (int k = 0; order && k < seen.size(); k++) order = seen.get(k) == k;
         check("outline: every step appears exactly once, in plan order", order);
-        // **No line numbers, no file names on a row** — the reader's requirement, asserted on the type rather
+        // **No line numbers, no file names on a row** — asserted on the type rather
         // than on the rendering, because the sidebar can only draw what the row carries. A field count would
         // be wrong here (serialization adds its own), so this names the four accessors that must not exist.
         boolean bare = true, hasIndex = false, hasLabel = false;
@@ -721,26 +721,22 @@ public class BuildService
                         frame(6, "G.cs", 0, 15, null, ctx(1, 30)),
                         frame(7, "H.cs", 0, 16, null, ctx(1, 30))),
                 Collections.singletonList(step(0, ctx(1, 2)))));
-        // Seven, because the cap moved to 6 on the round-2 judgement. The number in the assertion is
-        // deliberately not written out: it reads the constant, so raising the cap again cannot leave a
-        // probe passing for the wrong reason.
+        // Seven, one over the cap. The number in the assertion is deliberately not written out: it reads the
+        // constant, so changing the cap cannot leave a probe passing for the wrong reason.
         check("caps: more than MAX_SIBLINGS(" + PlanLoader.MAX_SIBLINGS + ") siblings reported",
                 has(caps, "plan.siblings-exceeded"));
         check("caps: line budget reported per scene", has(caps, "scene.line-budget-exceeded"));
-        // The control: a genuinely small plan — 14 kept lines. The first version of this used the `chain`
-        // above, which keeps 66 and so tripped the budget; that is what moved LINE_BUDGET from 60 to 80.
+        // The control: a genuinely small plan — 14 kept lines. (The `chain` above keeps 66 and trips the
+        // budget, so it cannot be the control.)
         ResolvedPlan small = PlanLoader.INSTANCE.resolve(plan(
                 Collections.singletonList(frame(0, "A.cs", null, 0, null, ctx(18, 18), focus(68, 80))),
                 Collections.singletonList(step(0, ctx(68, 70)))));
         check("caps: budget NOT reported on a small plan (control)",
                 !has(small, "scene.line-budget-exceeded"));
-        // **And the 66-line chain is over the cap again**, because K4 measured the viewport the 60 and the 80
-        // were both estimating: 25-40 lines in a tool window beside the sidebar, so the cap is now 40. This
-        // assertion is the inverse of what it said for two phases, which is worth stating plainly rather than
-        // deleting: the round that called that chain "sufficiently good" was judging how it *rendered*, and a
-        // 66-line scene has never fitted a 40-line viewport — it scrolled, and nobody was asked about that.
-        // `small` above is what keeps this from being a cap that cries wolf.
-        check("caps: the 66-line chain is over the measured-viewport cap (was under the derived one)",
+        // **And the 66-line chain is over the cap**: measured viewports in a tool window beside the sidebar are
+        // 25-55 lines, so a 66-line scene scrolls. `small` above is what keeps this from being a cap that cries
+        // wolf.
+        check("caps: the 66-line chain is over the measured-viewport cap",
                 has(good, "scene.line-budget-exceeded"));
         check("caps: unnarrated frame reported", has(caps, "frame.no-step"));
 
@@ -808,13 +804,13 @@ public class BuildService
                 farStep.getSteps().size() == 1 && farStep.getSteps().get(0).getFrames().size() == 1
                         && farStep.getSteps().get(0).getPrimaryFrameId() == 0);
 
-        // **The control the scene model exists for**: two scenes that each fit, and together do not. The old
-        // whole-plan budget would have flagged this and the per-scene one must not. Paired with `caps: line
+        // **The control the scene model exists for**: two scenes that each fit, and together do not. A
+        // whole-plan budget would flag this and the per-scene one must not. Paired with `caps: line
         // budget reported per scene` above, which does fire.
         //
-        // The sizes are **derived from the cap**, not written out. They were 50 and 50 against a cap of 80;
-        // when K4 moved the cap to 40 the control would have started failing for the right reason and the
-        // wrong subject — it is not about how big a scene may be, it is about the budget being per-scene.
+        // The sizes are **derived from the cap**, not written out, so changing the cap cannot make the control
+        // fail for the wrong subject — it is not about how big a scene may be, it is about the budget being
+        // per-scene.
         int perScene = (PlanLoader.LINE_BUDGET * 3) / 4;
         int lastLine = perScene + 8; // ctx(1,1) is the other kept line, and focus starts at 10
         ResolvedPlan longWalk = PlanLoader.INSTANCE.resolve(plan(
@@ -828,8 +824,7 @@ public class BuildService
                 longWalk.scene(0).keptLines() == perScene && longWalk.scene(1).keptLines() == perScene
                         && 2 * perScene > PlanLoader.LINE_BUDGET);
 
-        // A plan with no `scene` anywhere is one scene and one mount — the regression guarantee for every
-        // plan authored before the field existed.
+        // A plan with no `scene` anywhere is one scene and one mount.
         check("scenes: a plan that never mentions scenes is exactly one scene",
                 good.getScenes().size() == 1 && good.sceneTransitions() == 0);
 
@@ -933,7 +928,7 @@ public class BuildService
         savingIdentity();
         sourceCheck();
 
-        // ── 12. The tree's settings defaults ARE §1c's verdicts ──
+        // ── 12. The tree's settings defaults agree with the style classes' built-ins ──
         //
         // Two transcriptions of one set of decisions: `NestStyle()` / `CodeNodeStyle()`, which every internal
         // caller and every bench gets, and `AudioExplainerSettings.DEF_TREE_*`, which a fresh install gets and
@@ -946,11 +941,8 @@ public class BuildService
                 fromSettings.equals(TreeStyle.INSTANCE.builtinNest()));
         check("settings: the shipped node defaults are the style class's own",
                 nodeFromSettings.equals(TreeStyle.INSTANCE.builtinNode()));
-        // Six of these are §1c's judged verdicts. The leader and the collapse control are NOT — they were
-        // changed to BRACE / BOTTOM_BORDER by the reader before the Phase 3/4 round, where nine earlier
-        // rounds had run on CORNERS / HORIZONTAL. Spelled out per value rather than as one line, because
-        // "the default is the verdict" stopped being true of two of them and the assertion should say so.
-        check("settings: the six judged verdicts are the defaults (PROJECT_RELATIVE / TINT / OPENABLE / 600 / grow off / hosts grow)",
+        // Spelled out per value rather than as one line, so a changed default names itself.
+        check("settings: the six tree defaults (PROJECT_RELATIVE / TINT / OPENABLE / 600 / grow off / hosts grow)",
                 nodeFromSettings.getPath() == NodePath.PROJECT_RELATIVE
                         && nodeFromSettings.getDeemphasis() == NodeDeemphasis.TINT
                         && nodeFromSettings.getElision() == NodeElision.OPENABLE
@@ -960,11 +952,10 @@ public class BuildService
         check("settings: the two the reader changed before the round are BRACE / BOTTOM_BORDER",
                 fromSettings.getLeader() == NestLeader.BRACE
                         && fromSettings.getChevron() == ChevronStyle.BOTTOM_BORDER);
-        // And the third that is not a verdict either: K3 asked for the fold outright, having seen the shipped
-        // OVER_BUDGET leave a small walkthrough fully expanded. Named here so the round can send it back.
-        check("settings: the step fold ships as ALWAYS, which K3 asked for and no round has judged",
+        // The step fold ships as ALWAYS: OVER_BUDGET leaves a small walkthrough fully expanded.
+        check("settings: the step fold ships as ALWAYS",
                 fromSettings.getStepFold() == StepFold.ALWAYS);
-        check("settings: a step's own folding ships as LINKS, in the settings and the style alike — not yet judged",
+        check("settings: a step's own folding ships as LINKS, in the settings and the style alike",
                 fromSettings.getCondense() == StepCondense.LINKS
                         && TreeStyle.INSTANCE.builtinNest().getCondense() == StepCondense.LINKS);
         AudioExplainerSettings.State noCondense = new AudioExplainerSettings.State();
@@ -972,7 +963,7 @@ public class BuildService
         check("  control: switching it off reaches the style",
                 TreeStyle.INSTANCE.nest(noCondense).getCondense() == StepCondense.OFF);
 
-        // ── StepCondense.window, on the two cases the 2026-10-14 round named ──
+        // ── StepCondense.window, on two real cases ──
         // xhigh-deep-1, steps 6-7: the child plays under frame 0, which keeps 6-10, 21-31, 33-65 and hangs it
         // from line 62. Condensed it is its three headers and the call line — 4 rows instead of 49.
         List<kotlin.ranges.IntRange> ancestor = StepCondense.Companion.window(
@@ -998,7 +989,7 @@ public class BuildService
         check("condense: a short run between kept lines stays, a long one folds — " + shortRun,
                 shortRun.toString().equals("[10..15, 30..30]"));
 
-        // ── StepCondense.chain: the headers of the blocks a line sits in (the 2026-10-15 round) ──
+        // ── StepCondense.chain: the headers of the blocks a line sits in ──
         // xhigh-deep-1's pool, lines 1-102 as they are in LazyDotIde. The "Exhaustion signal" step (80-82) sits in
         // the `if` at 70-71, in Get (67-68), in the class (21-22).
         String[] pool = POOL.split("\n", -1);
@@ -1050,7 +1041,7 @@ public class BuildService
                 StepCondense.Companion.chain(6, pyText).toString().equals("[3, 1]"));
         check("  control: a blank line has no chain", StepCondense.Companion.chain(2, l -> "").isEmpty());
 
-        // ── StepCondense.member: the method a step is in, for MEMBER (the 2026-10-19 round) ──
+        // ── StepCondense.member: the method a step is in, for MEMBER ──
         check("block: Get runs from its signature through its closing brace — " + StepCondense.Companion.block(67, poolText),
                 StepCondense.Companion.block(67, poolText).toString().equals("67..86"));
         check("block: the `if` in it, brace to brace — " + StepCondense.Companion.block(70, poolText),
@@ -1129,11 +1120,10 @@ public class BuildService
         check("settings: an out-of-range height is clamped rather than passed through",
                 TreeStyle.INSTANCE.node(picked).getMaxHeight() == TreeStyle.MIN_MAX_HEIGHT);
 
-        // ── 12b. The frame's top EDGE and its top CORNERS are two questions (K3) ──
+        // ── 12b. The frame's top EDGE and its top CORNERS are two questions ──
         //
-        // They were one boolean, on the reasoning that a frame with no top edge has no top corner. That held
-        // only while BRACE kept its own turn inside the leader strip — which is what put the drawn line a
-        // radius above the header and left the gap a relation link was seen crossing. The pairing is asserted
+        // A frame with no top edge can still have rounded top corners (BRACE), and a gap there is one a relation
+        // link can be seen crossing. The pairing is asserted
         // per mode because the failure it guards is a mode *switch* leaving one of the two behind.
         check("leader: only ARROW draws the frame's top edge",
                 LeaderArt.INSTANCE.drawsFrameTop(NestLeader.ARROW)
@@ -1147,8 +1137,8 @@ public class BuildService
                         && !LeaderArt.INSTANCE.roundsFrameTop(NestLeader.ARROW));
         // The brace's horizontal run must END on the strip's last row — the row adjacent to the header — and
         // must stop one frame-radius short of either wall, which is where the frame's own corner starts. Read
-        // off the path itself rather than off the source, because the whole defect was a number in the path
-        // disagreeing with the picture the comment described.
+        // off the path itself rather than off the source, because the failure is a number in the path
+        // disagreeing with the intended picture.
         java.awt.geom.Rectangle2D braceBounds =
                 LeaderArt.INSTANCE.leaderPath(NestLeader.BRACE, 60, 120, 400, 13).getBounds2D();
         check("leader: the brace's run reaches the strip's last row (13), not a radius above it",
@@ -1171,8 +1161,8 @@ public class BuildService
         // ── 13. The collapse hint BOTTOM_BORDER's expanded state was missing ──
         //
         // Geometry only, which is the whole point of putting it here: the mark itself has to be looked at, but
-        // *where* it lands is arithmetic, and arithmetic that is wrong by a pixel is what the round would spend
-        // itself reporting. `x1`/`x2` are the token box's edges in the strip's own coordinates.
+        // *where* it lands is arithmetic, and arithmetic that is wrong by a pixel is checkable here. `x1`/`x2`
+        // are the token box's edges in the strip's own coordinates.
         java.awt.Rectangle hint = LeaderArt.INSTANCE.collapseHintRect(40, 120, 13);
         check("hint: centred under the invoking token, not under the box's left edge",
                 hint != null && hint.x + hint.width / 2 == 80);
@@ -1257,9 +1247,8 @@ public class BuildService
                 has(relSplitGone, "relation.endpoint-not-kept"));
 
         // **Only the endpoint's own scene counts**, because the tree only searches the mounted nodes. Frame 1
-        // keeps line 30 but sits in scene 1, so in scene 0 the endpoint lands on frame 0's fold — the
-        // 2026-10-14 `xhigh-deep-1` portal into a `⋯ 55 lines ⋯` placeholder, which the whole-plan lookup
-        // called fine.
+        // keeps line 30 but sits in scene 1, so in scene 0 the endpoint lands on frame 0's fold — a portal into
+        // a `⋯ N lines ⋯` placeholder, which a whole-plan lookup would call fine.
         ResolvedPlan relOtherScene = PlanLoader.INSTANCE.resolve(plan(
                 Arrays.asList(
                         relFrame(0, "A.cs", ctx(1, 12), rel(Relation.KIND_FLOW, at(5), atFile("A.cs", 30))),

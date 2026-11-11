@@ -23,7 +23,7 @@
 
 * { box-sizing: border-box; }
 
-/* ── Generation loading banner + replace/undo banner (Phase 7.5 #5) ── */
+/* ── Generation loading banner + replace/undo banner ── */
 
 .gen-banner {
     flex: 0 0 auto; /* docked strip at natural height — never scrolls, never clipped */
@@ -100,7 +100,7 @@
     border: none;
     color: var(--ae-fg-dim);
     cursor: pointer;
-    font-size: 14px; /* collapse/dismiss glyphs were too tiny at 12px (Phase 7.5 #15 fix 4) */
+    font-size: 14px; /* collapse/dismiss glyphs are too small to hit below 14px */
     line-height: 1;
     padding: 3px 5px;
     border-radius: 4px;
@@ -345,7 +345,7 @@ code {
     font-weight: 600;
 }
 
-/* Language badge (Phase L3) — shown under the title only for non-English walkthroughs. */
+/* Language badge — shown under the title only for non-English walkthroughs. */
 .wt-language {
     margin: 0 12px 4px;
     padding: 1px 7px;
@@ -438,11 +438,10 @@ code {
     align-items: center;
     gap: 8px;
 }
-/* Vol + Voice on one line, each ~half width; wraps to a stacked layout when the panel is too narrow
-   (Phase 7.5 #14 task 1, threshold raised in #15 fix 1). flex-basis is the wrap threshold — two 215px
-   children + the 10px row gap need ~440px of inner width, i.e. the pair goes side-by-side only above a
-   ~460px tool-window and stacks below that. The earlier 150px basis let them stay coupled down to ~310px,
-   where the "Voice" label collided with the volume/mute rocker; wrapping sooner skips that cramped zone.
+/* Vol + Voice on one line, each ~half width; wraps to a stacked layout when the panel is too narrow.
+   flex-basis is the wrap threshold — two 215px children + the 10px row gap need ~440px of inner width,
+   i.e. the pair goes side-by-side only above a ~460px tool window and stacks below that. A smaller basis
+   keeps them coupled down to widths where the "Voice" label collides with the volume/mute rocker.
    No media/container query needed, and the layout is still shrink-proof (it degrades to the stacked form). */
 .audio-inline {
     display: flex;
@@ -500,7 +499,7 @@ code {
     font-size: 12px;
 }
 
-/* Explanation ("Overview") — collapsible, positioned above the play controls (Phase 7.5 #11). */
+/* Explanation ("Overview") — collapsible, positioned above the play controls. */
 
 .explanation-box { padding: 4px 12px 10px; }
 .explanation-header {
@@ -522,7 +521,7 @@ code {
     border: none;
     color: var(--ae-fg-dim);
     cursor: pointer;
-    font-size: 14px; /* the collapse triangle was too tiny at 11px (Phase 7.5 #15 fix 4) */
+    font-size: 14px; /* the collapse triangle is too small to hit below 14px */
     line-height: 1;
     padding: 2px 5px;
     border-radius: 4px;
@@ -550,14 +549,14 @@ code {
     color: var(--ae-fg-dim);
     margin: 0 0 4px 2px;
 }
-/* Intra-step audio progress — how far through the CURRENT step's narration we are (Phase 7.5 #12). It
-   advances with the Web Audio clock and freezes in place on pause, so it shows where playback stopped.
-   Clickable: clicking along it seeks playback to that point in the step (Phase 7.5 #13). */
+/* Intra-step audio progress — how far through the CURRENT step's narration we are. It advances with
+   the Web Audio clock and freezes in place on pause, so it shows where playback stopped.
+   Clickable: clicking along it seeks playback to that point in the step. */
 .step-progress-bar {
     height: 9px;
     background: var(--ae-panel);
-    /* Brighter border than the default --ae-border so the clickable seek track reads as an interactive
-       control, not just a hairline (Phase 7.5 #15 fix 2). Thickened from 6px → 11px for the same reason. */
+    /* Brighter border than the default --ae-border, and a taller track, so the clickable seek track reads
+       as an interactive control, not just a hairline. */
     border: 1px solid var(--ae-fg-dim);
     border-radius: 5px;
     overflow: hidden;
@@ -583,14 +582,14 @@ code {
     transition: opacity 0.15s ease;
 }
 .transcript-text.fade-out { opacity: 0; }
-/* Read-along "fill" (Phase 7.5 #12/#13). The transcript doubles as a progress bar: every word already
+/* Read-along "fill". The transcript doubles as a progress bar: every word already
    spoken keeps a soft accent wash, the word at the playhead adds an accent underline, upcoming words are
    plain. The cursor is anchored per sentence from the wire's si/sw tags (Kokoro gives no per-word
    timestamps) so it tracks the audio without drifting, and freezes on pause = "where we stopped". Words
    (and the thin bar above) are clickable to seek playback to that point. */
 /* Continuous "fill": each word span carries its trailing whitespace (see setTranscriptWords), and spoken
    words have no side padding or per-word rounding, so the spoken region reads as one unbroken progress bar
-   rather than separate chips (Phase 7.5 #14 task 4). The small vertical padding gives the band a bit of
+   rather than separate chips. The small vertical padding gives the band a bit of
    height without pushing the lines apart. */
 .transcript-text .tw {
     padding: 1px 0;
@@ -610,7 +609,7 @@ code {
     gap: 6px;
 }
 
-/* Finish — end the walkthrough (clears the tool window + editor highlights). Phase 7.5 #4. */
+/* Finish — end the walkthrough (clears the tool window + editor highlights). */
 .finish-row { padding: 0 12px 12px; }
 .finish-btn {
     width: 100%;
@@ -699,33 +698,9 @@ code {
 .outline-highlight.completed { color: var(--ae-fg); }
 .outline-highlight.completed .hl-marker { color: var(--ae-completed); }
 
-/* Done view */
-
-#done-view { padding: 40px 20px; }
-.done-card {
-    text-align: center;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-}
-.done-text { font-size: 15px; font-weight: 600; margin: 0; }
-.done-summary { color: var(--ae-fg-dim); margin: 0; }
-.done-hint { color: var(--ae-fg-dim); font-size: 12px; margin: 4px 0 12px; }
-.done-restart-btn {
-    background: var(--ae-accent);
-    border: none;
-    color: #1e1f22;
-    font-weight: 600;
-    padding: 7px 16px;
-    border-radius: 5px;
-    cursor: pointer;
-}
-.done-restart-btn:hover { filter: brightness(1.08); }
-
-/* ── Custom hover tooltip (Phase 7.5 #15 fix 3) ──
-   JCEF's offscreen (windowless) renderer never shows the native `title` tooltip, so every title="…" in
-   the markup was invisible. sidebar.js drives this element instead: on hover it reads the target's title
+/* ── Custom hover tooltip ──
+   JCEF's offscreen (windowless) renderer never shows the native `title` tooltip, so a title="…" alone
+   is invisible. sidebar.js drives this element instead: on hover it reads the target's title
    (or data-ae-tip) and positions this box under the control. pointer-events:none so it never eats the
    mouseout that hides it. */
 #ae-tooltip {

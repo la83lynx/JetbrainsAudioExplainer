@@ -16,10 +16,9 @@ import kotlinx.serialization.json.add
 /**
  * **The `set_plan` tool, spoken as MCP** — how a headless run hands the plugin its plan.
  *
- * The run used to `Write` the plan to a file and POST the file with a helper script. A `Write` carries the plan
- * as a JSON *string*, every quote and newline escaped, and the POST was a turn of its own with a tail after it;
- * a tool's input is the plan as plain JSON, and its result is the reply. Spiked over 9 + 12 runs: ~12 s faster,
- * half of it the escaping.
+ * A tool's input is the plan as plain JSON, and its result is the reply. Writing the plan to a file and POSTing
+ * it instead carries the plan as a JSON *string*, every quote and newline escaped, plus a turn of its own for the
+ * POST: ~12 s slower per run, half of it the escaping.
  *
  * Only what Claude Code's HTTP transport needs: Streamable HTTP answered with plain JSON — no SSE stream, no
  * session id, no batches. `initialize`, `ping`, `tools/list` and `tools/call`; a notification gets 202, a GET

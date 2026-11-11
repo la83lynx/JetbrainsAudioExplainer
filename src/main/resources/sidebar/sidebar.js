@@ -13,11 +13,11 @@ let state = {
 	 * so navigation never rebuilds a row (which would destroy its click handler).
 	 */
 	outline: { scenes: [], scened: false, steps: 0 },
-	/** The plan step showing, or -1. **The whole position model** since Phase 3 flattened it. */
+	/** The plan step showing, or -1. **The whole position model**: one flat index. */
 	currentStep: -1,
 	stepCount: 0,
 	/**
-	 * **Which saved walkthrough this is** (`Saving.md` C) — the file stem Save writes without asking — or
+	 * **Which saved walkthrough this is** — the file stem Save writes without asking — or
 	 * null when it was never saved, and Save asks for a name.
 	 */
 	savedAs: null,
@@ -30,17 +30,6 @@ let state = {
 	languageName: "English",
 	autonym: "English",
 };
-
-/** Every step row of the outline, flattened in narration order — `[{index, label, group, scene}]`. */
-function outlineSteps() {
-	const out = [];
-	for (const scene of state.outline.scenes || []) {
-		for (const group of scene.groups || []) {
-			for (const st of group.steps || []) out.push({ ...st, group, scene });
-		}
-	}
-	return out;
-}
 
 /** Where walkthroughs are saved (from the plugin's `settings` message), for the Save tooltip; "" until known. */
 let walkthroughsDir = "";
@@ -64,7 +53,7 @@ let muted = false;
 let audioPlaying = false;
 /** True when audio was intentionally suspended via suspendAudio() (user pause). */
 let intentionallySuspended = false;
-/** Last generation phase seen (Phase 7.5 #5) — used to auto-expand the banner on a fresh generation. */
+/** Last generation phase seen — used to auto-expand the banner on a fresh generation. */
 let genLastPhase = "idle";
 /** True when audio_end arrived but chunks are still pending (AudioContext suspended) */
 let deferredPlaybackComplete = false;
@@ -76,15 +65,14 @@ let playbackStartedSent = false;
 /** @type {{base64: string, sampleRate: number}[]} */
 let pendingChunks = [];
 
-// ── Read-along transcript progress + seek (Phase 7.5 #12/#13) ──
+// ── Read-along transcript progress + seek ──
 // Kokoro exposes no per-word timestamps, but the TTS server tags every wire chunk with its sentence index
 // (si) and that sentence's word count (sw). Per step we keep: the absolute AudioContext time the first
 // buffer started (stepStartClock); every decoded buffer with its cumulative audio offset (stepBuffers, so
 // a click can seek); and a per-sentence map (stepSentences: audio start/duration + word range). The
 // read-along cursor maps the Web Audio playhead onto words *per sentence*, so it tracks the audio without
-// drifting — the old scheme divided by a total duration that kept growing as ~0.5s frames streamed in,
-// which made the cursor rush to the end then stall. A suspended AudioContext freezes currentTime, so the
-// cursor freezes exactly where playback paused.
+// drifting (dividing by the step's total duration would not: that total keeps growing as frames stream in).
+// A suspended AudioContext freezes currentTime, so the cursor freezes exactly where playback paused.
 let stepStartClock = null;
 let progressRaf = 0;
 /** @type {HTMLSpanElement[]} */
@@ -194,7 +182,7 @@ function playAudioChunk(base64Data, sampleRate, si, sw, stext) {
 	stepClockSkew += slot.gap;
 	nextPlayTime = slot.at;
 	source.start(nextPlayTime);
-	// Read-along timeline (Phase 7.5 #12/#13): the first scheduled buffer marks this step's audio start.
+	// Read-along timeline: the first scheduled buffer marks this step's audio start.
 	if (stepStartClock === null) stepStartClock = nextPlayTime;
 	nextPlayTime += buffer.duration;
 	recordChunk(buffer, si, sw, stext);
@@ -211,7 +199,7 @@ function playAudioChunk(base64Data, sampleRate, si, sw, stext) {
 }
 
 /**
- * Record a decoded chunk into the step's buffer list + per-sentence map (Phase 7.5 #12/#13). Buffers are
+ * Record a decoded chunk into the step's buffer list + per-sentence map. Buffers are
  * retained (with their cumulative audio offset) so a click can seek playback; the sentence map (audio
  * start + duration + word range, from the wire's si/sw) is what anchors the read-along cursor per sentence.
  * [stext] is the sentence as spoken, kept so a beat can be matched against real output rather than against
@@ -320,19 +308,11 @@ function updateVolume() {
 
 // ── UI rendering ──
 
-function showDoneView() {
-	document.getElementById("idle-view").style.display = "none";
-	document.getElementById("active-view").style.display = "none";
-	document.getElementById("done-view").style.display = "";
-	document.getElementById("done-summary").textContent =
-		`${state.stepCount} steps covered`;
-}
-
 /**
  * Show the exact narration text (a highlight's ttsText) for the current step — i.e. the transcript
  * of what the audio says. Driven from local state, so it works whether or not audio is playing.
  *
- * The text is rendered as per-word spans so the read-along cursor (Phase 7.5 #12) can highlight one word at
+ * The text is rendered as per-word spans so the read-along cursor can highlight one word at
  * a time. A same-text re-render (e.g. a play/pause status update) is a no-op so it never resets the cursor.
  */
 function renderTranscript(animate) {
@@ -366,7 +346,7 @@ function renderTranscript(animate) {
 /**
  * Rebuild #transcript-text as per-word spans. Each word span ALSO absorbs the whitespace run that follows
  * it, so when consecutive words are marked "spoken" their backgrounds abut with no gap — the fill reads as
- * one continuous progress bar rather than separate word chips (Phase 7.5 #14 task 4). Only leading/orphan
+ * one continuous progress bar rather than separate word chips. Only leading/orphan
  * whitespace (with no preceding word) stays a plain text node. container white-space:pre-wrap preserves the
  * original spacing either way.
  */
@@ -376,7 +356,7 @@ function setTranscriptWords(el, text) {
 	// Japanese/Chinese have no spaces, so whitespace tokenisation would collapse the whole narration into
 	// ONE span (the read-along cursor would light the entire block at once). For CJK we tokenise per
 	// SENTENCE instead — matching the TTS server, which streams one audio chunk per CJK sentence (sw=1), so
-	// the cursor advances a sentence at a time. A finer per-character cursor is deferred (ExplainerLanguages.md §6).
+	// the cursor advances a sentence at a time.
 	if (isCJKText(text)) {
 		setTranscriptSentences(el, text);
 		return;
@@ -458,7 +438,7 @@ function resetStepAudioModel() {
 }
 
 
-// ── Beats: a pulse timed to a point in the narration (B1b) ──
+// ── Beats: a pulse timed to a point in the narration ──
 
 /**
  * The one matching rule — trim, collapse whitespace, lowercase. **`Beat.normalize` in Protocol.kt must do
@@ -538,7 +518,7 @@ function fireDueBeats(elapsed) {
 	for (let i = 0; i < beats.length; i++) {
 		if (firedBeats.has(i) || beatSentence[i] === -2) continue;
 		// A beat with no `say` fires the instant the audio starts, and the plugin already has a measured
-		// signal for that moment (`playback_started`, MoreUI §2.8). Not this loop's job — retired so it is
+		// signal for that moment (`playback_started`). Not this loop's job — retired so it is
 		// not re-resolved every frame for the rest of the step.
 		if (!beats[i].say) { beatSentence[i] = -2; continue; }
 		let si = beatSentence[i];
@@ -578,8 +558,8 @@ function updateStepProgress() {
 	progressRaf = 0;
 	if (audioCtx && stepStartClock !== null) {
 		// The playhead has reached this step's first scheduled buffer, so the user is NOW hearing it. Tell the
-		// plugin once per step: the editor's token flash keys off this, because "audio requested" is 1.8-6.0s
-		// too early (MoreUI.md §2.8). Reported from here rather than when the buffer is scheduled so a
+		// plugin once per step: the editor's token flash keys off this, because "audio requested" is seconds
+		// too early. Reported from here rather than when the buffer is scheduled so a
 		// non-zero start offset, or a step whose first chunk lands mid-queue, is still honoured.
 		if (!playbackStartedSent && audioCtx.currentTime >= stepStartClock) {
 			playbackStartedSent = true;
@@ -593,12 +573,12 @@ function updateStepProgress() {
 }
 
 /**
- * Paint the read-along "fill" for [elapsed] audio-seconds since this step's audio started (Phase 7.5
- * #12/#13). Words up to the playhead keep the "spoken" wash; the word at the playhead adds "speaking".
+ * Paint the read-along "fill" for [elapsed] audio-seconds since this step's audio started.
+ * Words up to the playhead keep the "spoken" wash; the word at the playhead adds "speaking".
  * Monotonic during playback (the currently-streaming sentence's duration can still grow, which would
  * otherwise nudge the cursor back a word), but a seek resets lastSpokenWord so the fill may jump backward.
  * Mutates the DOM only when the word index changes, so a burst of rAF frames collapses into a few
- * mutations/second — which the MutationObserver turns into the native repaints CEF needs (Phase 7.5 #6).
+ * mutations/second — which the MutationObserver turns into the native repaints CEF needs.
  */
 function applyReadAlong(elapsed) {
 	const n = transcriptWordSpans.length;
@@ -632,7 +612,7 @@ function currentWordFor(elapsed) {
 	return Math.min(n - 1, Math.max(0, word));
 }
 
-// ── Click-to-seek within the current step (Phase 7.5 #13) ──
+// ── Click-to-seek within the current step ──
 
 /** Whether a click-to-seek is currently possible: the step's audio must be fully generated + buffered. */
 function seekAllowed() {
@@ -650,7 +630,7 @@ function sentenceForWord(w) {
 
 /**
  * Seek playback to the given word: reschedule the step's buffered audio from that word's sentence-anchored
- * time. If currently paused, also asks the controller to resume so it plays from there (Phase 7.5 #13).
+ * time. If currently paused, also asks the controller to resume so it plays from there.
  */
 function seekToWord(wordIndex) {
 	if (!seekAllowed()) return;
@@ -671,7 +651,7 @@ function seekToFraction(f) {
 }
 
 /**
- * Reschedule the current step's buffered audio to start from audio-second [t] (Phase 7.5 #13). Stops the
+ * Reschedule the current step's buffered audio to start from audio-second [t]. Stops the
  * currently-scheduled sources and re-queues the retained buffers from the one containing [t], re-anchors
  * the read-along clock, and re-wires playback completion. Returns false if it couldn't seek.
  */
@@ -728,7 +708,7 @@ function seekToAudioTime(t) {
 /** Which top-level view was last shown; a change of view is a layout transition that needs a repaint. */
 let lastRenderedView = "";
 
-/** Force a full repaint only when the visible top-level view actually changed (idle ↔ active ↔ done). */
+/** Force a full repaint only when the visible top-level view actually changed (idle ↔ active). */
 function maybeRepaintOnViewChange(view) {
 	if (view !== lastRenderedView) {
 		lastRenderedView = view;
@@ -737,7 +717,7 @@ function maybeRepaintOnViewChange(view) {
 }
 
 /**
- * The Save split button's state (`Saving.md` C): a tooltip that says which file Save writes — so the
+ * The Save split button's state: a tooltip that says which file Save writes — so the
  * one-click, no-dialog Save of a saved walkthrough is never a surprise. Called from render() and when the save directory arrives.
  */
 function renderSaveButton() {
@@ -759,12 +739,10 @@ function renderSaveButton() {
 function render() {
 	const idleView = document.getElementById("idle-view");
 	const activeView = document.getElementById("active-view");
-	const doneView = document.getElementById("done-view");
 
 	if (state.status === "idle") {
 		idleView.style.display = "";
 		activeView.style.display = "none";
-		doneView.style.display = "none";
 		vscode.postMessage({ type: "request_saved_list" });
 		maybeRepaintOnViewChange("idle");
 		return;
@@ -773,7 +751,6 @@ function render() {
 	if (state.status === "stopped") {
 		idleView.style.display = "";
 		activeView.style.display = "none";
-		doneView.style.display = "none";
 		vscode.postMessage({ type: "request_saved_list" });
 		maybeRepaintOnViewChange("idle");
 		return;
@@ -781,7 +758,6 @@ function render() {
 
 	idleView.style.display = "none";
 	activeView.style.display = "";
-	doneView.style.display = "none";
 
 	// Title + language badge
 	document.getElementById("walkthrough-title").textContent = state.title;
@@ -844,7 +820,7 @@ function render() {
 }
 
 /**
- * Show the walkthrough's language as a small badge next to the title when it isn't English (Phase L3).
+ * Show the walkthrough's language as a small badge next to the title when it isn't English.
  * The badge text is the native name (autonym); its tooltip is the English name.
  */
 function renderLanguageBadge() {
@@ -926,7 +902,7 @@ function renderSavedList() {
 }
 
 /**
- * Rebuild the voice <select> from the language-specific voice list pushed by the plugin (Phase L3),
+ * Rebuild the voice <select> from the language-specific voice list pushed by the plugin,
  * then select `selected` (falling back to the first voice). Options are {id,label}.
  */
 function rebuildVoiceOptions(voices, selected) {
@@ -946,12 +922,7 @@ function rebuildVoiceOptions(voices, selected) {
 	else if (voices.length) vs.value = voices[0].id;
 }
 
-/**
- * Global progress — `step+1 / stepCount`.
- *
- * It used to sum every segment's highlight count and add the sub-step offset, because the position was two
- * numbers into a projected list. With one flat index there is nothing to sum.
- */
+/** Global progress — `step+1 / stepCount`. */
 function computeGlobalProgress() {
 	if (!state.stepCount) return { current: 0, total: 0 };
 	return { current: Math.max(0, state.currentStep) + 1, total: state.stepCount };
@@ -985,17 +956,14 @@ function renderHighlightProgress() {
  * never trigger one. It captures each scene's id and label, each group's frame and title, and each step's
  * index and label; it does NOT capture which step is current.
  *
- * Round 3's defect was fixed by pushing the position instead of by touching this, and Phase 3 kept the rule
- * while adding a level: `scened` is in the signature because turning the scene row on or off changes the DOM
- * shape, and a plan that gained a scene would otherwise keep the old flat list.
+ * `scened` is in the signature because turning the scene row on or off changes the DOM shape, and a plan
+ * that gained a scene would otherwise keep the old flat list. Labels are in it because a shape-only
+ * signature collides when a new plan has the same shape as the previous one, leaving stale labels.
  *
- * The old count-only signature collided when a new plan happened to have the same shape as the previous
- * one (e.g. 6 substeps -> 6 substeps): the DOM was not rebuilt, leaving stale labels from the old plan.
- * On top of that, a shorter new plan (or an Undo) could leave "ghost" rows of the previous, longer outline
- * on screen even though the DOM was already correct - CEF failed to repaint the region the removed rows
- * vacated. renderOutline now (a) rebuilds from scratch whenever the content changed OR the live DOM drifted
- * out of sync (outlineDomInSync - a hard invariant that can never keep a stale row), and (b) forces a full
- * repaint of the scroll region after a rebuild, clearing any ghost pixels (Phase 7.5 #6).
+ * renderOutline (a) rebuilds from scratch whenever the content changed OR the live DOM drifted out of sync
+ * (outlineDomInSync - a hard invariant that can never keep a stale row), and (b) forces a full repaint of
+ * the scroll region after a rebuild: a shorter outline otherwise leaves "ghost" rows of the previous,
+ * longer one, because CEF fails to repaint the region the removed rows vacated.
  */
 let outlineSignature = "";
 
@@ -1042,7 +1010,7 @@ function outlineDomInSync(list) {
  * Force CEF to repaint the ENTIRE tool window. JCEF/CEF frequently leaves stale "ghost" pixels after a
  * layout change (a banner appearing/disappearing, a view switch, the outline shrinking) - the DOM/layout
  * is correct but the old pixels linger until some input event (a hover) forces a repaint. That's the
- * "crooked layout / loading strip won't hide until I mouse over it" symptom (Phase 7.5 #6).
+ * "crooked layout / loading strip won't hide until I mouse over it" symptom.
  *
  * Two independent levers, because CEF's OSR invalidation is flaky and render-mode-dependent:
  *  1. Toggle `body`'s display off/on with forced reflows - invalidates the whole surface at the DOM layer.
@@ -1147,16 +1115,11 @@ function buildGroupRow(group, ordinal) {
  * **Build the outline: scene -> frame -> step**, with the scene level drawn only when there is more than
  * one of them.
  *
- * Two decisions, both the reader's:
- *
- * - **The scene row is conditional.** Three of the four acceptance plans are single-scene, and a lone
- *   "Scene 1" header over the whole list is an indent that separates nothing - so on those the outline is
- *   exactly what it was before Phase 3. A plan that really has scenes gains the level, and gains it where
- *   it carries information: a scene boundary is where the tree gets rebuilt.
- * - **A step row is a marker and a label.** The line range that used to sit at its right is gone -
- *   *"putting line numbers/FileNames in outline is actually redundant ... it should only show which
- *   step/substep we're currently in"*. The file and the line live under Now Playing, where they are a
- *   clickable location rather than decoration on every row.
+ * - **The scene row is conditional.** Most plans are single-scene, and a lone "Scene 1" header over the
+ *   whole list is an indent that separates nothing. A plan that really has scenes gains the level where it
+ *   carries information: a scene boundary is where the tree gets rebuilt.
+ * - **A step row is a marker and a label.** No file or line range: those live under Now Playing, where
+ *   they are a clickable location rather than decoration on every row.
  */
 function buildOutline(list) {
 	const o = state.outline || { scenes: [] };
@@ -1217,7 +1180,7 @@ function markerFor(el, markerEl, firstIndex, lastIndex, cls) {
  * Paint the outline's state onto the existing rows, rebuilding first only when the *content* changed.
  *
  * Position is applied by walking `data-step`, so every row's own index decides its marker - no arithmetic
- * over segment offsets, which is what round 3's defect was made of.
+ * over segment offsets.
  */
 function renderOutline() {
 	const list = document.getElementById("outline-list");
@@ -1291,10 +1254,8 @@ let shiftHeld = false;
 /**
  * Prev/Next move **one plan step**; holding Shift moves one **group** (the next frame the walk visits).
  *
- * The two-icon button predates the flattening, where the choice was "segment" against "highlight" and the
- * default depended on whether the current segment had sub-steps — which is exactly the coarse/fine confusion
- * that made Next skip whole frames (G2 round 2). The affordance is worth keeping, so it now means what a
- * reader would expect: fine by default, coarse on Shift, and the icon says which.
+ * Fine by default, coarse on Shift, and the two-icon button says which. The default never depends on
+ * the current group's shape, so Next never skips a whole frame.
  */
 function updateNavIcons() {
 	const showSegment = shiftHeld;
@@ -1394,11 +1355,7 @@ document.getElementById("btn-next").addEventListener("click", () => navigate(+1)
 
 document.getElementById("btn-prev").addEventListener("click", () => navigate(-1));
 
-document.getElementById("btn-restart").addEventListener("click", () => {
-	vscode.postMessage({ type: "restart" });
-});
-
-// The Save split button (`Saving.md` C). The dialogs are the plugin's; this side only says which half was
+// The Save split button. The dialogs are the plugin's; this side only says which half was
 // pressed.
 function setSaveMenuOpen(open) {
 	const menu = document.getElementById("save-menu");
@@ -1438,13 +1395,13 @@ document.getElementById("btn-close").addEventListener("click", () => {
 });
 
 // "Finish" ends the walkthrough: clears the tool window (back to idle) and the editor highlights.
-// Same effect as the header's Close (X) icon, but a discoverable, explicitly-labelled action (Phase 7.5).
+// Same effect as the header's Close (X) icon, but a discoverable, explicitly-labelled action.
 document.getElementById("btn-finish").addEventListener("click", () => {
 	vscode.postMessage({ type: "close_walkthrough" });
 });
 
-// Loading / replace banners (Phase 7.5 #5). Each show/hide/collapse changes the docked-strip layout, so
-// force a repaint afterwards (CEF otherwise leaves the old strip painted until a hover — Phase 7.5 #6).
+// Loading / replace banners. Each show/hide/collapse changes the docked-strip layout, so force a repaint
+// afterwards (CEF otherwise leaves the old strip painted until a hover).
 document.getElementById("gen-dismiss").addEventListener("click", () => {
 	document.getElementById("generation-banner").style.display = "none";
 	forceFullRepaint();
@@ -1456,7 +1413,7 @@ document.getElementById("gen-collapse").addEventListener("click", () => {
 	const banner = document.getElementById("generation-banner");
 	const btn = document.getElementById("gen-collapse");
 	const collapsed = banner.classList.toggle("collapsed");
-	btn.textContent = collapsed ? "▶" : "▼"; // ▶ / ▼ (bigger glyphs — Phase 7.5 #15 fix 4)
+	btn.textContent = collapsed ? "▶" : "▼";
 	btn.title = collapsed ? "Expand" : "Collapse";
 	forceFullRepaint();
 });
@@ -1471,25 +1428,25 @@ document.getElementById("btn-keep").addEventListener("click", () => {
 	vscode.postMessage({ type: "dismiss_replace" });
 });
 
-// Manual "Refresh UI" (Phase 7.5 #6) — a discoverable escape hatch that forces a full repaint of the tool
+// Manual "Refresh UI" — a discoverable escape hatch that forces a full repaint of the tool
 // window, for the case where an automatic repaint didn't catch a CEF paint glitch.
 document.getElementById("btn-refresh").addEventListener("click", () => {
 	forceFullRepaint();
 });
 
-// Overview (segment explanation) collapse toggle (Phase 7.5 #11). The whole header is the click target;
+// Overview (segment explanation) collapse toggle. The whole header is the click target;
 // collapsing changes the layout, so force a repaint afterwards.
 document.getElementById("explanation-toggle").addEventListener("click", () => {
 	const box = document.getElementById("explanation-box");
 	const btn = document.getElementById("btn-overview-collapse");
 	const collapsed = box.classList.toggle("collapsed");
-	btn.innerHTML = collapsed ? "&#9654;" : "&#9660;"; // ▶ / ▼ (bigger glyphs — Phase 7.5 #15 fix 4)
+	btn.innerHTML = collapsed ? "&#9654;" : "&#9660;"; // ▶ / ▼
 	btn.title = collapsed ? "Expand overview" : "Collapse overview";
 	forceFullRepaint();
 });
 
 // Click a word in the transcript — or anywhere on the thin bar above it — to seek playback to that point
-// in the current step (Phase 7.5 #13). Only takes effect once the step's audio is fully buffered
+// in the current step. Only takes effect once the step's audio is fully buffered
 // (seekAllowed()); a click while it's still streaming is a harmless no-op.
 document.getElementById("transcript-text").addEventListener("click", (e) => {
 	const span = e.target && e.target.closest ? e.target.closest(".tw") : null;
@@ -1524,7 +1481,7 @@ document.getElementById("voice-select").addEventListener("change", (e) => {
 	setRoboticRowVisible(!!(opt && opt.dataset.robotic));
 });
 
-// Clicking the "file:lines" location under Now Playing jumps the editor to that code (Phase 7.5).
+// Clicking the "file:lines" location under Now Playing jumps the editor to that code.
 document.getElementById("segment-location").addEventListener("click", (e) => {
 	e.preventDefault();
 	const el = e.currentTarget;
@@ -1670,7 +1627,7 @@ window.addEventListener("message", (event) => {
 			break;
 
 		case "theme": {
-			// Live IDE theme change (Phase 7.5 #10): replace the injected :root variables so the panel's
+			// Live IDE theme change: replace the injected :root variables so the panel's
 			// colours track the new light/dark scheme without a reload. This <style> is the last in <head>,
 			// so its values win the cascade over sidebar.css' fallback :root.
 			let styleEl = document.getElementById("ae-theme-vars");
@@ -1686,7 +1643,7 @@ window.addEventListener("message", (event) => {
 
 		case "settings": {
 			// Restore the persisted voice + speed into the controls on (re)load, so the UI matches what
-			// the audio engine actually uses (Phase 7.5 — the combobox reset to the first voice before).
+			// the audio engine actually uses (otherwise the combobox shows the first voice).
 			if (msg.voice) {
 				const vs = document.getElementById("voice-select");
 				if ([...vs.options].some((o) => o.value === msg.voice)) vs.value = msg.voice;
@@ -1701,7 +1658,7 @@ window.addEventListener("message", (event) => {
 				}
 			}
 			// Show WHERE walkthroughs are saved on hover — on the header Save button and the idle view's
-			// "Saved Walkthroughs" label (Phase 7.5 #14 task 5). Only override the static titles when the
+			// "Saved Walkthroughs" label. Only override the static titles when the
 			// plugin actually sent a directory (i.e. this project has a workspace root).
 			if (msg.walkthroughsDir) {
 				walkthroughsDir = msg.walkthroughsDir;
@@ -1713,7 +1670,7 @@ window.addEventListener("message", (event) => {
 		}
 
 		case "voice_options": {
-			// Repopulate the voice combo for the current walkthrough's language (Phase L3).
+			// Repopulate the voice combo for the current walkthrough's language.
 			rebuildVoiceOptions(msg.voices, msg.selectedVoice);
 			// Show the robotic (espeak) sliders only when the selected voice is robotic, seeded from its profile.
 			updateRoboticControls(msg.robotic, msg.espeakPitch, msg.espeakRange, msg.espeakWordGap);
@@ -1742,9 +1699,9 @@ window.addEventListener("message", (event) => {
 
 		case "step_advance": {
 			// Narration has started this step. The *position* already arrived in an `update` (the walkthrough
-			// fires one move event and the sidebar pushes on it), so this no longer carries a cursor to
-			// assign — what it carries is the moment: reset the read-along audio model (clock, retained
-			// buffers, sentence map) so the next chunks re-populate it (Phase 7.5 #12/#13).
+			// fires one move event and the sidebar pushes on it), so this carries no cursor to assign — what
+			// it carries is the moment: reset the read-along audio model (clock, retained buffers, sentence
+			// map) so the next chunks re-populate it.
 			if (typeof msg.index === "number" && msg.index !== state.currentStep) break;
 			resetStepAudioModel();
 			lastSpokenWord = -1;
@@ -1755,9 +1712,8 @@ window.addEventListener("message", (event) => {
 		}
 
 		case "update": {
-			// **One position, and the backend states it.** There is nothing to guess or reset here any more:
-			// round 3's defect was this handler inferring a sub-step from a segment change, and the fix was
-			// to push the position — which is now the whole of it, one integer that every consumer reads.
+			// **One position, and the backend states it.** Nothing to guess or reset here: the backend pushes
+			// the position as one integer that every consumer reads; never infer it from a group change.
 			state = {
 				title: msg.title,
 				outline: msg.outline || { scenes: [], scened: false, steps: 0 },
@@ -1813,7 +1769,7 @@ window.addEventListener("message", (event) => {
 	}
 });
 
-// Repaint-on-mutation safety net (Phase 7.5 #6). CEF doesn't reliably repaint DOM changes without an input
+// Repaint-on-mutation safety net. CEF doesn't reliably repaint DOM changes without an input
 // event, so any mutation (outline markers flipping on step-advance, progress bar, transcript, banners, …)
 // schedules a coalesced native repaint. Mutations here are bursty/event-driven — a step advance, a status
 // change — not per-audio-frame (playing chunks mutate nothing after the first), so the overhead is minimal.
@@ -1826,9 +1782,9 @@ domRepaintObserver.observe(document.body, {
 	attributes: true,
 });
 
-// ── Custom hover tooltips (Phase 7.5 #15 fix 3) ────────────────────────────────────────────────────
-// JCEF's offscreen renderer never paints the native `title` tooltip, so every title="…" in the markup
-// (Save, Refresh UI, Close, Mute, play controls, collapse buttons, the saved-dir hints) was invisible.
+// ── Custom hover tooltips ────────────────────────────────────────────────────
+// JCEF's offscreen renderer never paints the native `title` tooltip, so a title="…" in the markup
+// (Save, Refresh UI, Close, Mute, play controls, collapse buttons, the saved-dir hints) is invisible alone.
 // This delegated handler reads the hovered element's title and shows a positioned box instead. It reads
 // `title` FIRST so dynamically-updated titles (play↔pause, Expand↔Collapse, the walkthroughsDir save
 // tip) always win, then migrates the value into data-ae-tip and strips `title` — that neutralises the

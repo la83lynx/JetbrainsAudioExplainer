@@ -22,16 +22,16 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Phase 6 — the Claude Code backbone.
+ * The Claude Code backbone.
  *
  * Turns an [ExplainRequest] into an audio walkthrough by shelling out to a headless `claude -p`
  * (cwd = project root) with a prompt that carries the cursor context and triggers the bundled
  * `audio-explainer` skill's explain-at-cursor flow. Claude expands the symbol under the cursor,
  * builds a `set_plan`, and sends it with the run's own `set_plan` MCP tool ([McpEndpoint]) to this
  * plugin's loopback server ([ExplainerServer]) — which drives the walkthrough, editor spotlight, and
- * sidebar. The C# symbol is NOT resolved in-plugin (decision 2); that's Claude's job.
+ * sidebar. The C# symbol is NOT resolved in-plugin; that's Claude's job.
  *
- * **When the tool does not connect, the run is started again the old way** — the agent `Write`s the plan
+ * **When the tool does not connect, the run is started again by POST** — the agent `Write`s the plan
  * and POSTs it with a helper script. The tool is ~12 s faster, but the POST is the path
  * that needs nothing from the CLI's MCP support or the user's policy on it.
  *
@@ -49,7 +49,7 @@ class ClaudeExplainer {
     private val log = Logger.getInstance(ClaudeExplainer::class.java)
 
     fun explain(project: Project, request: ExplainRequest, indicator: ProgressIndicator) {
-        // Surface the generation inside the tool window (Phase 7.5 #5): flip the project-scoped tracker
+        // Surface the generation inside the tool window: flip the project-scoped tracker
         // and make the sidebar visible so its loading banner shows while Claude works.
         val tracker = ExplainSessionTracker.getInstance(project)
         val runLog = RunLog(request.displayName)
@@ -81,13 +81,12 @@ class ClaudeExplainer {
 
         val workDir = request.projectBasePath
             ?: request.absolutePath.substringBeforeLast('/', "").ifEmpty { System.getProperty("user.home") }
-        // **The one resolution point** (Effort.md): a per-run override from the "Explain This with…" dialog
-        // wins, and everything it leaves null falls back to the saved default. The plain menu entry sends
-        // nulls for all three, so it takes exactly the saved settings — which is what keeps its path the
-        // one every earlier round judged.
+        // **The one resolution point**: a per-run override from the "Explain This with…" dialog wins, and
+        // everything it leaves null falls back to the saved default. The plain menu entry sends nulls for
+        // all three, so it takes exactly the saved settings.
         val state = AudioExplainerSettings.getInstance().state
         val effort = request.effort ?: state.explainEffort
-        val model = state.explainModel // no per-run model control — see Effort.md's dialog table
+        val model = state.explainModel // no per-run model control: the dialog offers none
         val depth = request.depth ?: state.explainDepth
         // **A provider profile** swaps the service behind Claude Code, not the prompt. Its model is
         // the model, so the timings learn it apart from Claude's; null is Claude Code's own setup, untouched.
@@ -103,7 +102,7 @@ class ClaudeExplainer {
             )
             return
         }
-        // The run's own directory (`Saving.md` B): the plans it sends are kept there, and the JSON it POSTs
+        // The run's own directory: the plans it sends are kept there, and the JSON it POSTs
         // when it has to, so no payload lands in the project.
         val planDir = createPlanDir()
         // **Kept unless the run succeeds**: a failed run's payloads are the evidence of what it sent.
@@ -314,8 +313,8 @@ class ClaudeExplainer {
     }
 
     /**
-     * Open the run's endpoint and write its config into [planDir], or null — the run then POSTs, as every run did
-     * before the tool. Each plan the tool loads is offered to [early], so the reader hears "ready" as it lands.
+     * Open the run's endpoint and write its config into [planDir], or null — the run then POSTs its plan.
+     * Each plan the tool loads is offered to [early], so the reader hears "ready" as it lands.
      */
     private fun openTool(server: ExplainerServer, planDir: Path, early: EarlyPlan): ToolRoute? {
         val run = server.openRun(planDir) { resolved, issues -> early.arrived(resolved, issues) }
@@ -331,8 +330,8 @@ class ClaudeExplainer {
     }
 
     /**
-     * A fresh `run-*` directory under the IDE's temp path for this run's POST payloads (`Saving.md` B), or
-     * null when one cannot be made — the prompt then names none, which is how every run behaved before.
+     * A fresh `run-*` directory under the IDE's temp path for this run's POST payloads, or
+     * null when one cannot be made — the prompt then names none.
      */
     private fun createPlanDir(): Path? = try {
         val base = Path.of(PathManager.getTempPath(), "audio-explainer", "plans")
@@ -359,7 +358,7 @@ class ClaudeExplainer {
     /**
      * The walkthrough language for a new run, warmed if need be.
      *
-     * A Windows SAPI-only language (Phase L7) exists only after voice discovery has run, so this warms it
+     * A Windows SAPI-only language exists only after voice discovery has run, so this warms it
      * — cached, i.e. instant once discovered — and [Languages.byCode] can then answer with its display
      * name and autonym on the first Explain This of a session rather than the second.
      */

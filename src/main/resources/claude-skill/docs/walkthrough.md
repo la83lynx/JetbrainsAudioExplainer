@@ -66,17 +66,9 @@ The sidebar loads the plan and shows the first step's code location. Playback do
 the user must press the Play button on the sidebar to begin. Tell the user: **"Press ▶ Play on the sidebar to
 start the walkthrough."**
 
-3. **Handle user actions (optional):**
-
-```bash
-~/.claude/skills/audio-explainer/scripts/explainer.sh wait-action 60
-```
-
-Returns e.g. `{"type": "user_action", "action": "next", "segmentId": 3}`. Handle it with `goto` or `resume`.
-
-`goto` names **a frame** (`{"type":"goto","frameId":2}`) and lands on the first step that frame is the
+3. **Navigate (optional):** `goto` names **a frame** (`{"type":"goto","frameId":2}`) and lands on the first step that frame is the
 primary of, or **a step outright** (`{"type":"goto","stepIndex":7}`) when you know the plan's own step order
-— which you do, because you wrote it. `segmentId` is still read as an alias for `frameId`.
+— which you do, because you wrote it. `{"type":"resume"}` starts playback.
 **To change a loaded plan, send a new `set_plan`** — there are no partial-update messages, because you are
 holding the whole plan and one POST is cheaper than keeping two copies in step.
 
@@ -129,7 +121,7 @@ Required for every frame — a frame nobody narrates renders as structure with n
 
 ## User controls
 
-The sidebar handles Play/Pause, Next/Prev, speed, volume, voice, and outline navigation. The agent only needs
-to respond to `wait-action` events.
+The sidebar handles Play/Pause, Next/Prev, speed, volume, voice, and outline navigation; the agent does not
+need to drive playback.
 
 See `docs/tts.md` for voice config.

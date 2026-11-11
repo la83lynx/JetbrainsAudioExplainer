@@ -10,7 +10,7 @@ import kotlin.math.min
  *
  * Two numbers carry a run: how long until the plan `Write` starts (reading, searching, thinking — almost all
  * of it the model thinking, which effort sets), and how big that `Write` is (which depth sets) at a speed that
- * barely varies (bench3: 299-333 chars/s across six runs).
+ * barely varies (299-333 chars/s across six timed runs).
  */
 data class RunShape(
     /** Seconds from launch until the plan `Write` starts streaming. */
@@ -48,9 +48,9 @@ data class RunShape(
         }.getOrNull()?.takeIf { it.preSeconds > 0 && it.writeChars > 0 && it.writeRate > 0 }
 
         /**
-         * The guess before a combination has run here. Medium/Standard is bench3 (six runs: the `Write` starts
-         * at 27-48 s, ~8 000 chars at ~320/s); the rest is the 2026-10-13 sandbox round (medium/Brief ~15 s,
-         * high/Standard ~28 s, xhigh/Deep ~206 s) and a timed xhigh/Standard run (~165 s).
+         * The guess before a combination has run here. Medium/Standard is from six timed runs (the `Write` starts
+         * at 27-48 s, ~8 000 chars at ~320/s); the rest from single timed runs (medium/Brief ~15 s,
+         * high/Standard ~28 s, xhigh/Standard ~165 s, xhigh/Deep ~206 s).
          */
         fun seed(effort: String, depth: String): RunShape {
             val pre = when (effort.trim()) {
@@ -208,7 +208,7 @@ class ExplainProgress @JvmOverloads constructor(
         writeChars += part.length
         // A key once per frame or step. Inside the `Write`'s input the plan is a JSON *string*, so its keys
         // arrive with escaped quotes — which is what keeps a "keep" in the prose from counting. **Nearly
-        // every key is split across two deltas** (bench3 b1: 1 of 13 whole in one), so the scan carries the
+        // every key is split across two deltas** (in a timed run, 1 of 13 arrived whole), so the scan carries the
         // previous delta's tail, and counts only a match that ends in this delta — one lying wholly inside
         // the carry was counted last time.
         val scan = writeCarry + part
@@ -267,7 +267,7 @@ class ExplainProgress @JvmOverloads constructor(
      * **Past the expectation**: from [from], two thirds of the way to the end, approached as `x / (1 + x)` —
      * half of it once the phase has run twice its expected length, three quarters at four times. That keeps
      * moving long after an exponential would have pinned, and the phase that follows starts close to where
-     * this one has got to (bench3 b2's 48 s think against 32 s expected: 63 % here, 63 % as its `Write` starts).
+     * this one has got to (a 48 s think against 32 s expected: 63 % here, 63 % as its `Write` starts).
      */
     private fun overrun(from: Double, x: Double) = from + (1 - from) * (2.0 / 3) * (x / (1 + x))
 

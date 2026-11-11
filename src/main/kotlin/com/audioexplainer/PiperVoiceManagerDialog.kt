@@ -26,11 +26,11 @@ import javax.swing.ListSelectionModel
 import javax.swing.event.DocumentEvent
 
 /**
- * The Piper voice-manager dialog (Phase L9) — the one place a child dialog beats an inline settings group.
+ * The Piper voice-manager dialog — the one place a child dialog beats an inline settings group.
  * Browses the full rhasspy/piper-voices catalog (~170 voices, fetched + cached by the server via
  * `--piper-catalog`), lets the user search by language/quality, download a voice (with the shared background
  * task that installs `piper-tts` if needed), delete an installed one (freeing disk), and shows total disk
- * usage. Install-first by design (the user chose this): a language becomes selectable for narration once a
+ * usage. Install-first by design: a language becomes selectable for narration once a
  * voice for it is downloaded — this dialog is how you reach the whole catalog to do that.
  *
  * Opened modally from **Settings → Tools → Audio Explainer → Audio engines → Piper**. The catalog load and

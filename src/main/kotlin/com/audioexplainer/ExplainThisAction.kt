@@ -13,10 +13,10 @@ import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFile
 
 /**
- * Phase 5 — the "Explain This (Audio)" action (the headline feature's entry point). Wired into two menus:
+ * The "Explain This (Audio)" action (the headline feature's entry point). Wired into two menus:
  *  - **Editor context menu** ([ExplainScope.CURSOR]): the file, caret line, and any selection, packaged as
  *    an [ExplainRequest]. It deliberately does **not** resolve the C# symbol under the cursor; expanding
- *    {caretLine, selection} to the enclosing method/class is Claude's job (Phase 6).
+ *    {caretLine, selection} to the enclosing method/class is the agent's job ([ClaudeExplainer]).
  *  - **Solution Explorer / Project view context menu** ([ExplainScope.FILE]/[DIRECTORY]): the selected
  *    file(s)/folder(s). A node with no backing local file (e.g. "Dependencies") is reported as
  *    "Item Not Explainable" instead of silently doing nothing.
@@ -28,7 +28,7 @@ import com.intellij.openapi.vfs.VirtualFile
  * **[ExplainThisWithAction] is this class with one hook overridden** ([decorate]), and that is the whole
  * point of the split: the per-run dialog must not be able to change how a target is turned into an
  * [ExplainRequest], only what is attached to the one this class already built. The plain entry therefore
- * keeps taking exactly the path every earlier round judged — it does not even grow a branch.
+ * does not even grow a branch.
  */
 open class ExplainThisAction : AnAction() {
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
@@ -84,7 +84,7 @@ open class ExplainThisAction : AnAction() {
     protected open fun decorate(project: Project, request: ExplainRequest): ExplainRequest? = request
 
     /**
-     * Start the generation — after asking about an unsaved walkthrough it would replace (`Saving.md` D).
+     * Start the generation — after asking about an unsaved walkthrough it would replace.
      *
      * **Here, before the run, and not when its `set_plan` lands.** The user is at the keyboard now, having
      * just clicked; a prompt at landing time would put a modal in front of a reader who walked away two

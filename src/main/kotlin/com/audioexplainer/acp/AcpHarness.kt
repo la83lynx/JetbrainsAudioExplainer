@@ -16,10 +16,6 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.util.execution.ParametersListUtil
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.put
 import kotlinx.serialization.json.JsonArray
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -33,7 +29,7 @@ import java.util.concurrent.atomic.AtomicReference
  * same [RunLoop] Claude's runs use — so the bar, the run log, the stops and the result are the ones a Claude run
  * gets.
  *
- * **Spawned per run**: 2-3 s of startup in the spike, and nothing carried between runs or projects. The key
+ * **Spawned per run**: 2-3 s of startup, and nothing carried between runs or projects. The key
  * travels in the child's environment only ([AgentLaunch.env]) and is scrubbed from every logged message.
  *
  * **Cancel is `session/cancel`, then the process tree after 3 s** — a Node agent leaves its children otherwise.
@@ -186,19 +182,8 @@ internal object AcpHarness {
             { m, _ -> throw AcpException(AcpConnection.METHOD_NOT_FOUND, "$m is not supported") }, { _, _ -> })
         return try {
             conn.start("Audio Explainer ACP diagnostic")
-            val init = conn.request("initialize", buildJsonObject {
-                put("protocolVersion", 1)
-                put("clientCapabilities", buildJsonObject {
-                    put("fs", buildJsonObject { put("readTextFile", true); put("writeTextFile", false) })
-                    put("terminal", false)
-                })
-                put("clientInfo", buildJsonObject { put("name", "audio-explainer"); put("version", "1") })
-            }, timeoutMs) as? JsonObject
-            fun JsonObject.str(k: String) = (this[k] as? JsonPrimitive)?.contentOrNull
-            val info = init?.get("agentInfo") as? JsonObject
-            val agent = listOfNotNull(info?.str("title") ?: info?.str("name"), info?.str("version")).joinToString(" ").ifBlank { null }
-            val http = ((init?.get("agentCapabilities") as? JsonObject)?.get("mcpCapabilities") as? JsonObject)?.str("http") == "true"
-            Hello(agent, http, null)
+            val init = conn.request("initialize", AcpSession.initializeParams("1"), timeoutMs) as? JsonObject
+            Hello(AcpSession.agentLabel(init), AcpSession.supportsHttpMcp(init), null)
         } catch (e: AcpException) {
             Hello(null, false, e.message)
         } finally {

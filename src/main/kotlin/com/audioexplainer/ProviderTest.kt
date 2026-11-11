@@ -10,8 +10,8 @@ import java.util.concurrent.TimeUnit
 /**
  * **"Test connection"**: the user's real Claude Code, pointed at the profile, asked for one word.
  *
- * The same `--settings` file a run gets, so a pass here is a pass for the run's provider wiring; ~3–10 s when tested
- * (2026-11-05). Stops at the first 401/403 `api_retry`, as a run does — otherwise a bad key would hold the Settings
+ * The same `--settings` file a run gets, so a pass here is a pass for the run's provider wiring; it takes
+ * ~3–10 s. Stops at the first 401/403 `api_retry`, as a run does — otherwise a bad key would hold the Settings
  * dialog for the CLI's ~3 minutes of retries — and gives up after [TIMEOUT_S].
  */
 object ProviderTest {
@@ -63,7 +63,7 @@ object ProviderTest {
                         }
                         if (e !is RunEvent.Finished) continue
                         val text = e.finalText?.trim().orEmpty()
-                        val secs = "%.1f".format((System.nanoTime() - started) / 1e9)
+                        val secs = "%.1f".format(java.util.Locale.ROOT, (System.nanoTime() - started) / 1e9)
                         return if (!e.ok || e.reason != "success") Outcome(false, text.ifBlank { "The run ended in an error." }.take(300))
                         else Outcome(true, "OK — ${profile.model.trim()} answered in ${secs}s: \"${text.take(40)}\"")
                     }

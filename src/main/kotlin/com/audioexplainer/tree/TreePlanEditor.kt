@@ -16,13 +16,11 @@ import javax.swing.JComponent
 /**
  * **The tree's host: an editor tab.**
  *
- * A tool window was measured and rejected as the host — its width is not a stable quantity (413/716/784 px
- * across runs, constraint 10), and a tree of editors is not something to design against a width nobody can
- * predict. An editor tab costs a [FileEditorProvider] plus a [FileEditor], which probe B2 measured at ~90
- * lines and 15–19 ms per node with no leaks; every Phase 1 bench has run in exactly this plumbing.
+ * Not a tool window: its width is not a stable quantity (413/716/784 px across runs), and a tree of editors
+ * cannot be laid out against a width nobody can predict. An editor tab costs a [FileEditorProvider] plus a
+ * [FileEditor], at 15–19 ms per node with no leaks.
  *
- * This is the production version of that host. It accepts only [TreePlanVirtualFile], so no file of the
- * user's can reach it.
+ * It accepts only [TreePlanVirtualFile], so no file of the user's can reach it.
  */
 class TreePlanEditorProvider : FileEditorProvider, DumbAware {
 
@@ -49,8 +47,8 @@ class TreePlanEditorProvider : FileEditorProvider, DumbAware {
  * provider is constructed by the platform and cannot be handed anything else.
  *
  * [onDispose] is how the owner learns the user closed the tab, and is where N editors get released. Disposal
- * of an editor inside an inlay inside an editor is Phase 4's named integration risk; routing it through one
- * callback is what makes it a single place to get right.
+ * of an editor inside an inlay inside an editor is easy to get wrong; routing it through one callback makes
+ * it a single place to get right.
  */
 class TreePlanVirtualFile(
     name: String,

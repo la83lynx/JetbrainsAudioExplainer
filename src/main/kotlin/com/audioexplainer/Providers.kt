@@ -46,10 +46,10 @@ class ProviderPreset(
 
 /**
  * **Everything about a provider run that is a pure function** — the presets, the `--settings` JSON, the stderr
- * filter — so `probes/EffortProbe.java` holds it with no IDE. A provider's `api_retry` is a [RunEvent.Retry] now,
- * read by [ClaudeStream].
+ * filter — so `probes/EffortProbe.java` holds it with no IDE. A provider's `api_retry` is read by [ClaudeStream]
+ * as a [RunEvent.Retry].
  *
- * The mechanism (verified against OpenRouter, 2026-11-05): Claude Code is pointed at the provider through an `env` block
+ * The mechanism: Claude Code is pointed at the provider through an `env` block
  * in a `--settings <file>`, which beats an `env` of the same key in `~/.claude/settings.json`. The prompt and
  * the skill do not change; the model behind the agent does.
  */
@@ -62,9 +62,9 @@ object Providers {
     const val OLLAMA_TOKEN = "ollama"
 
     /**
-     * OpenRouter first: it is the one verified end to end (2026-11-05), and GLM 5.3 Flash first within it — the
-     * fastest clean plan, at $0.004. No `:free` model in any preset: the free Nemotron got there only after 4
-     * fix round trips, and free endpoints may train on the code they are sent.
+     * OpenRouter first: it is the one verified end to end, and GLM 5.3 Flash first within it — the fastest clean
+     * plan, at $0.004. No `:free` model in any preset: the free one tested needed 4 fix round trips, and free
+     * endpoints may train on the code they are sent.
      */
     val PRESETS = listOf(
         ProviderPreset(PRESET_OPENROUTER, "OpenRouter", "https://openrouter.ai/api",

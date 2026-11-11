@@ -204,7 +204,7 @@ the plugin reports whenever you cross one.
 | Rule | Limit | What happens past it |
 |---|---|---|
 | **Nesting depth** | **3 levels** — a root plus two levels of nesting | The over-deep frame is rendered **at top level instead of nested**, with a `[warn]`. Depth compounds: a node's height is its own excerpt *plus* its children at full height, so a fourth level puts a few hundred pixels of code inside roughly two thousand and the reader is scrolling a container to find a container |
-| **Nested frames in one parent** | **6** | A taller parent, and nothing worse. Siblings are additive rather than nested. Three were judged to read cleanly on screen and 6 is the middle of the range the reader named; **nothing above 3 has actually been rendered**, so 6 is an extrapolation from a judged case |
+| **Nested frames in one parent** | **6** | A taller parent, and nothing worse. Siblings are additive rather than nested. Three read cleanly on screen; **nothing above 3 has actually been rendered**, so 6 is an extrapolation from that case |
 | **`keep` ranges per frame** | **3** | A taller frame. Elision is per-gap so the mechanism does not care, but nothing above 3 has been tested |
 | **Parents per frame** | **exactly 1** | Not expressible: `parent` is a single field. Two call sites means two frames |
 | **Cycles** | **forbidden** | Frame A parented to B parented to A is rejected at load: the link that closes the loop is cut, that frame becomes top-level, and you get a `[warn]` |

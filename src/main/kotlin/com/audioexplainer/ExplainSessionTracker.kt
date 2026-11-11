@@ -26,7 +26,7 @@ data class ExplainSessionState(
 )
 
 /**
- * Phase 7.5 #5 — project-scoped signal of an in-flight generation.
+ * Project-scoped signal of an in-flight generation.
  *
  * [ClaudeExplainer] is an app-level service that runs on a background task but holds the [Project]; the
  * sidebar is per-tool-window. This tracker bridges them: `ClaudeExplainer` flips the state as generation

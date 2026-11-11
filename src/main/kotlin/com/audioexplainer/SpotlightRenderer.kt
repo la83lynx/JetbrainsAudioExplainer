@@ -41,11 +41,8 @@ import kotlin.math.abs
  * **One step's worth of decoration for one editor**, in the schema's own vocabulary: line ranges, roles,
  * and the prose that goes in the callout. What [SpotlightRenderer.paintStep] takes.
  *
- * This is the signature the tree wanted from the start — *(line ranges, roles, palette)* — and the reason it
- * was deferred through the whole of Phase 1: it follows the schema, so writing it earlier would have meant
- * inventing the schema twice. The palette half is not a parameter because it never was one: every colour is
- * derived per render from [AudioExplainerSettings] and the current scheme, which is constraint 11 and the
- * thing that makes a theme switch a re-*render* rather than a re-measure.
+ * The palette is not a parameter: every colour is derived per render from [AudioExplainerSettings] and the
+ * current scheme, which is what makes a theme switch a re-*render* rather than a re-measure.
  *
  * All line numbers are **1-based and inclusive**, like everything the agent authors.
  *
@@ -54,12 +51,11 @@ import kotlin.math.abs
  *   did not name. `active[0]` is the primary range: where the callout docks and what a relation is
  *   measured against.
  * @param kept The frame's `keep` ranges. Non-active kept lines read as *context*; anything else inside the
- *   extent reads as a *gap* and gets the gutter bar. Before roles existed, "kept" could only be inferred
- *   from the other steps' own ranges; a plan states them, which is what made the roles worth adding.
+ *   extent reads as a *gap* and gets the gutter bar.
  * @param bounds Optional outer extent, dimmed wholesale beyond it. The union with [active] and [kept] is
  *   always taken, so this can only *widen* the region — a caller cannot accidentally hide a range it asked
  *   to draw.
- * @param label A short label (the old `explanation`), used in the callout only when [note] is absent.
+ * @param label A short label, used in the callout only when [note] is absent.
  * @param note One sentence for the callout — preferred over [label] there, which reads thin in a box.
  * @param example One line, drawn under [note] in the editor's upright font.
  * @param token Literal substring of the primary range to flash; [occurrence] picks which match.
@@ -67,8 +63,7 @@ import kotlin.math.abs
  *   so the arrows stay in step with the narration.
  * @param file The frame's file, which a relation endpoint's own `file` is compared against to decide
  *   whether it is somewhere this editor can point at.
- * @param role Whether this editor is the step's **primary** frame or one of its helpers — Phase 3's second
- *   level of attention, and the fifth line role the tree needed. See [FrameRole].
+ * @param role Whether this editor is the step's **primary** frame or one of its helpers. See [FrameRole].
  */
 class StepPaint(
     val active: List<LineRange>,
@@ -79,7 +74,7 @@ class StepPaint(
     val example: String? = null,
     val token: String? = null,
     val occurrence: Int = 1,
-    /** 1-based line holding [token]; 0 resolves it over the whole active extent (the legacy shape). */
+    /** 1-based line holding [token]; 0 resolves it over the whole active extent. */
     val tokenLine: Int = 0,
     val relations: List<Relation> = emptyList(),
     val file: String = "",
@@ -87,23 +82,21 @@ class StepPaint(
 )
 
 /**
- * **Which of a multi-frame step's frames this editor is** — and the answer to *"a tree needs a fifth line
- * role"* (`TreeOfCode.rules.md`, *Correction carried forward*).
+ * **Which of a multi-frame step's frames this editor is.**
  *
- * The in-place surface had one editor, so `dim` / `segmentDim` / `gap` / `active` were the whole vocabulary:
- * a line was outside the step, kept but not active, elided, or active. A tree puts N frames on screen at
- * once and a step may light ranges in several of them, so the reader needs to tell *"this whole frame is not
- * what is being talked about"* from *"this line inside the active frame is not the focus"* — which no
- * per-line role could express, because both frames' lines carried identical roles.
+ * The per-line roles (`dim` / `segmentDim` / `gap` / `active`) say whether a line is outside the step, kept
+ * but not active, elided, or active. A tree puts N frames on screen at once and a step may light ranges in
+ * several of them, so the reader also needs to tell *"this whole frame is not what is being talked about"*
+ * from *"this line inside the active frame is not the focus"* — which no per-line role can express.
  *
- * Three tiers do express it, and they are all backgrounds (constraint 1 — never a foreground dim, which is
- * what flattened the Phase 0 prototype to grey and would destroy the semantic colour Arch B was chosen for):
+ * Three tiers express it, and they are all backgrounds — never a foreground dim, which would flatten the
+ * code to grey and destroy its syntax colouring:
  *
  * - **[PRIMARY]** — the step's own frame. Full glow, the callout, the token flash, and the container's
- *   reveal. Unchanged from what shipped.
+ *   reveal.
  * - **[HELPER]** — a frame the step also lights. The same ranges, glowed at [HELPER_GLOW_MIX] of the way
  *   back to the editor background, with a callout in the same softened key. Visibly secondary on purpose:
- *   Phase 1 judged one box per step to read well, so a second must not compete with it.
+ *   one box per step reads well, so a second must not compete with it.
  * - **A frame the step does not touch at all** gets no glow whatever and keeps only
  *   `CodeNodeView.setActive`'s whole-node wash — which is the *node*-level half of the same distinction, and
  *   why this enum has two values and not three.
@@ -119,11 +112,10 @@ enum class FrameRole { PRIMARY, HELPER }
  * holding the tree knows which frame owns which file. So the renderer reports, and
  * [com.audioexplainer.tree.TreePlanView] turns matching reports into [LinkHalf]s.
  *
- * **Round 6 widened this from "what I could not draw" to "every link".** A same-editor relation used to be
- * drawn on the spot by a renderer of its own, which is exactly why an in-file arrow and a portal on one step
- * could come out the same colour, on the same column, with hover on one and not the other. There is one
- * allocator now and it is the tree's, so a link's slot — its colour, its rail, its channel — is assigned
- * once across every editor on screen. [local] is the only thing the renderer knows that the tree does not.
+ * **Every link is reported, same-editor ones included**, so there is one allocator and it is the tree's: a
+ * link's slot — its colour, its rail, its channel — is assigned once across every editor on screen, and an
+ * in-file link and a portal on one step cannot collide on a colour or a column. [local] is the only thing
+ * the renderer knows that the tree does not.
  *
  * @param line 0-based line **in the reporting editor** - the end of the relation that is in this step.
  * @param origin That end, as the plan stated it. Carries no `file` when the plan left it implicit.
@@ -153,28 +145,24 @@ class LinkRequest(
  * match. What differs between them is derived per end by whichever editor holds it: [LinkAnchor] from
  * whether [token] resolves, and the direction from live screen geometry. See [LinkArt].
  *
- * **What this replaced, and why it is worth recording:** the first build drew a rounded chip carrying a
- * glyph and a pair *number* at the start of the line. It was rejected on sight, and the reason generalises
- * — a chip marks a **row**, and a relation connects **tokens**. So the number went with it: what pairs the
- * two ends now is a shared colour, a shared shape, and **hovering either end brightening both** (see
- * [SpotlightRenderer.setHoveredPair]), which says *these two are one link* in a way a number to match up
- * never did. Before either shape there was a gutter icon, which a node never painted at all:
- * `isLineMarkerAreaShown = false` there, so the affordance was absent rather than unclear.
+ * No pair number is drawn: a relation connects **tokens**, not rows. What pairs the two ends is a shared
+ * colour, a shared shape, and **hovering either end brightening both** (see
+ * [SpotlightRenderer.setHoveredPair]). A gutter icon is not an option either: a node editor has
+ * `isLineMarkerAreaShown = false`.
  *
  * @param line 0-based line in this editor holding this end of the link.
  * @param pairId 1-based, identical in both halves. **Not drawn** — it is how a hover on one half finds the
  *   other, and how the log names a pair.
- * @param lane **The link's routing lane within its step**, 0-based and identical in both halves — the
- *   reader's *"each link has a Nr. x"*. It picks the palette entry and the column this end's vertical is
- *   drawn on. The colour itself is *not* passed: it is derived per render from this editor's own scheme
- *   (constraint 11), so a theme switch re-colours both halves without either of them being told anything.
- *   The **rail**'s offset is no longer this number — see [LinkShape.fan], which is counted per row.
+ * @param lane **The link's routing lane within its step**, 0-based and identical in both halves. It picks
+ *   the palette entry and the column this end's vertical is drawn on. The colour itself is *not* passed: it
+ *   is derived per render from this editor's own scheme, so a theme switch re-colours both halves without
+ *   either of them being told anything. The **rail**'s offset is not this number — see [LinkShape.fan],
+ *   which is counted per row.
  * @param lanes **The whole step's lane layout**, in lane order, identical in every half in every editor.
  *   Carried rather than derived because a node can only see its own links, and the width of lane *k* depends
  *   on what lanes *0..k-1* are joined by ([LinkArt.laneAxes]): a node holding one portal and a node holding a
  *   same-editor link and that same portal have to put the portal on the same screen column, and the second
- *   node is the only one that knows there is a same-editor lane inside it. Round 6's item 8 — *"the portal in
- *   child node is pushed left, but in parent node it isn't"* — is this list not existing.
+ *   node is the only one that knows there is a same-editor lane inside it.
  * @param join Whether the two ends meet on a drawn line or at a portal each — see [LinkJoin]. Identical in
  *   both halves, and decided by the reporting editor: only it knows whether the far end is its own.
  * @param outgoing False on the end the link *arrives* at, which is the end that gets the arrowhead.
@@ -222,16 +210,13 @@ data class LinkHalf(
  * **The editors whose portals share one vertical column**, so the two ends of a link line up on screen.
  *
  * Without this each renderer picks its channel from its own node's code, and two nodes holding different
- * code land on different x — the two ends of one link at two different places, which is the *"lets feel
- * portals more connected"* that was missing. The group is the smallest thing that fixes it: every member
- * asks it for the channel, it answers with the rightmost demand of any member, and they all get the same
- * number.
+ * code put the two ends of one link at different x. Every member asks the group for the lane layout, it
+ * merges every member's demands, and they all get the same answer.
  *
  * **Screen coordinates are the basis**, and they have to be. The nest indents a child node inside its
  * parent, and each editor scrolls on its own, so two editors' content coordinates do not share an origin.
  * `contentComponent.locationOnScreen` already accounts for both — including the horizontal scroll, since
- * that moves the content component inside its viewport — so the alignment holds at *any* scroll position and
- * not merely the default one it was asked for.
+ * that moves the content component inside its viewport — so the alignment holds at *any* scroll position.
  *
  * Recomputed on every paint rather than cached, and that is the same trade the rest of this class makes: a
  * cached column would be wrong after a scroll, a font change or a fold, and the recomputation is a handful
@@ -253,22 +238,16 @@ class LinkAlignGroup {
      * **Where every lane of the step sits**, in [caller]'s own content coordinates, or null when nothing can
      * be aligned to.
      *
-     * Round 7 answered this with a single base column and fixed offsets from it, and round 8 replaced it
-     * because that base was one number for the whole step: the *widest* row any link touched. A link off a
-     * short line was routed out past a long one, and the hovered label after it had nothing left to be
-     * drawn in — *"On-hover link labels are always trimmed, because same-editor links are routed as to the
-     * right side as possible."*
-     *
-     * So the exchange is now **per lane**. Every member reports what each lane needs to clear *its own*
-     * link's code, the maxima are taken lane by lane, and [LinkArt.alignedLaneAxes] packs them left to
-     * right. Three things survive from round 7 unchanged, because they are what the group is for:
+     * The exchange is **per lane**: every member reports what each lane needs to clear *its own* link's
+     * code, the maxima are taken lane by lane, and [LinkArt.alignedLaneAxes] packs them left to right. (One
+     * demand for the whole step would route a link off a short line out past a long one, leaving its hovered
+     * label no room.) What the group guarantees:
      *
      * - a lane lands on the same **screen** x in every node, so the two ends of a link line up;
      * - the packing keeps [LinkArt.LANE_GAP] between neighbours, so the routing rules cannot be violated by
      *   a lane that had a large demand;
      * - the *narrowest* member's right edge and left edge bound the whole fan, so no node clamps on its own
-     *   and splits the column — round 6's *"the portal in child node is pushed left, but in parent node it
-     *   isn't"*.
+     *   and splits the column.
      *
      * A member with no links on screen, a disposed editor, a component not yet showing, or a viewport too
      * narrow to hold the fan at all contributes nothing rather than a zero — the last of those because a
@@ -277,8 +256,8 @@ class LinkAlignGroup {
     fun axesFor(caller: SpotlightRenderer): IntArray? {
         val origin = caller.linkOriginScreenX() ?: return null
         val joins = caller.linkLaneLayout() ?: return null
-        // **[LinkArt.NO_DEMAND], not 0.** Round 8 started the merge at zero and took the max, which throws
-        // away every demand on a monitor left of the primary — see [LinkArt.NO_DEMAND].
+        // **[LinkArt.NO_DEMAND], not 0**: a max seeded at zero throws away every demand on a monitor left of
+        // the primary — see [LinkArt.NO_DEMAND].
         val demands = IntArray(joins.size) { LinkArt.NO_DEMAND }
         var room = Int.MAX_VALUE
         var left = Int.MIN_VALUE
@@ -309,7 +288,7 @@ class LinkAlignGroup {
      * caller's own row is excluded by its line, which also makes a link with both ends in one editor work
      * — that node holds two rows for the pair, and each finds the other.
      *
-     * Screen coordinates for the reason [channelXFor] uses them: two editors in a nest share no origin.
+     * Screen coordinates for the reason [axesFor] uses them: two editors in a nest share no origin.
      */
     fun partnerScreenY(caller: SpotlightRenderer, pairId: Int, callerLine: Int): Int? {
         for (m in members) {
@@ -321,13 +300,9 @@ class LinkAlignGroup {
 }
 
 /**
- * The editor "spotlight" **drawing** stack — "given an [Editor], a segment and which of its highlights is
- * active, draw it". Originally the back half of `EditorHighlighter`; split out in Phase 1a of
- * `TreeOfCode.rules.md` so the tree-of-code node views can drive the same decorations without going through the
- * walkthrough listener, which resolves files and opens tabs. That listener is now [TreePlanController], and
- * the split still holds: nothing here resolves a file, creates an editor or touches a thread — the
- * controller does the file resolution and the thread marshalling, and each node view creates its own
- * editor.
+ * The editor "spotlight" **drawing** stack — "given an [Editor] and a step, draw it". Nothing here resolves a
+ * file, creates an editor or touches a thread: [TreePlanController] does the file resolution and the thread
+ * marshalling, and each node view creates its own editor.
  *
  * A port of code-explainer's `vscode-extension/src/highlight.ts`. Reproduces the four VS Code
  * `TextEditorDecorationType` layers with IntelliJ [RangeHighlighter]s:
@@ -340,15 +315,14 @@ class LinkAlignGroup {
  * | `gapDecoration` (opacity 0.55 + dotted gold left border)     | 55 % foreground + gold gutter bar |
  *
  * Two decorations have no upstream counterpart: a **docked callout** — a block [Inlay] above the active
- * lines carrying the highlight's own prose aside (`note`, else the short `explanation` label) and its
- * one-line worked `example`; and **relations** ([Segment.relations]) — a drawn arrow between two lines of
- * this file, or one half of a [LinkHalf] link when the other end is somewhere this editor cannot point
- * at (the other half is drawn by whoever owns the editor it belongs to).
- * Both are additive and settings-gated; a plan carrying none of those fields renders exactly as before.
+ * lines carrying the step's own prose aside (`note`, else the short `label`) and its one-line worked
+ * `example`; and **relations** ([StepPaint.relations]) — a drawn link between two lines of this file, or one
+ * half of a [LinkHalf] link when the other end is somewhere this editor cannot point at (the other half is
+ * drawn by whoever owns the editor it belongs to). Both are additive: a plan without those fields gets
+ * neither.
  *
- * (A third, a numbered gutter step badge with click-to-replay, was built and then removed — the number
- * duplicated the sidebar's own step list and the click duplicated its outline, so it cost gutter width for
- * nothing. The sidebar remains the only place that answers "which step is this".)
+ * There is deliberately no gutter step badge: the sidebar's step list is the one place that answers "which
+ * step is this".
  *
  * Notes on the mapping: VS Code decorations use CSS `opacity`; IntelliJ has no per-highlighter
  * opacity, so we emulate dimming by overriding the whole-line foreground with a colour blended
@@ -356,12 +330,11 @@ class LinkAlignGroup {
  * "de-emphasise" effect). The gap layer's dotted CSS left-border becomes a gutter [LineMarkerRenderer]
  * bar — the closest native analogue.
  *
- * **One instance per editor, and that is load-bearing rather than tidy.** Phase 0 measured that
- * decorations are per-*editor*, not per-document (`TreeOfCode.rules.md` constraint 2): two editors over one
- * document shared none of our highlighters. So every piece of decoration state — [tracked],
- * [trackedDisposables], the flash pair, and the segment bounds a step render dims around — lives here
- * against the one [editor] this renderer was built for, and a surface showing N editors builds N of these.
- * Sharing one across editors is what the split exists to prevent.
+ * **One instance per editor, and that is load-bearing rather than tidy.** Decorations are per-*editor*, not
+ * per-document: two editors over one document share none of our highlighters. So every piece of decoration
+ * state — [tracked], [trackedDisposables], the flash pair, and the segment bounds a step render dims around —
+ * lives here against the one [editor] this renderer was built for, and a surface showing N editors builds N
+ * of these. Never share one across editors.
  *
  * **EDT only.** Every method below mutates editor state; none of them marshals, because the callers
  * ([TreePlanController]'s `runOnEdt` bodies, and the node views' own EDT construction) are already there.
@@ -418,11 +391,9 @@ class SpotlightRenderer(
      * The step's docked callout, held **outside** [trackedDisposables]'s anonymity so [revealCenter] can ask where it
      * is. Its lifecycle is still that list's; this is a reference, not a second owner.
      *
-     * It exists because of a defect the G1c′ round found in a **capped** node, which is the first place the surface
-     * has had one: *"callout partially hidden (scrolled away under header) in step 1, 2 of ValidationHandler.Handle."*
-     * `ScrollType.CENTER` centres the active *line*, and the callout is an inlay drawn in the rows above it — in a
-     * 9-line viewport there is not half a viewport of room up there, so the box hangs off the top. In a full-size
-     * editor the same code has always had enough slack for it to be invisible.
+     * Needed for a **capped** (scrolling) node: `ScrollType.CENTER` centres the active *line*, and the callout is
+     * an inlay drawn in the rows above it — in a 9-line viewport there is not half a viewport of room up there,
+     * so the box would hang off the top. A full-size editor always has enough slack for this not to show.
      */
     private var calloutInlay: Inlay<*>? = null
 
@@ -455,8 +426,8 @@ class SpotlightRenderer(
     /**
      * The token tints, held as **specifications rather than as highlighters**, because they now change.
      *
-     * *"The tint should ALSO become bit brighter on link-hover — this way it will visually stand out on hover
-     * as a complete system."* A `RangeHighlighter`'s attributes are set when it is added, so re-tinting means
+     * The tint brightens on link-hover so the whole link stands out as one system. A `RangeHighlighter`'s
+     * attributes are set when it is added, so re-tinting means
      * dropping these and adding them again ([applyTints]) — a handful of markup-model calls on a mouse move
      * across a link, against the alternative of casting to `RangeHighlighterEx` for a setter the public
      * interface does not carry.
@@ -516,8 +487,7 @@ class SpotlightRenderer(
 
     /**
      * One half resolved to document **offsets**. Pixels are deliberately not stored: `offsetToXY` at paint
-     * time is what lets a portal track its token through scrolling, folding and a font change for free —
-     * the same trade the arrow this replaced made.
+     * time is what lets a portal track its token through scrolling, folding and a font change for free.
      *
      * [tokenStart] == [tokenEnd] means the token did not resolve, so there is nothing to tint and the
      * connector leaves from the end of the row's text instead.
@@ -539,9 +509,9 @@ class SpotlightRenderer(
         /**
          * **Does this end take a rail off its row at all?**
          *
-         * Every form does except the one round 7 took off it: a same-editor line-end link stays on the row's
-         * middle from the text end to its lane (*"just turn to target"*). Ends that take no rail contend for
-         * nothing, so they neither consume a fan index nor make their row ask for space.
+         * Every form does except one: a same-editor line-end link stays on the row's middle from the text end
+         * to its lane. Ends that take no rail contend for nothing, so they neither consume a fan index nor
+         * make their row ask for space.
          */
         val takesRail: Boolean
             get() = !(anchor == LinkAnchor.LINE_END && half.join == LinkJoin.LINE)
@@ -558,22 +528,17 @@ class SpotlightRenderer(
             get() = if (tokenEnd > tokenStart) LinkAnchor.TOKEN else LinkAnchor.LINE_END
     }
 
-    // ── Render API (EDT only) — mirrors highlight.ts ──
+    // ── Render API (EDT only) ──
 
     /**
      * **The general render, and the one implementation.** Draw [paint] in this editor: dim outside its
      * bounds, de-emphasise its kept context lines, gap the rest, glow its active ranges, dock the callout,
      * draw the relations that belong to it, and reveal it.
      *
-     * This is Phase 2's half of the 1a split, and since round 3 it is the **only** entry point. The renderer's
-     * API was `Segment`/`Highlight`-shaped because that was the only vocabulary that existed; the tree needs
-     * *(line ranges, roles, palette)* and nothing else, and writing that signature before the schema existed
-     * would have meant inventing the schema twice. The `Segment`-shaped adapters over this body
-     * (`spotlightSegment`, `setSegmentBounds`, `spotlightStep`) were deleted with the in-place surface that
-     * was their last caller — so a step is drawn one way now, not two.
+     * The **only** entry point for drawing a step.
      *
      * Returns false — having drawn nothing — when [paint] has no active range, so an empty step leaves
-     * whatever is on screen standing, exactly as an out-of-range highlight index used to.
+     * whatever is on screen standing.
      */
     fun paintStep(paint: StepPaint): Boolean {
         if (paint.active.isEmpty()) return false
@@ -633,8 +598,7 @@ class SpotlightRenderer(
 
         // Walk the effective range, coalescing consecutive same-role lines and skipping the active ones.
         // Kept-but-not-active is context (`segmentDim`); anything else inside the extent is a gap, which is
-        // what the gutter bar marks. This is where a role earns its place: before the schema, "kept" could
-        // only be inferred from the other steps' own ranges.
+        // what the gutter bar marks.
         var i = effStart
         while (i <= effEnd) {
             if (i in activeLines) { i++; continue }
@@ -652,7 +616,7 @@ class SpotlightRenderer(
         // glowing the span between them would light code the plan did not name.
         for (r in active) addLineRange(r.first, r.last, c.active)
 
-        // B3/A4 relations touching this step, resolved against the open document and already split into the
+        // Relations touching this step, resolved against the open document and already split into the
         // two pictures the editor can actually draw. Resolved BEFORE the callout because the pointer form is
         // a line *inside* that box — so both halves of the inside/outside decision are made in one place.
         val primary = active.first()
@@ -660,32 +624,25 @@ class SpotlightRenderer(
 
         // Docked callout above the active lines. Added BEFORE revealCenter deliberately: the inlay adds
         // height above the first active line, so scrolling first would leave the block off-centre.
-        //
-        // Unconditional since the K1 round: a step with nothing to say already renders no box, so the switch
-        // that used to stand here only ever hid a step that *did*. `calloutBlocks` returning empty is the
-        // real gate, and it is a fact about the plan rather than a preference.
+        // `calloutBlocks` returning empty is the gate: a step with nothing to say renders no box.
         addCallout(
             primary.first, primary.last, calloutBlocks(paint, rel.pointers, c), c,
             linkReserve(rel.links, c),
         )
 
         // **Every** link this step wants, published for the tree to number and pair — including the ones
-        // whose two ends are both in this document, which used to be drawn right here by a renderer of their
-        // own. That is round 6's unification, and it is the reason an in-file link and a portal on one step
-        // can no longer collide on a colour or a column: there is one allocator, it is the tree's, and it
-        // sees every editor on screen. See [LinkRequest].
+        // whose two ends are both in this document. See [LinkRequest].
         linkReqs = rel.links
 
         revealCenter(activeStart, activeEnd)
 
         // The flash deliberately does NOT ride this render. Measured, it would fire 1.8–6.0 s before the
-        // first audio byte and be over long before the sentence discussing the token is spoken
-        // (MoreUI.md §2.8) — so with narration engaged it waits for [flashToken]. Only when no audio
-        // will ever arrive is this render the cue.
+        // first audio byte and be over long before the sentence discussing the token is spoken — so with
+        // narration engaged it waits for [flashToken]. Only when no audio will ever arrive is this render
+        // the cue.
         if (flashOnRender()) {
-            // One line when the beat names one, the whole active extent when it does not — the legacy
-            // shape, and the reason a token in a step's *second* range used to resolve to nothing
-            // (`primary` is the first range only).
+            // One line when the beat names one, the whole active extent when it does not — not `primary`,
+            // which is the first range only and would miss a token in a step's second range.
             val lo = if (paint.tokenLine > 0) (paint.tokenLine - 1).coerceIn(0, lastLine) else activeStart
             val hi = if (paint.tokenLine > 0) lo else activeEnd
             startTokenFlash(paint.token, paint.occurrence, lo, hi, c)
@@ -715,15 +672,14 @@ class SpotlightRenderer(
      * **Where a portal's click lands**: the caret on the target's own token, and the smallest scroll that
      * makes it visible.
      *
-     * Three things this does that [reveal] did not, each one a reported complaint:
+     * Three ways this differs from [reveal]:
      *
-     * - **The caret goes to the token, not the row's start.** [reveal] moved it to column 0, which for a
-     *   relation naming `InvokeOn` on a 90-character line is not where the reader was sent.
-     * - **`MAKE_VISIBLE`, not `CENTER`.** *"Clicking eg. source portal rescrolls target portal's view to
-     *   center on it, even though the portal was visible and rescroll was not required."* A click follows a link
-     *   the reader could already see; re-centring throws away the position they were reading from.
+     * - **The caret goes to the token, not the row's start** — for a relation naming `InvokeOn` on a
+     *   90-character line, column 0 is not where the reader was sent.
+     * - **`MAKE_VISIBLE`, not `CENTER`.** A click follows a link the reader could often already see;
+     *   re-centring would throw away the position they were reading from.
      * - **It asks for focus.** A node editor is created with `setCaretVisible(false)` and turns the caret on
-     *   when focused, so a caret moved without focus lands invisibly — the click looked like it did nothing.
+     *   when focused, so a caret moved without focus lands invisibly and the click looks like it did nothing.
      *
      * Returns false when [line] is outside the document, so the caller can fall back to opening a tab. A
      * token that does not resolve is *not* a failure: the caret goes to the row's start, which is still the
@@ -755,7 +711,7 @@ class SpotlightRenderer(
         return Rectangle(0, top, 1, editor.lineHeight)
     }
 
-    // ── B3: links ──
+    // ── Links ──
 
     /**
      * **Every** link the last [paintStep] resolved, for the tree to number and pair. Empty for a node
@@ -768,13 +724,11 @@ class SpotlightRenderer(
      *
      * Called by the surface that owns the tree, **after** every node has been painted or cleared: a far
      * end belongs to whichever node owns the other one, which the step may not touch at all, and [clear]
-     * drops links along with everything else. Since round 6 that is true of **same-editor** links too, which
-     * used to be drawn inside [paintStep] — see [LinkRequest] for why they moved.
+     * drops links along with everything else. That includes **same-editor** links — see [LinkRequest].
      *
-     * One or two range highlighters per end, and **no inlay** — which is the whole difference from the chip
-     * this replaced. An inlay occupies layout, so a chip moved the row's code sideways and fired the node's
-     * `InlayModel.Listener` on every step; a highlighter with a [CustomHighlighterRenderer] draws in the
-     * margin the code already leaves and costs the node no geometry at all.
+     * One or two range highlighters per end, and **no inlay**: an inlay occupies layout, so it would move the
+     * row's code sideways and fire the node's `InlayModel.Listener` on every step; a highlighter with a
+     * [CustomHighlighterRenderer] draws in the margin the code already leaves and costs the node no geometry.
      *
      * **A [LinkJoin.LINE] pair gets one highlighter spanning both its rows**, because it is one polyline and
      * a renderer that could see only one end could not know where to stop. Everything else gets one per end.
@@ -796,8 +750,8 @@ class SpotlightRenderer(
         for (h in halves) {
             if (h.line < 0 || h.line > lastLine) continue
             val lineEnd = trimmedLineEnd(doc, h.line)
-            // **The one link case Phase 2 left unverified: an end on a line the reader folded away.**
-            // Skipped here, and counted, so the tree can say so — see [droppedEnds] and the degrade below.
+            // **An end on a line the reader folded away** is skipped here, and counted, so the tree can say
+            // so — see [droppedEnds] and the degrade below.
             if (editor.foldingModel.getCollapsedRegionAtOffset(doc.getLineStartOffset(h.line)) != null) {
                 droppedEnds++
                 continue
@@ -811,10 +765,9 @@ class SpotlightRenderer(
         linkRows = rows
 
         // **The lane's own colour if the reader set one, the derived hue otherwise** — see
-        // [ArrowStyle.slotColors]. The fallback is what keeps the default picture exactly as judged: blank
-        // slots mean `LinkArt.color(accent, lane)` answers, so slot 0 is the accent and the rest rotate off
-        // it. One colour per slot rather than one base for all five, because a hue that reads badly against
-        // a particular theme is a slot's problem, not the rotation's.
+        // [ArrowStyle.slotColors]. Blank slots mean `LinkArt.color(accent, lane)` answers, so slot 0 is the
+        // accent and the rest rotate off it. One colour per slot rather than one base for all five, because a
+        // hue that reads badly against a particular theme is a slot's problem, not the rotation's.
         for (group in rows.groupBy { it.half.pairId }.values) {
             val color = c.arrow.colorFor(group.first().half.lane)
             for (row in group) {
@@ -853,8 +806,7 @@ class SpotlightRenderer(
     /**
      * **A same-editor link that lost one of its two ends to a fold becomes a lone approach.**
      *
-     * `Item 1′` named folding as the one link case never verified, and this is the failure it was pointing
-     * at. A [LinkJoin.LINE] pair is *one drawing over two rows* — a polyline that leaves one row, turns down
+     * A [LinkJoin.LINE] pair is *one drawing over two rows* — a polyline that leaves one row, turns down
      * its lane and arrives at the other. Fold the far row away and the survivor is still asked to draw a
      * line to it: a leg heading off toward a row that is not on screen, which reads as a rendering fault
      * rather than as information.
@@ -889,8 +841,7 @@ class SpotlightRenderer(
     /**
      * Ends this editor was given that landed on a folded line, for the step's log. Reset per [paintLinks].
      *
-     * The instrument `Item 1′` asked for: `D of A end(s) drawn` is what says an end was lost, and a number
-     * beside it is what says *why*.
+     * `D of A end(s) drawn` says an end was lost; this number beside it says *why*.
      */
     var droppedEnds: Int = 0
         private set
@@ -937,15 +888,12 @@ class SpotlightRenderer(
     /**
      * **Buy the rows their fan needs**, as blank space above or below the rows that actually carry rails.
      *
-     * *"We need to add space above/below the line to make space for routes … link lines go over the callout
-     * above … link going to line 27 seems to target line 26 above."* Fan 0 sits in the row's own leading and
-     * costs nothing; every rail past it is [LinkArt.railStep] further out, and the outermost of five is
-     * squarely inside the neighbouring row. Round 6 borrowed that space. This buys it.
+     * Fan 0 sits in the row's own leading and costs nothing; every rail past it is [LinkArt.railStep] further
+     * out, and the outermost of five is squarely inside the neighbouring row — where it would run over a
+     * callout or appear to target the wrong line. So the room is bought, not borrowed.
      *
-     * **On demand, which is the form the reader hoped for** (*"maybe we should calculate how many lines are
-     * actually going over/below a given text-line and push upper/lower only on demand"*): the height is
-     * [LinkArt.railSpace] of the rails *that row* carries *on that side*, so the common one-link row asks for
-     * nothing at all and only the fanned rows grow.
+     * **On demand:** the height is [LinkArt.railSpace] of the rails *that row* carries *on that side*, so the
+     * common one-link row asks for nothing at all and only the fanned rows grow.
      *
      * Two mechanisms, and the split avoids a question rather than answering it:
      *
@@ -1091,8 +1039,7 @@ class SpotlightRenderer(
         hoveredPair = pairId
         if (pairId == null) hoveredRow = null
         // The token tints move with the link, so hovering either end brightens **four** things: this end's
-        // token, its connector, the far connector and the far token. That is round 7's item 12 — *"it will
-        // visually stand out on hover as a complete system"* — and it is why the tint is re-applied here
+        // token, its connector, the far connector and the far token. That is why the tint is re-applied here
         // rather than only where the mouse is.
         if (had || has) {
             applyTints()
@@ -1108,16 +1055,17 @@ class SpotlightRenderer(
      *
      * **A [LinkJoin.LINE] pair demands room for every row it spans**, not merely its two ends, because its
      * leg runs down past all of them — and for the widest **block inlay** crossing that span, which is
-     * usually our own callout box. That was the old arrow renderer's rule and it is still the right one: a
-     * block inlay is painted in a *later* pass than a custom highlighter renderer, so no [HighlighterLayer]
-     * can lift a leg above the box (MoreUI.md §2.9) and it has to be routed clear of it instead.
+     * usually our own callout box. A block inlay is painted in a *later* pass than a custom highlighter
+     * renderer, so no [HighlighterLayer] can lift a leg above the box and it has to be routed clear of it
+     * instead.
      *
-     * **Unless it cannot be cleared at all** ([LinkArt.obstructionClearable], K5). A nested code node is an
+     * **Unless it cannot be cleared at all** ([LinkArt.obstructionClearable]). A nested code node is an
      * inlay as wide as the editor, and a demand to get past it is a demand that cannot be met.
      *
-     * **One entry per lane, and each answers only for its own link** — round 8's fix for the trimmed label.
-     * A lane this editor holds no row for gets [LinkArt.NO_DEMAND], meaning "no demand from here", which
-     * is exactly right: the other end's node will have one, and the group takes the max.
+     * **One entry per lane, and each answers only for its own link**, so a short link is not pushed out past
+     * a long one's code (which would leave its label no room). A lane this editor holds no row for gets
+     * [LinkArt.NO_DEMAND], meaning "no demand from here": the other end's node will have one, and the group
+     * takes the max.
      */
     private fun laneDemands(): IntArray {
         val joins = linkLaneLayout() ?: return IntArray(0)
@@ -1147,8 +1095,8 @@ class SpotlightRenderer(
             // of its own — on a screen basis that would be a floor 2 300 px right of the code.
             //
             // And an inlay the fan cannot get past may not move it either: see
-            // [LinkArt.obstructionClearable]. A nested node is as wide as the editor, so clearing it is not
-            // a thing that can be done — K5's far-right routing was the lane trying anyway.
+            // [LinkArt.obstructionClearable]. A nested node is as wide as the editor, so trying to clear it
+            // would only pin the lane against the far right.
             val inlay = inlayRight(first, last)
             if (inlay > 0 &&
                 LinkArt.obstructionClearable(inlay + gap, joins, editor.lineHeight, channelRoom())
@@ -1171,10 +1119,9 @@ class SpotlightRenderer(
      * callout, and anyone else's. Zero when none does, which includes every pair of rows with nothing
      * between them at all.
      *
-     * The band is [LinkArt.crossesRowGap]'s, and it is the round-9 fix: a leg travels from one row's rail to
-     * the other's, so what can obstruct it is what sits *between* them. An inlay docked under the lower row —
-     * a nested child node, most of the time — is not on its way, and counting it routed the lane out past a
-     * whole editor's width for nothing.
+     * The band is [LinkArt.crossesRowGap]'s: a leg travels from one row's rail to the other's, so what can
+     * obstruct it is what sits *between* them. An inlay docked under the lower row — a nested child node, most
+     * of the time — is not on its way, and counting it would route the lane out past a whole editor's width.
      *
      * A null `bounds` means the inlay is folded away and cannot collide.
      */
@@ -1286,9 +1233,8 @@ class SpotlightRenderer(
      * screen; this editor's own packing otherwise. Both go through [LinkArt.alignedLaneAxes], so the
      * fallback differs from the shared answer only in *whose* demands it was given — never in the rules.
      *
-     * Null when the fan is wider than the viewport itself, and the caller draws nothing. Round 6 fell back
-     * to the right edge and let the lanes pile up there; a pile of five links on one column is what round 7
-     * removed, so it is not a fallback any more.
+     * Null when the fan is wider than the viewport itself, and the caller draws nothing — piling the lanes
+     * up against the right edge would put five links on one column.
      */
     private fun linkLaneAxes(): IntArray? {
         if (linkRows.isEmpty() || editor.isDisposed) return null
@@ -1327,14 +1273,10 @@ class SpotlightRenderer(
     /**
      * **The axis one lane's vertical is drawn on** — [base] plus that lane's offset in the step's layout.
      *
-     * No clamp of its own, and that is the round-7 change that matters: [linkLaneAxes] already guarantees
-     * the *whole* fan fits, so an individual lane can never need saving. Round 6 clamped per lane, which is
-     * precisely how five lanes ended up on one column — each of them legally, one at a time.
-     *
-     * Round 8 moved the arithmetic itself into [LinkArt.alignedLaneAxes], because a lane's x is no longer a
-     * fixed offset from a base: it is what the packing made of that lane's own demand. What is left here is
-     * the lookup, and the clamp on [LinkHalf.lane] that keeps a half from a previous step's layout from
-     * indexing past the current one.
+     * No clamp of its own: [linkLaneAxes] already guarantees the *whole* fan fits, and clamping per lane would
+     * pile lanes onto one column — each of them legally, one at a time. The arithmetic lives in
+     * [LinkArt.alignedLaneAxes]; what is left here is the lookup, and the clamp on [LinkHalf.lane] that keeps
+     * a half from a previous step's layout from indexing past the current one.
      */
     private fun axisXOf(row: LinkRow, axes: IntArray?): Int {
         if (axes == null || axes.isEmpty()) return -1
@@ -1347,13 +1289,12 @@ class SpotlightRenderer(
      *
      * Per row rather than per step, and for the railed ends per *side* as well, which is what makes the
      * space [reserveLinkSpace] buys proportional to
-     * what a row carries: `link-fan.json`'s five links leave one row on fans 0-4 and arrive on five rows at
-     * fan 0 each, so one row grows by 13 px and five rows grow by nothing. Round 6 used the step-wide number
-     * for this and made every one of those five rows reserve the worst case.
+     * what a row carries: five links leaving one row use fans 0-4 and arrive on five rows at fan 0 each, so
+     * one row grows by 13 px and five rows grow by nothing.
      *
-     * **Ordered by the column each end turns up, not by its lane**, which round 8 had to separate: the
-     * packing now fills columns in demand order ([LinkArt.laneAxes]), so the innermost lane and the
-     * innermost column are no longer the same end. Ordering by column keeps what the order is *for* — the
+     * **Ordered by the column each end turns up, not by its lane**: the packing fills columns in demand order
+     * ([LinkArt.laneAxes]), so the innermost lane and the innermost column need not be the same end.
+     * Ordering by column keeps what the order is *for* — the
      * end that turns first is the one that stayed nearest the code, so two rails leaving one row never
      * cross — and the lane is only the tie-break, for two ends that somehow share a column.
      */
@@ -1365,8 +1306,8 @@ class SpotlightRenderer(
             // **Two fans on one row, counted apart.** A railed end contends only with the railed ends
             // leaving on its own side, because that is what shares a rail. A same-editor line end takes no
             // rail at all and contends with every other one on the row whichever way it goes, because they
-            // all run along the row's own middle — round 8's *"horizontal lines from line ending center
-            // overlap"*. [LinkArt.shape] reads the same number two ways for exactly that reason.
+            // all run along the row's own middle and would otherwise overlap. [LinkArt.shape] reads the same
+            // number two ways for exactly that reason.
             if (other.takesRail != row.takesRail) continue
             if (row.takesRail && other.side != row.side) continue
             val theirs = axisXOf(other, axes)
@@ -1403,10 +1344,9 @@ class SpotlightRenderer(
             join = row.half.join,
             lane = row.half.lane,
             fan = fanOf(row, axes),
-            // **No stub for a token anchor, and that was round 5's reported gap.** The 3 px the in-file arrow
-            // used keeps a leg off the glyph it starts beside; a token end starts at the corner of a *tinted
-            // token* it is meant to look attached to, so the same 3 px read as the line coming loose. A line
-            // end still gets them, and [LinkShape.inkX] is where that split lives.
+            // **No stub for a token anchor.** A line end's 3 px stub keeps a leg off the glyph it starts
+            // beside; a token end starts at the corner of a *tinted token* it is meant to look attached to,
+            // so the same 3 px would read as the line coming loose. [LinkShape.inkX] is where that split lives.
             startX = p.x,
             textEndX = editor.offsetToXY(trimmedLineEnd(doc, row.half.line)).x,
             rowMid = p.y + editor.lineHeight / 2,
@@ -1486,9 +1426,9 @@ class SpotlightRenderer(
 
             /**
              * **Put the link out when the pointer leaves the editor.** `mouseMoved` is the only other thing
-             * that clears a hover, and it cannot fire for a pointer that has left — so a link lit on the way
-             * out stayed lit, in every node, until the reader came back or the step changed. Round 7 made
-             * that more visible rather than less: the hover now brightens the token tints too.
+             * that clears a hover, and it cannot fire for a pointer that has left — so without this a link lit
+             * on the way out would stay lit, tints included, in every node, until the reader came back or the
+             * step changed.
              *
              * Guarded on [hoveredRow], which only this editor's own `mouseMoved` sets, so a node that was not
              * the one hovering cannot put out a link some other node has just lit.
@@ -1607,8 +1547,8 @@ class SpotlightRenderer(
         }
 
         /**
-         * The link's own words, beside the hovered end — the reader's *"the label text for the portal links
-         * could be visible near the portal"*, on hover for the reason [LinkArt.paintLabel] gives.
+         * The link's own words, beside the hovered end — on hover only, for the reason [LinkArt.paintLabel]
+         * gives.
          *
          * Gated on the existing `arrowLabels` setting, because it is the same question that setting has
          * always answered: whether a relation's note is drawn on the picture or left to the callout box.
@@ -1638,8 +1578,7 @@ class SpotlightRenderer(
      * The callout's paragraphs for this step, in reading order: the prose aside, then the worked example
      * directly above the code it illustrates, then one line per off-target relation ([pointers]) —
      * nearest-to-the-code last, so the box reads top-down from "what this is" to "where it goes". All three
-     * are optional, and an empty list means no inlay at all — which is what keeps a bare plan looking
-     * exactly as it does today.
+     * are optional, and an empty list means no inlay at all, so a bare plan draws no box.
      *
      * The prose line prefers the sentence-length [StepPaint.note] when the agent wrote one; the terse
      * [StepPaint.label] is the fallback (it reads thin in a box, hence the preference).
@@ -1662,10 +1601,9 @@ class SpotlightRenderer(
     }
 
     /**
-     * Add the A2 block-inlay callout carrying [blocks] — above [firstLine] of the active range, or below
-     * [lastLine] when `calloutBelow` is set. An empty list renders nothing, which is what keeps a bare plan
-     * looking exactly as it does today. The [Inlay] is a [Disposable] the markup model does not own, so it
-     * goes in [trackedDisposables].
+     * Add the block-inlay callout carrying [blocks] — above [firstLine] of the active range, or below
+     * [lastLine] when `calloutBelow` is set. An empty list renders nothing. The [Inlay] is a [Disposable] the
+     * markup model does not own, so it goes in [trackedDisposables].
      */
     private fun addCallout(
         firstLine: Int,
@@ -1702,10 +1640,10 @@ class SpotlightRenderer(
     /**
      * Horizontal strip the step's arrows need to the right of the callout box.
      *
-     * A link routes its leg clear of the box because it cannot paint above it
-     * (MoreUI.md §2.9), but a box wrapped to the full viewport leaves nowhere to route *to* — the channel
-     * clamps back onto it. So the box gives the arrows room up front, and only when the step actually has
-     * arrows: a walkthrough with no relations (most of them) wraps exactly as wide as it did before.
+     * A link routes its leg clear of the box because it cannot paint above it, but a box wrapped to the full
+     * viewport leaves nowhere to route *to* — the channel clamps back onto it. So the box gives the arrows
+     * room up front, and only when the step actually has arrows: a step with no relations (most of them)
+     * wraps to the full width.
      *
      * Label room is included only if some arrow carries a label, since that is drawn right of the channel
      * again. [CalloutRenderer] floors its text width, so an editor too narrow to honour this loses the
@@ -1719,8 +1657,7 @@ class SpotlightRenderer(
         if (links.isEmpty()) return 0
         // The hovered weight, not the resting one: the reserve has to hold the widest the ink ever gets, or
         // pointing at a link would push it into the box the reserve exists to keep clear. `ceil`, because a
-        // stroke is a fraction of a px and the old `toInt()` truncated a 1.4 px line to 1 — which is how a
-        // knob that did nothing still managed to be slightly wrong.
+        // stroke is a fraction of a px and truncating would reserve 1 px for a 1.4 px line.
         val ink = kotlin.math.ceil(c.arrow.metrics.hoverStroke).toInt()
         return LinkArt.channelGap() + ink + LinkArt.lineEndStub()
     }
@@ -1745,31 +1682,18 @@ class SpotlightRenderer(
         0
     }
 
-    // ── B3/A4: relations ──
+    // ── Relations ──
 
     /** What a step's relations resolve to — see [resolveRelations]. */
     private class ResolvedRelations(val links: List<LinkRequest>, val pointers: List<PointerSpec>)
 
-    /**
-     * A relation the editor can't draw: it hangs off [line] and names [target] in words instead.
-     *
-     * [origin] is the end that *is* in this step and [note] the relation's own phrase. Both are carried for
-     * the portal pair, which has to label the far half and cannot re-derive either from [text] - that
-     * string is already a formatted sentence about the *near* end's target.
-     */
-    private class PointerSpec(
-        val line: Int,
-        val text: String,
-        val target: Endpoint,
-        val incoming: Boolean,
-        val origin: Endpoint,
-        val note: String?,
-    )
+    /** A relation that leaves the file, named in words as one line of the callout: see [pointerText]. */
+    private class PointerSpec(val text: String)
 
     /**
      * Turn the relations belonging to this step into links, and prose for the ones that leave the file.
      *
-     * Two decisions live here, and both are the plugin's rather than the agent's (MoreUI.md §4.3 B3):
+     * Two decisions live here, and both are the plugin's rather than the agent's:
      *
      * - **Which relations belong to this step.** Only those with an endpoint inside [active]. `relations`
      *   is a segment-level list, so drawing all of it at once would put every link in the segment on screen
@@ -1779,18 +1703,13 @@ class SpotlightRenderer(
      *   document does not have, endpoints 200 rows apart — is reported as non-local and becomes a portal at
      *   each end if the tree can find the far one, which is [LinkJoin]'s whole content.
      *
-     * **What round 6 removed from here.** This used to *decide the picture*: a local relation became an
-     * `ArrowSpec` drawn on the spot by a second renderer, everything else a line of prose. So the two forms
-     * shared nothing — an in-file arrow had one colour for the whole step, no hover and a channel of its own,
-     * while a portal had a palette, a hover relay and a shared column. Both are one report now and the
-     * difference between them is one boolean. The prose survives **only** for a link that leaves the file,
-     * because that is the one case where the callout is the only place the link's words can live.
+     * Both forms are one report; the difference between them is one boolean. A line of callout prose is added
+     * **only** for a link that leaves the file, because that is the one case where the callout is the only
+     * place the link's words can live.
      *
-     * A wrong `token` no longer condemns an endpoint, and that is a deliberate reversal. The old rule existed
-     * because a *wrong arrow* — confidently joining two unrelated lines — is worse than no arrow; but the
-     * line number is what decides where a link is drawn, and the token only decides whether this end tints an
-     * identifier or hangs off the row's text end ([LinkAnchor]). A token that is not where the agent said now
-     * costs the tint and nothing else.
+     * A wrong `token` does not condemn an endpoint: the line number decides where a link is drawn, and the
+     * token only decides whether this end tints an identifier or hangs off the row's text end ([LinkAnchor]).
+     * A token that is not where the agent said costs the tint and nothing else.
      */
     private fun resolveRelations(
         relations: List<Relation>,
@@ -1842,14 +1761,7 @@ class SpotlightRenderer(
             // A link that leaves the file keeps its line of prose: the far half may not exist at all, and
             // then the box is the only thing that names where it went.
             val text = pointerText(there, label, incoming = !fromHere, mutual = mutual) ?: continue
-            pointers += PointerSpec(
-                line = hereLine,
-                text = text,
-                target = there,
-                incoming = !fromHere,
-                origin = here,
-                note = label,
-            )
+            pointers += PointerSpec(text)
         }
         if (dropped > 0 && log.isDebugEnabled) {
             log.debug("$dropped relation(s) past the cap of $MAX_RELATIONS_PER_STEP per step not drawn")
@@ -1861,7 +1773,7 @@ class SpotlightRenderer(
      * [ep]'s 0-based line **if it names a line of this document**, else null.
      *
      * The [LinkJoin] test, and all of it: a link is drawn as a line when both of its ends come back non-null
-     * from here. Unlike the [anchor] it replaced it says nothing about tokens — see [resolveRelations].
+     * from here (and are near enough). It says nothing about tokens — see [resolveRelations].
      */
     private fun place(ep: Endpoint, segmentFile: String, lastLine: Int): Int? {
         if (ep.line <= 0 || ep.line - 1 > lastLine) return null
@@ -1909,7 +1821,7 @@ class SpotlightRenderer(
         }
     }
 
-    // ── A3: token flash ──
+    // ── Token flash ──
 
     /**
      * Pulse the identifier named by [hl]'s `token` anchor, fading it from the accent colour into the active
@@ -2099,9 +2011,8 @@ class SpotlightRenderer(
     /**
      * The docked callout's height in pixels, or 0 when this step has none.
      *
-     * Exposed because a node embedded in another node has to **reserve room for it** — the G1c″ round reversed §1a⁵ 4
-     * on exactly this point. The number is not derivable from the outside: it is whatever [CalloutRenderer] wrapped
-     * to at the current width, which is constraint 9's coupling, and only the inlay knows the answer.
+     * Exposed because a node embedded in another node has to **reserve room for it**. The number is not derivable
+     * from the outside: it is whatever [CalloutRenderer] wrapped to at the current width, and only the inlay knows.
      */
     fun calloutHeight(): Int {
         val inlay = calloutInlay ?: return 0
@@ -2112,10 +2023,9 @@ class SpotlightRenderer(
      * **What this step is about, as one rectangle in the editor's content coordinates**: the active rows *and* the
      * docked callout, unioned — or null when nothing is drawn.
      *
-     * The reason it is a union rather than the active line: the G1c″ round found that a step in a nested node
-     * scrolled *that* node correctly and left the whole node out of the ancestors' view. Fixing that means the
-     * ancestors scroll to a band, and the band has to be the thing the reader is meant to read — a callout docked
-     * above the active line is half of it, and it is the half that goes missing first because it is the topmost.
+     * A union rather than the active line because a step in a nested node must also be scrolled into the
+     * *ancestors'* view, and the band they scroll to has to be the thing the reader is meant to read — a callout
+     * docked above the active line is half of it, and the half that goes missing first because it is the topmost.
      *
      * `x`/`width` are deliberately degenerate: every caller only scrolls vertically, and the box's own x is the code's
      * indent, which is not a horizontal scroll target.
@@ -2141,8 +2051,7 @@ class SpotlightRenderer(
     /**
      * **Re-run the current step's reveal**, for a viewport that did not exist when the step was rendered.
      *
-     * The G1c‴ round's finding 9: *"stepping into collapsed node expands it, but places callout partially hidden
-     * (scrolled out) from top side."* [revealCenter] runs when the step is rendered, and a step can land in a node that
+     * [revealCenter] runs when the step is rendered, and a step can land in a node that
      * is **collapsed** at that moment — a component of height 0, whose editor has a zero-height visible area. Both
      * halves of the reveal degrade silently there: `scrollTo` clamps to a scrollable extent of nothing, and
      * [revealCallout]'s own `view.height <= 0` guard returns. Then the nesting expands, the node acquires a viewport,
@@ -2153,9 +2062,8 @@ class SpotlightRenderer(
      * scrolls nowhere. Returns false when there is no step to re-reveal, so a caller can report the difference
      * between "re-revealed" and "nothing to do" rather than assuming.
      *
-     * This is constraint 20 in the reveal: a scroll issued against geometry that is still moving has to be re-armed
-     * by whatever moves it, and an expansion is the most violent mover there is — it takes a viewport from 0 to its
-     * full height in one pass.
+     * The general rule: a scroll issued against geometry that is still moving has to be re-armed by whatever moves
+     * it, and an expansion takes a viewport from 0 to its full height in one pass.
      */
     fun reRevealStep(): Boolean {
         if (editor.isDisposed || activeStart < 0) return false
@@ -2187,12 +2095,10 @@ class SpotlightRenderer(
         val caretLine = zeroStart.coerceIn(0, lastLine)
         editor.caretModel.moveToOffset(doc.getLineStartOffset(caretLine))
         editor.selectionModel.removeSelection()
-        // **A node with nothing to scroll gets no scroll, and that is Phase 3 answering constraint 19's own
-        // question.** A node sized to its content has no viewport smaller than its content — measured in the
-        // 1a⁗ round, where no nested editor had a scrollbar at all — so "reveal the active range in its node"
-        // is not expressible here and the container's reveal of the whole node is what carries it. Saying so
-        // costs one comparison and stops a `CENTER` scroll being issued against a viewport that cannot honour
-        // it, which is the shape of thing that silently degrades and then gets debugged twice.
+        // **A node with nothing to scroll gets no scroll.** A node sized to its content has no viewport smaller
+        // than its content, so "reveal the active range in its node" is not expressible here and the
+        // container's reveal of the whole node carries it. This stops a `CENTER` scroll being issued against a
+        // viewport that cannot honour it.
         if (!scrollable()) {
             if (log.isDebugEnabled) log.debug("render step: node grows to content, reveal is the container's")
             return
@@ -2201,7 +2107,7 @@ class SpotlightRenderer(
         editor.scrollingModel.scrollTo(LogicalPosition(mid, 0), ScrollType.CENTER)
         // After the centring has actually happened, not beside it: `scrollTo` animates unless something disabled it,
         // and a correction issued into a running animation is simply overwritten by its last frame. Registered only
-        // when there is a callout, so a bare plan's reveal is byte-for-byte what it was.
+        // when there is a callout.
         if (calloutInlay != null) {
             editor.scrollingModel.runActionOnScrollingFinished { revealCallout(zeroStart) }
         }
@@ -2225,11 +2131,9 @@ class SpotlightRenderer(
     /**
      * Bring the step's docked callout back into the viewport when centring the active line pushed it out.
      *
-     * **The correction the G1c′ round asked for, and the alternative it is instead of.** §1a⁵ 4 chose to let the
-     * reveal handle the callout rather than have a node reserve room for it — reserving would make a node change
-     * height on every step advance, which is constraint 9's coupling deliberately amplified. The round then found
-     * that the reveal was *not* handling it: `ScrollType.CENTER` knows about the line and not about the inlay above
-     * it. This is that half arriving.
+     * The reveal handles the callout rather than a node reserving room for it, because reserving would make a node
+     * change height on every step advance. `ScrollType.CENTER` knows about the line and not about the inlay above
+     * it, so this is the correction.
      *
      * The box's own edge is what has to be visible, so the measurement is [Inlay.getBounds] rather than a line
      * arithmetic — the inlay's height is whatever [CalloutRenderer] wrapped to at this width, which nothing else
@@ -2244,9 +2148,9 @@ class SpotlightRenderer(
         val view = editor.scrollingModel.visibleArea
         if (view.height <= 0) return
         val sm = editor.scrollingModel
-        // **Never flush with the edge**, which is the G1c‴ round's other half of finding 9 and constraint 20's second
-        // rule: a target placed exactly at the viewport's top crosses it on any later change — and in this surface
-        // there is always a later change (the allowance resize, the box's own re-wrap). The slack is the same margin
+        // **Never flush with the edge**: a target placed exactly at the viewport's top crosses it on any later
+        // change — and in this surface there is always a later change (the allowance resize, the box's own
+        // re-wrap). The slack is the same margin
         // [CodeNodeView.calloutAllowance] already reserves, so the room being scrolled to is room that exists.
         if (box.y - CALLOUT_REVEAL_PAD < view.y) {
             sm.scrollVertically((box.y - CALLOUT_REVEAL_PAD).coerceAtLeast(0))
@@ -2291,8 +2195,7 @@ class SpotlightRenderer(
      * Read the scheme the editor ACTUALLY renders with, not the global one. The two can disagree
      * (per-editor scheme, presentation mode, a light editor scheme under a dark UI theme, timing), and
      * blending our glow/tint against the wrong background is what makes a dark editor wash out to white.
-     * `editor.colorsScheme` is always the colours this editor paints, and both accessors are `@NotNull` —
-     * there was a global-scheme fallback here, which the compiler pointed out could never run.
+     * `editor.colorsScheme` is always the colours this editor paints, and both accessors are `@NotNull`.
      *
      * The *rule* is [palette]; this supplies the two things only a live editor knows.
      */
@@ -2308,8 +2211,7 @@ class SpotlightRenderer(
      * place this step points at ([POINTER], upright, accent-tinted).
      *
      * All three come from `editor.colorsScheme`, i.e. the editor's own **monospace** family, so they share one
-     * metrics contract and one measure/paint path — see MoreUI.md §4.3 B4, where a second renderer was wrongly
-     * expected to be needed for anything but prose.
+     * metrics contract and one measure/paint path.
      */
     internal enum class BlockStyle { PROSE, CODE, POINTER }
 
@@ -2352,24 +2254,17 @@ class SpotlightRenderer(
     )
 
     /**
-     * The relation arrow's look. Held as one object rather than six [Palette] fields because both the
-     * renderer and the right-hand reserve need the whole set — the reserve has to know the stroke it is making room
-     * for, or the leg it clears is not the leg that gets drawn.
-     */
-    /**
      * How a step's links are drawn — the settings half of `LinkArt`, resolved once per render.
      *
-     * Before the K1 round three of these fields were built and never read: the unified link drawing that
-     * replaced the elbow arrow carried its own constants, so the dialog's thickness, arrowhead and square-
-     * elbow rows moved a number into `audioExplainer.xml` and stopped there. [metrics] is that wiring — see
-     * [LinkMetrics], which explains why the numbers are handed to `LinkArt` rather than read by it.
+     * Held as one object because both the renderer and the callout's right-hand reserve need it: the reserve
+     * has to know the stroke it is making room for. See [LinkMetrics] for why the numbers are handed to
+     * `LinkArt` rather than read by it.
      */
     internal class ArrowStyle(
-        /** Base for the derived hue rotation: the accent, exactly as `LinkArt.color` has always taken it. */
+        /** Base for the derived hue rotation: the accent, exactly as `LinkArt.color` takes it. */
         val accent: Color,
         /** Per-slot overrides in slot order; a null entry (or a missing one) means *derive from [accent]*. */
         val slotColors: List<Color?>,
-        val labelColor: Color,
         val metrics: LinkMetrics,
         val labels: Boolean,
     ) {
@@ -2609,25 +2504,6 @@ class SpotlightRenderer(
                 g2.dispose()
             }
         }
-
-        /**
-         * The callout's leader: a speech-bubble tail grown out of the box's near edge toward the line it
-         * annotates. It lives in the [leaderLen] the measure pass reserved, so it is never drawn over code.
-         *
-         * Skewed rather than isosceles — the tip drops straight down from the base's leading corner and the
-         * far edge slants back up to it — so it reads as leaning out of the box toward the code instead of as
-         * a pin holding the box up. It grows out of the box at [LEADER_POS_PERCENT], not at the corner, for
-         * the same reason.
-         *
-         * Two frame-dependent parts, because a tail can only inherit what its box actually paints:
-         * - **Fill** ([panelFrame]): the box's own tinted background, so the tail is one silhouette with it.
-         *   None and Comment paint no panel, so there is no fill to continue and the tail stays open.
-         * - **Border** (every frame but Bar): the two free edges stroked, and the shared edge then redrawn in
-         *   the tint. That shared edge is the whole trick — it erases the box's own outline across the mouth
-         *   of the tail, which is what turns "outlined box with a triangle stuck under it" into one bubble.
-         *   Below full opacity the erase is translucent too, so it thins that edge rather than removing it —
-         *   the same bargain the box's own fill makes with the code it covers.
-         */
     }
 
     companion object {
@@ -2636,9 +2512,8 @@ class SpotlightRenderer(
          * **The face a callout block is drawn in** — the scheme's italic for prose, its plain face otherwise,
          * re-familied to the reader's choice unless the block is code, then scaled.
          *
-         * Shared rather than restated because the settings page had already grown its own copy for the
-         * description sample, and a sample drawn by a *second* transcription of this rule is a sample that
-         * can be wrong about the thing it exists to show. Both callers now ask here.
+         * Shared with the settings page's description sample: a sample drawn by a *second* transcription of
+         * this rule could be wrong about the thing it exists to show.
          */
         internal fun calloutFont(
             scheme: EditorColorsScheme,
@@ -2661,10 +2536,8 @@ class SpotlightRenderer(
         // ── The callout's decoration, in the form a settings preview can ask for ────────────────────
         //
         // `Frame style`, `Tint strength`, `Opacity`, `Corner radius`, `Accent bar width` and `Draw a
-        // leader` are six controls whose whole visible effect is in the two painters below. They were
-        // inside `CalloutRenderer`, reachable only with an `Inlay`; a settings sample would have had to
-        // restate them, which is the drift `parseColor` and the prose-font rule already show the cost of.
-        // Both were pure before the move — `g2`, ints, the style and two colours — so this is a move.
+        // leader` are six controls whose whole visible effect is in the two painters below. They live here,
+        // outside `CalloutRenderer` and free of any `Inlay`, so the settings preview paints with the same code.
 
         /** The accent bar's width — zero for every frame but [FrameStyle.BAR], the only one that has one. */
         internal fun barWidth(style: CalloutStyle): Int =
@@ -2726,7 +2599,25 @@ class SpotlightRenderer(
             }
         }
 
-        /** **The speech-bubble tail** — skewed, not isosceles, and drawn after the frame so its mouth can erase it. */
+        /**
+         * **The callout's leader**: a speech-bubble tail grown out of the box's near edge toward the line it
+         * annotates, drawn after the frame so its mouth can erase it. It lives in the leader height the measure
+         * pass reserved, so it is never drawn over code.
+         *
+         * Skewed rather than isosceles — the tip drops straight down from the base's leading corner and the
+         * far edge slants back up to it — so it reads as leaning out of the box toward the code instead of as
+         * a pin holding the box up. It grows out of the box at [LEADER_POS_PERCENT], not at the corner, for
+         * the same reason.
+         *
+         * Two frame-dependent parts, because a tail can only inherit what its box actually paints:
+         * - **Fill** ([panelFrame]): the box's own tinted background, so the tail is one silhouette with it.
+         *   None and Comment paint no panel, so there is no fill to continue and the tail stays open.
+         * - **Border** (every frame but Bar): the two free edges stroked, and the shared edge then redrawn in
+         *   the tint. That shared edge is the whole trick — it erases the box's own outline across the mouth
+         *   of the tail, which is what turns "outlined box with a triangle stuck under it" into one bubble.
+         *   Below full opacity the erase is translucent too, so it thins that edge rather than removing it —
+         *   the same bargain the box's own fill makes with the code it covers.
+         */
         internal fun drawCalloutLeader(
             g2: Graphics2D,
             x: Int,
@@ -2790,8 +2681,7 @@ class SpotlightRenderer(
          * The state is a parameter rather than a service read for the preview's sake: the Kotlin UI DSL writes
          * `AudioExplainerSettings` only on apply, so a preview that read the service would be one OK behind
          * every spinner. Passing it keeps the blends, the clamps and the tint-then-alpha order in one place
-         * instead of growing a second, nearly-identical copy on the settings page — which is what had already
-         * happened to `parseColor` and to the prose-font rule.
+         * instead of a second, nearly-identical copy on the settings page.
          */
         internal fun palette(
             scheme: EditorColorsScheme,
@@ -2830,9 +2720,9 @@ class SpotlightRenderer(
             // so the box tracks a light/dark switch like every other layer here.
             // Opacity is applied on top of the tint, not instead of it: the tint decides the box's *hue*, the
             // alpha decides how much of what it covers (a clamped arrow leg, a long line of code) still reads
-            // through it. At 100 the colour is opaque, i.e. exactly the box as it was before the setting existed.
+            // through it. At 100 the colour is opaque.
             // A Helper callout is tinted in the same softened key as its glow, for the same reason: one box per
-            // step is what read well, so the second box must be legible without competing.
+            // step reads well, so the second box must be legible without competing.
             val calloutTint = when (role) {
                 FrameRole.PRIMARY -> st.calloutTintPercent / 100.0
                 FrameRole.HELPER -> st.calloutTintPercent / 100.0 * HELPER_GLOW_MIX
@@ -2851,14 +2741,9 @@ class SpotlightRenderer(
                 st.calloutBelow,
                 commentFg(scheme, calloutFg),
             )
-            // **A label follows slot 0**, not the slot it belongs to: only one label is on screen at a time, it
-            // is the hovered link's, and the hover already brightens that link's own ink to say which. Tying the
-            // words to five different colours would repaint the same sentence differently on each hover for no
-            // extra fact. A POINTER block belongs to the callout box and stays on the accent regardless.
             val arrowStyle = ArrowStyle(
                 accent,
                 slotColors(st.arrowSlotColors),
-                blend(LinkArt.color(accent, 0), fg, POINTER_TEXT_ACCENT),
                 LinkArt.metrics(st.arrowThicknessTenths, st.arrowHeadSize, st.arrowSquareElbow),
                 st.arrowLabels,
             )
@@ -2887,10 +2772,6 @@ class SpotlightRenderer(
          * selected but not yet installed*: narration is silently disabled, so no flash. That state also
          * produces no audio at all and prompts the user to finish setup, so a missing pulse is not the
          * complaint they'd have, and it resolves itself once TTS works.
-         *
-         * `private` since round 3: it was `internal` because the in-place listener's `refresh()` needed the
-         * same rule — flash only when the render did not, and two copies of that condition would have been
-         * two places to get it wrong. That listener is gone, and [paintStep] is the only caller left.
          */
         private fun flashOnRender(): Boolean =
             AudioExplainerSettings.getInstance().state.ttsEngine == AudioExplainerSettings.ENGINE_OFF
@@ -2899,19 +2780,17 @@ class SpotlightRenderer(
          * The user's accent colour, for decoration a **node view** owns rather than this renderer:
          * `CodeNodeView`'s active/non-active node cue and its elision rule.
          *
-         * `internal` — unlike [flashOnRender] this one does have callers outside the file (`CodeNodeView`
-         * and `LeaderArt` both tint with it), and it is one rule in one place. `TreeOfCode.rules.md`
-         * constraint 4 is what makes it a rule rather than a preference: `JBColor.namedColor("Focus.color",
-         * …)` rendered dark red in Rider's default scheme and a node tinted with it read as an error band, so
-         * every accent in this plugin comes from settings. A second hex parse with its own fallback in the
-         * tree package would be a second place for that to drift.
+         * `internal` because `CodeNodeView` and `LeaderArt` both tint with it, and it is one rule in one place.
+         * Every accent in this plugin comes from settings: `JBColor.namedColor("Focus.color", …)` renders dark
+         * red in Rider's default scheme, and a node tinted with it reads as an error band. A second hex parse
+         * with its own fallback in the tree package would be a second place for that to drift.
          */
         internal fun accentColor(): Color = parseColor(AudioExplainerSettings.getInstance().state.accentColor)
 
         /** [blend], exposed for the same callers as [accentColor]: a node-level tint must mix toward the bg. */
         internal fun blendToward(a: Color, b: Color, t: Double): Color = blend(a, b, t)
 
-        // ── Token flash (A3) ──
+        // ── Token flash ──
         /** Fade frames. 12 over the default 700 ms is ~58 ms/frame — smooth without being a repaint storm. */
         private const val FLASH_STEPS = 12
 
@@ -2934,17 +2813,17 @@ class SpotlightRenderer(
         /**
          * Slack left between the callout's edge and the viewport's when [revealCallout] scrolls to it.
          *
-         * Constraint 20: a scroll target flush with a viewport edge crosses that edge on any later change, and this
-         * surface always has a later change. Deliberately the same number as `CodeNodeView.CALLOUT_MARGIN`, because
+         * A scroll target flush with a viewport edge crosses that edge on any later change, and this surface always
+         * has a later change. Deliberately the same number as `CodeNodeView.CALLOUT_MARGIN`, because
          * these are the two halves of one arrangement — the node reserves that margin, and the reveal scrolls to the
          * room the node reserved. Two constants with one meaning is how they drift; if this needs to move, move both.
          */
         private const val CALLOUT_REVEAL_PAD = 4
 
         /**
-         * Cap on the B4 `example` block. It is authored as **one** line; 2 is headroom for a long one-liner
+         * Cap on the `example` block. It is authored as **one** line; 2 is headroom for a long one-liner
          * wrapping in a narrow editor, not licence to write two examples. The matching authoring rule lives
-         * in `plan-schema.md` (see MoreUI.md §2.4 — renderer caps ship as authoring rules).
+         * in `plan-schema.md`.
          */
         private const val MAX_EXAMPLE_LINES = 2
 
@@ -2996,17 +2875,12 @@ class SpotlightRenderer(
         /** Right-edge breathing room so a full-width callout never collides with the scrollbar. */
         private const val GUTTER_SLACK = 40
 
-        // ── Relations (B3) / links (A4) ───────────────────────────────────────
+        // ── Relations / links ───────────────────────────────────────
         /**
-         * **Links drawn for one step**, which is the reader's *"support at most 5 simultaneous connections
-         * per step"* and is read off [LinkArt.slots] rather than restated — the cap and the palette have to
-         * be the same number or a step can run out of colours.
-         *
-         * It was 3, on the argument that three relations over a four-line highlight is already busy. Round 6
-         * raised it because the routing changed underneath the argument: three links used to mean three
-         * drawings competing for one channel, and now every link has a rail and a channel of its own. Ships
-         * as an authoring rule in `plan-schema.md` (MoreUI.md §2.4); anything past it is logged at debug and
-         * not drawn.
+         * **Links drawn for one step**, read off [LinkArt.slots] rather than restated — the cap and the palette
+         * have to be the same number or a step can run out of colours. Every link has a rail and a channel of
+         * its own, so five do not compete. Ships as an authoring rule in `plan-schema.md`; anything past it is
+         * logged at debug and not drawn.
          */
         private val MAX_RELATIONS_PER_STEP = LinkArt.slots()
 
@@ -3014,48 +2888,27 @@ class SpotlightRenderer(
          * Line distance beyond which a same-document link is drawn as a **portal at each end** rather than as
          * one line. A leg only reads as a connection when both ends can be seen at once; past a screenful it
          * becomes a line disappearing off the top of the viewport, which says less than a portal does.
-         *
-         * The name is inherited and kept: it is the same number, doing the same job, for the drawing that
-         * replaced the arrow.
          */
         private const val MAX_ARROW_SPAN = 40
-
-        /** Elbow corner radius when the corners aren't squared off by `arrowSquareElbow`. */
 
         /** Fraction of the accent mixed into the scheme foreground for pointer text and link labels. */
         private const val POINTER_TEXT_ACCENT = 0.45
 
-        // ── The drawn link (A4) ──
+        // ── The drawn link ──
         /**
-         * Where a half's connector leaves its token, **chosen off the bench's PNGs** rather than argued.
-         *
-         * The codebase already carried a finding against a token anchor: the arrow this replaced used line
-         * ends precisely so a leg never crosses code. `probes/LinkBench.java` rendered all three of
-         * [LinkRoute] side by side at both measured node widths, and the finding held — [LinkRoute.STRAIGHT]
-         * draws a solid line through the rest of the row, which reads as strikethrough on the code it is
-         * annotating.
-         *
-         * A `LINE_END` variant fixed that and cost more than it saved: with the connector starting past the
-         * text, a row whose code is wider than the channel had nowhere to start, so the link was **dropped** —
-         * eight halves in the bench, including every one on the 90-character fixture line. A `DASHED` one
-         * shipped next and was judged *"more or less ok"* — followed by the right question, which was
-         * whether the crossing has to happen at all. It does not. The bench counted the ink each variant put
-         * on top of a glyph:
+         * Where a half's connector leaves its token: **through the row's leading**, which `probes/LinkBench.java`
+         * measures as putting almost no ink on glyphs —
          *
          * | route | ink on glyphs |
          * |---|---|
-         * | straight | 234 px |
+         * | straight | 234 px (reads as strikethrough) |
          * | dashed | 160 px |
          * | **through the leading** | **4 px** |
-         * | from the line's end | 0 px, and drops 8 halves |
+         * | from the line's end | 0 px, but drops any link whose row is wider than the channel |
          *
-         * [LinkRoute.DIRECTIONAL] is that winning route with the side no longer a matter of taste: it is
-         * the **top** leading for a target below and the **bottom** leading for one above, so the drawing
-         * carries the link's direction instead of throwing it away. Round 3 chose *above* for every link on
-         * the argument that an IDE has already spent the underline — a rule under code means error, warning
-         * or hyperlink — which held right up until the line had something better to say with its side.
-         *
-         * [LinkRoute.STRAIGHT] stays only as the bench's control. See [LinkRoute].
+         * [LinkRoute.DIRECTIONAL] takes the **top** leading for a target below and the **bottom** leading for one
+         * above, so the drawing carries the link's direction. [LinkRoute.STRAIGHT] exists only as the bench's
+         * control. See [LinkRoute].
          */
         private val LINK_ROUTE = LinkRoute.DIRECTIONAL
 
@@ -3076,9 +2929,9 @@ class SpotlightRenderer(
          * How much of the primary tier a [FrameRole.HELPER] frame keeps — its glow and its callout tint are
          * scaled by this.
          *
-         * 0.45 rather than something fainter for the reason the link dimming was raised from 0.45 to 0.82 in
-         * round 6: a decoration pulled too far back stops reading as *lit* and starts reading as *broken*,
-         * and a helper frame genuinely is part of the step. It is a ratio on the user's own glow percentage
+         * 0.45 rather than something fainter: a decoration pulled too far back stops reading as *lit* and
+         * starts reading as *broken*, and a helper frame genuinely is part of the step. It is a ratio on the
+         * user's own glow percentage
          * rather than an absolute colour, so turning the glow down keeps both tiers in proportion.
          */
         const val HELPER_GLOW_MIX = 0.45
@@ -3115,8 +2968,8 @@ class SpotlightRenderer(
          * [wrap] splits on `'\n'` along with spaces, so handing it a multi-line snippet would reflow the
          * whole thing into one run-on paragraph — destroying the line structure that made it a snippet.
          * Keeping line 1 and *showing* that something was cut is the honest degradation, and it matches the
-         * one-line rule `plan-schema.md` states for `example`. Real multi-line blocks need their own
-         * renderer (MoreUI.md §4.3 B4).
+         * one-line rule `plan-schema.md` states for `example`. Real multi-line blocks would need their own
+         * renderer.
          */
         private fun firstLine(s: String?): String {
             val lines = s?.lines()?.map { it.trim() }?.filter { it.isNotEmpty() } ?: return ""
@@ -3125,10 +2978,8 @@ class SpotlightRenderer(
         }
 
         /**
-         * Offset just past the last non-blank character of [line] — where a relation arrow leaves the code
-         * without crossing it. Anchoring at the endpoint *token* instead would run the horizontal leg back
-         * over the rest of that line's text, so the token validates and names the endpoint ([Endpoint]) while
-         * the arrow always departs from the end of the line.
+         * Offset just past the last non-blank character of [line] — where a [LinkAnchor.LINE_END] link leaves
+         * the code without crossing it, and the right edge a lane must clear.
          */
         private fun trimmedLineEnd(doc: Document, line: Int): Int {
             val start = doc.getLineStartOffset(line)
@@ -3203,7 +3054,7 @@ class SpotlightRenderer(
          * **The gap line's gutter bar.** Two lines, but they are the *only* two: the width is deliberately
          * unscaled (the editor font already scales with the IDE) and the `coerceAtLeast(1)` is what keeps a
          * zero from silently turning the cue off. A settings sample that retyped either would be a sample
-         * that could be wrong; the `LineMarkerRenderer` above is now an adapter onto this.
+         * that could be wrong; the `LineMarkerRenderer` above is an adapter onto this.
          */
         internal fun paintGapGutter(g: Graphics, r: Rectangle, color: Color, width: Int) {
             g.color = color
@@ -3233,8 +3084,8 @@ class SpotlightRenderer(
          * Deliberately not [parseColor]: that falls back to the accent on anything it cannot read, and here
          * "unreadable" and "blank" must both come out as *no override* rather than as a real colour that
          * happens to be the accent — otherwise a slot the reader never touched would pin itself to slot 0's
-         * hue and the rotation would collapse. Padded and truncated to [LinkArt.slots] so a settings file
-         * written before this existed, or edited by hand, is a shorter list rather than an exception.
+         * hue and the rotation would collapse. Padded and truncated to [LinkArt.slots] so an older or
+         * hand-edited settings file is a shorter list rather than an exception.
          */
         private fun slotColors(stored: List<String>): List<Color?> = List(LinkArt.slots()) { i ->
             stored.getOrNull(i)?.trim()?.removePrefix("#")?.takeIf { it.isNotEmpty() }?.let {

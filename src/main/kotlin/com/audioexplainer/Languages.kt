@@ -1,12 +1,12 @@
 package com.audioexplainer
 
 /**
- * Canonical language / voice registry — the single source of truth for the multi-language feature
- * (see `ExplainerLanguages.md` §2). The Python TTS server (`scripts/tts_server.py` `PREFIX_LANG`)
+ * Canonical language / voice registry — the single source of truth for the multi-language feature.
+ * The Python TTS server (`scripts/tts_server.py` `PREFIX_LANG`)
  * and the webview voice combo derive from this; keep the voice-prefix → language mapping in
  * [languageOfVoice] in sync with the Python side.
  *
- * Four tiers ([Voice.engine] — engine is per-VOICE, see §12):
+ * Four tiers ([Voice.engine] — engine is per-VOICE, not per-language):
  * - [Engine.KOKORO] — the natural/neural tier, exactly Kokoro-82M's trained set (8 languages / 9 accents).
  *   Each ships a fixed voice list (one French voice to ~20 for US English); the voice-name convention is
  *   **1st letter = language/accent, 2nd letter = gender (`f`/`m`)**. US vs UK English is one *text* language
@@ -16,13 +16,13 @@ package com.audioexplainer
  *   voice (bundled with `kokoro-onnx`, zero extra download). The "voice" is the language code plus an
  *   optional `+ae_f`/`+ae_m` variant (our custom clean variants); the plugin routes these to the
  *   server's `engine=espeak`.
- * - [Engine.SAPI] — the Windows System.Speech tier (Phase L7, Windows only). Unlike the other two this is
+ * - [Engine.SAPI] — the Windows System.Speech tier (Windows only). Unlike the two above this is
  *   **dynamic**: the voice set is whatever SAPI5 voices the machine has, discovered at runtime by
  *   [TtsService] and pushed in via [setSapiVoices]. Reaches the classic offline Windows voices and — once
  *   the user installs NaturalVoiceSAPIAdapter — the neural Edge "Online" voices for ~140 locales, which can
  *   introduce brand-new walkthrough languages the static registry never listed. Ids are `sapi:<code>:<name>`
  *   (see [sapiVoiceName]); the plugin routes these to the server's `engine=sapi`.
- * - [Engine.PIPER] — the offline-neural tier (Phase L8, cross-platform). Also **dynamic**: the voice set is
+ * - [Engine.PIPER] — the offline-neural tier (cross-platform). Also **dynamic**: the voice set is
  *   whichever Piper models the user has downloaded, discovered at runtime by [TtsService] and pushed in via
  *   [setPiperVoices]. Covers the ~40 languages Kokoro can't voice at neural quality, fully offline. Like the
  *   SAPI tier it can introduce brand-new walkthrough languages. Ids are `piper:<code>:<voiceKey>` (see
@@ -37,13 +37,13 @@ package com.audioexplainer
 data class Voice(val id: String, val label: String, val engine: Engine = Engine.KOKORO)
 
 /**
- * Which local synthesizer voices a language (see `ExplainerLanguages.md` §12):
+ * Which local synthesizer voices a language:
  * - [KOKORO] — the neural, natural-sounding tier (Kokoro-82M's 8 trained languages).
  * - [ESPEAK] — the robotic-but-intelligible fallback tier (espeak-ng's ~100 other languages), bundled
  *   with `kokoro-onnx` (zero extra download). The plugin routes these to the server's `engine=espeak`.
- * - [SAPI] — the Windows System.Speech tier (Phase L7, Windows only) — whatever SAPI5 voices are installed,
+ * - [SAPI] — the Windows System.Speech tier (Windows only) — whatever SAPI5 voices are installed,
  *   discovered at runtime. The plugin routes these to the server's `engine=sapi`.
- * - [PIPER] — the offline-neural tier (Phase L8, cross-platform) — Piper VITS ONNX voices covering the ~40
+ * - [PIPER] — the offline-neural tier (cross-platform) — Piper VITS ONNX voices covering the ~40
  *   languages Kokoro can't voice, each a per-voice model downloaded on demand and discovered at runtime
  *   (like SAPI). The plugin routes these to the server's `engine=piper`.
  */
@@ -104,10 +104,10 @@ object Languages {
     /** The English (default) editor/Solution-Explorer action label; also the base for the fallback form. */
     const val DEFAULT_EXPLAIN_LABEL = "Explain This (Audio)"
 
-    /** Prefix marking a Windows SAPI voice id: `sapi:<langCode>:<VoiceName>` (Phase L7). */
+    /** Prefix marking a Windows SAPI voice id: `sapi:<langCode>:<VoiceName>`. */
     const val SAPI_PREFIX = "sapi:"
 
-    /** Prefix marking a Piper voice id: `piper:<langCode>:<voiceKey>` (Phase L8). */
+    /** Prefix marking a Piper voice id: `piper:<langCode>:<voiceKey>`. */
     const val PIPER_PREFIX = "piper:"
 
     val ALL: List<Language> = listOf(
@@ -164,7 +164,7 @@ object Languages {
             defaultVoice = "zf_xiaoxiao", requiresExtraDeps = true,
         ),
 
-        // ── espeak-ng robotic tier (Phase L6) ──
+        // ── espeak-ng robotic tier ──
         // A curated set of widely-used, space-delimited languages Kokoro can't voice. The espeak build
         // ships ~140 codes (see `tts_server.py --check` `espeakLanguages`); this list is the ones with
         // reliable autonyms and word-spacing that the per-word read-along handles. Quality is robotic but
@@ -202,8 +202,8 @@ object Languages {
     private val staticByCode: Map<String, Language> = ALL.associateBy { it.code }
 
     /**
-     * A batch of voices discovered at runtime from ONE source (Windows SAPI — [setSapiVoices], Phase L7; or
-     * downloaded Piper models — [setPiperVoices], Phase L8). Swapped as an immutable snapshot so readers
+     * A batch of voices discovered at runtime from ONE source (Windows SAPI — [setSapiVoices]; or
+     * downloaded Piper models — [setPiperVoices]). Swapped as an immutable snapshot so readers
      * never see a torn state. `byCode` = language code → that source's voices; `names` = code →
      * (englishName, autonym), used to build a dynamic [Language] when the static registry lacks the code.
      */
@@ -217,7 +217,7 @@ object Languages {
     @Volatile private var sapi = Discovered.EMPTY
     @Volatile private var piper = Discovered.EMPTY
 
-    /** All runtime discovery sources, in menu/precedence order: SAPI first (Phase L7), then Piper (L8). */
+    /** All runtime discovery sources, in menu/precedence order: SAPI first, then Piper. */
     private fun sources(): List<Discovered> = listOf(sapi, piper)
 
     /** Group runtime [items] into a [Discovered] snapshot: [code] extracts the language code, [names] the
@@ -235,7 +235,7 @@ object Languages {
     }
 
     /**
-     * Install the Windows SAPI voices discovered at runtime (Phase L7). Ids `sapi:<code>:<name>`; a dynamic
+     * Install the Windows SAPI voices discovered at runtime. Ids `sapi:<code>:<name>`; a dynamic
      * [Language] is synthesized on demand ([byCode]) for any code the static registry lacks (Tamil, Thai, …)
      * so it appears in the menu + narrates. Idempotent; pass an empty list to clear (e.g. non-Windows). Safe
      * to call from any thread.
@@ -247,7 +247,7 @@ object Languages {
     }
 
     /**
-     * Install the Piper voices the user has downloaded, discovered at runtime (Phase L8). Ids
+     * Install the Piper voices the user has downloaded, discovered at runtime. Ids
      * `piper:<code>:<voiceKey>`; a dynamic [Language] is synthesized on demand ([byCode]) for any code the
      * static registry lacks (the ~40 languages Kokoro can't voice). Idempotent; pass an empty list to clear.
      * Safe to call from any thread.
@@ -287,7 +287,7 @@ object Languages {
 
     /**
      * Build a dynamic [Language] for a runtime-only [code] (one the static registry lacks — introduced by
-     * SAPI (L7) and/or Piper (L8)), merging the voices from every discovery source in source order; null if
+     * SAPI and/or Piper), merging the voices from every discovery source in source order; null if
      * no source has voices for it. Names come from whichever source first supplies them.
      */
     private fun dynamicLanguage(code: String): Language? {
@@ -299,8 +299,8 @@ object Languages {
 
     /**
      * Language for [code]; null / unknown / blank falls back to English (the no-op default). A static
-     * language gets its runtime SAPI/Piper voices appended ([merged]); a runtime-only language (dynamic,
-     * Phase L7/L8) is built on demand from every source's voices for that code ([dynamicLanguage]).
+     * language gets its runtime SAPI/Piper voices appended ([merged]); a runtime-only language (dynamic)
+     * is built on demand from every source's voices for that code ([dynamicLanguage]).
      */
     fun byCode(code: String?): Language {
         val c = code?.takeIf { it.isNotBlank() }
@@ -318,7 +318,7 @@ object Languages {
     fun defaultVoiceFor(code: String?): String = byCode(code).defaultVoice
 
     /** All languages for the menus — the static registry (each with its runtime SAPI/Piper voices merged in)
-     *  plus any runtime-only languages discovered at runtime (Phase L7/L8), each listed once. */
+     *  plus any runtime-only languages discovered at runtime, each listed once. */
     fun allLanguages(): List<Language> {
         val dynamicCodes = sources().flatMap { it.byCode.keys }
             .filterNot { staticByCode.containsKey(it) }.distinct()
@@ -488,7 +488,7 @@ object Languages {
 
     /**
      * Build an espeak-tier [Language]. The "voice" is the language code plus our custom clean variant
-     * (`+ae_f` / `+ae_m`) — see `ExplainerLanguages.md` §12. Female + Male only (no bare default, so every
+     * (`+ae_f` / `+ae_m`). Female + Male only (no bare default, so every
      * robotic voice is an editable variant profile). No extra deps (espeak ships with `kokoro-onnx`).
      */
     private fun espeak(code: String, displayName: String, autonym: String): Language = Language(

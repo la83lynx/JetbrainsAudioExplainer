@@ -3,7 +3,6 @@ package com.audioexplainer.tree
 import com.audioexplainer.Beat
 import com.audioexplainer.Endpoint
 import com.audioexplainer.IssueLevel
-import com.audioexplainer.LineRange
 import com.audioexplainer.PlanIssue
 import com.audioexplainer.LinkAlignGroup
 import com.audioexplainer.LinkHalf
@@ -33,16 +32,14 @@ import javax.swing.JPanel
  * **The production tree of node views** — a [ResolvedPlan]'s frames rendered as [CodeNestView]'s nested
  * nodes, and its steps rendered by driving each node's own [com.audioexplainer.SpotlightRenderer].
  *
- * This replaced the `com.audioexplainer.spike` benches, since deleted, as the thing that draws a tree. Those
- * built the same [CodeNodeSpec]s from hard-coded text anchors over a bundled C# fixture and synthesised a
- * timeline from range order; here both come from the plan, which is the whole of Phase 2's point: **the agent
- * states the frames and the steps, the plugin picks the picture.**
+ * The [CodeNodeSpec]s and the timeline both come from the plan: **the agent states the frames and the steps,
+ * the plugin picks the picture.**
  *
- * Three things it deliberately keeps from the bench, because each cost a round to learn:
+ * Three rules it keeps:
  *
  * - **One live view at a time, disposed on rebuild** ([dispose] tears down inlays before editors, deepest
- *   node first). An editor inside an inlay inside an editor is the layout's stated main risk, and the
- *   bench's 6 → 5 editors across 25 rebuilds is the shape of answer to keep getting.
+ *   node first). An editor inside an inlay inside an editor is the layout's main leak risk, so every rebuild
+ *   must release exactly the editors it created.
  * - **A step is applied through the same two entry points the in-place surface uses.** Entering a frame
  *   paints its context and its active ranges; moving inside one repaints only the step. There is one
  *   renderer body behind both ([com.audioexplainer.SpotlightRenderer.paintStep]).
@@ -58,7 +55,7 @@ class TreePlanView(
     private val project: Project,
     val plan: ResolvedPlan,
     files: Map<Int, VirtualFile>,
-    // **The user's settings are the defaults, not the constructor's** (Phase 4). A default argument is
+    // **The user's settings are the defaults, not the constructor's.** A default argument is
     // evaluated per call, so a tree opened after the reader picked `ARROW` opens as `ARROW` — the settings
     // are read at construction, and [restyle] is what carries a change into a tree that is already up.
     style: NestStyle = TreeStyle.nest(),
@@ -71,9 +68,9 @@ class TreePlanView(
     /**
      * **Frame id → the file its node is built over, owned rather than borrowed.**
      *
-     * A copy, because it is no longer a fact settled once at open: a file can be deleted, or replaced on
-     * disk, while the tree is on screen — Arch A's snapshot could not see that and a tree of live documents
-     * can (see [revalidateFiles]). An entry leaves this map when its file is gone and nothing is at its path.
+     * A copy, because it is not a fact settled once at open: a file can be deleted, or replaced on disk,
+     * while the tree is on screen (see [revalidateFiles]). An entry leaves this map when its file is gone and nothing
+     * is at its path.
      */
     private val files = LinkedHashMap(files)
 
@@ -87,8 +84,8 @@ class TreePlanView(
     private val droppedFrames = LinkedHashSet<Int>()
 
     /**
-     * **Constraint 13's explicit child disposable**, and this class is exactly the case it names: a
-     * `JPanel` implementing `Disposable` is only torn down by the Disposer *tree*, and the owner here calls
+     * **An explicit child disposable**: a `JPanel` implementing `Disposable` is only torn down by the
+     * Disposer *tree*, and the owner here calls
      * [dispose] directly from the tab's `onDispose`. A subscription parented to `this` would therefore stay
      * live after the tab closed and drive VFS events into a released nest.
      */
@@ -177,8 +174,8 @@ class TreePlanView(
     /**
      * **A file under this tree has gone — drop its node and keep the rest.**
      *
-     * Reachable in a way Arch A's snapshot never was: a node is a real editor over the real document, so
-     * deleting the file out from under it leaves a live view of a document nothing owns. The rule is
+     * A node is a real editor over the real document, so deleting the file out from under it leaves a live
+     * view of a document nothing owns. The rule is
      * *validate and drop*, because the alternatives are both worse — a tree that closes itself takes four
      * good nodes with the missing one, and a tree that keeps drawing the stale node is telling the reader
      * something untrue about their own disk.
@@ -230,60 +227,30 @@ class TreePlanView(
         // fold away nodes they had opened. Same argument as [repaintStep].
         if (step >= 0) applyStep(step, enforceBudget = false)
         // **Said out loud, because a node that simply vanishes is indistinguishable from a rendering bug.**
-        // §1b's rule — a plan rendering three of its four frames says which — applies just as much when the
-        // fourth is lost at 11:04 as when it never resolved at open.
+        // A plan rendering three of its four frames says which, whether the fourth was lost mid-walkthrough
+        // or never resolved at open.
         if (dropped.isNotEmpty()) onFramesDropped?.invoke(dropped.toList())
         return dropped.size
     }
 
     /**
      * Told which frames [revalidateFiles] just dropped, so the owner can raise it with the reader. Set by
-     * `TreePlanController`; null in a bench, which reads [droppedFrames] instead.
+     * `TreePlanController`; may be null, in which case [droppedFrames] still records them.
      */
     var onFramesDropped: ((List<Int>) -> Unit)? = null
-
-    /** Frames no longer rendered because their file went, for a report that has to say which. */
-    fun droppedFrames(): Set<Int> = droppedFrames
-
-    /** One line per node, for a report: the frame, its file, its depth and how it landed. */
-    fun report(): String = buildString {
-        appendLine(
-            "scene=$sceneId of ${plan.scenes.size} mounts=$mounts " +
-                "frames=${plan.frames.size} rendered=${nodeIndexOf.size} steps=${plan.steps.size}",
-        )
-        for (scene in plan.scenes) {
-            appendLine(
-                "scene ${scene.id}${if (scene.id == sceneId) " (mounted)" else ""}: " +
-                    "${scene.frames.size} frame(s), ${scene.stepIndices.size} step(s), " +
-                    "${scene.keptLines()} kept line(s)",
-            )
-        }
-        for (frame in plan.frames) {
-            val idx = nodeIndexOf[frame.id]
-            val node = idx?.let { nest.nodes.getOrNull(it) }
-            val nesting = nest.nestings.firstOrNull { it.child === node }
-            appendLine(
-                "frame ${frame.id} s${frame.scene} d${frame.depth} ${frame.file.substringAfterLast('/')} " +
-                    "keep=${frame.keep.size} focus=${frame.focus?.let { "${it.start}-${it.end}" } ?: "-"} " +
-                    "node=${idx ?: "none"} embed=${nesting?.state ?: "root"} leader=${nesting?.leaderState ?: "-"}",
-            )
-        }
-        for (issue in issues()) appendLine(issue.toString())
-    }
 
     // ── Building ──
 
     /**
      * **Build the nodes of one scene, replacing whatever was on screen.**
      *
-     * This is where the scene decision actually lands, and it is deliberately the *only* way nodes come into
+     * This is deliberately the *only* way nodes come into
      * existence — the constructor calls it too, so "open the tree" and "cross a scene boundary" are one code
      * path rather than two that have to agree. `CodeNestView.setTree` already releases every node before
      * building the new ones, so the mount is a rebuild by construction and there is no partial-swap mode to
      * get wrong.
      *
-     * **What this costs, stated rather than discovered:** N editors released and M created per crossing, which
-     * is the operation Phase 1 measured 25 times with clean disposal. What does *not* survive is the reader's
+     * **What this costs:** N editors released and M created per crossing. What does *not* survive is the reader's
      * own state inside the scene — a collapsed nesting, a dragged node height ([CodeNodeView.heightOverride]
      * documents its own case) — because those belong to node views that no longer exist. Leaving a scene and
      * coming back is therefore a fresh mount, not a restore.
@@ -308,7 +275,7 @@ class TreePlanView(
             if (file == null) {
                 // The one diagnostic that cannot be structural: a path that does not resolve is a fact about
                 // the disk. Reported rather than thrown — a plan whose fourth frame is missing still renders
-                // three, and §1b's requirement is that it says which.
+                // three, and says which.
                 issues += PlanIssue(
                     IssueLevel.ERROR, "frame.file-unresolved",
                     "frame ${frame.id}: ${frame.file} did not resolve to a file in this project; " +
@@ -322,8 +289,7 @@ class TreePlanView(
                 title = frame.frame.title.ifBlank { file.name },
                 depth = frame.depth,
                 keep = frame.keep.map { it.lines() },
-                // The schema states the excerpt now, so the node is told rather than guessing from range
-                // order — which is the whole of what `CodeNodeSpec.focus` was carried for.
+                // The schema states the excerpt, so the node is told rather than guessing from range order.
                 focus = frame.focus?.lines(),
             )
             rendered += frame
@@ -363,7 +329,7 @@ class TreePlanView(
 
         // Read the nesting outcomes back: EMBEDDED / NO_CALL_LINE / FAILED, and whether the call token was
         // found. Measured off the built view, because "did the platform accept this embedding" is not
-        // something the schema can promise (constraint 15) and a frame that silently landed at top level is
+        // something the schema can promise, and a frame that silently landed at top level is
         // indistinguishable from one the plan put there.
         for (nesting in nest.nestings) {
             val frameId = nodeIndexOf.entries.firstOrNull { nest.nodes.getOrNull(it.value) === nesting.child }?.key
@@ -397,10 +363,10 @@ class TreePlanView(
      * Paint the plan's step [index] across every frame it touches, clearing the ones it does not.
      *
      * **The primary frame is `frames[0]`** — it takes the active node tint, the token flash and the
-     * container's reveal, and its callout is the bright one. Phase 3 filled in the rest of the shape: the
-     * step's other frames are [com.audioexplainer.FrameRole.HELPER]s, glowed and boxed in a visibly
-     * secondary key, capped at [MAX_HELPER_CALLOUTS]; and a frame the step does not touch is cleared, so it
-     * carries only its node's own wash. Three tiers, all of them backgrounds (constraint 1).
+     * container's reveal, and its callout is the bright one. The step's other frames are
+     * [com.audioexplainer.FrameRole.HELPER]s, glowed and boxed in a visibly secondary key, capped at
+     * [MAX_HELPER_CALLOUTS]; and a frame the step does not touch is cleared, so it carries only its node's own
+     * wash. Three tiers, all of them backgrounds.
      */
     @JvmOverloads
     fun applyStep(index: Int, enforceBudget: Boolean = true) {
@@ -422,8 +388,8 @@ class TreePlanView(
         // portal requests — and [paintLinkPairs] would then pair a link this step never mentioned.
         val painted = LinkedHashSet<Int>()
 
-        // Helper callouts are capped rather than one-per-frame: Phase 1 judged **one** box per step to read
-        // well, and the Primary/Helper split is there to add a second voice, not a chorus. The frames past
+        // Helper callouts are capped rather than one-per-frame: **one** box per step reads best, and the
+        // Primary/Helper split is there to add a second voice, not a chorus. The frames past
         // the cap keep their glow and lose their box, which is the same degrade a link past its own cap gets.
         var helperBoxes = 0
         for ((frameId, nodeIdx) in nodeIndexOf) {
@@ -468,16 +434,11 @@ class TreePlanView(
     }
 
     /**
-     * **Scroll a node opened *for* a link to the row that link lands on** — K5, and the third correction in
-     * this line of work: *"when next or previous step opens a previously closed subeditor with a link portal
-     * target in it, it doesn't scroll to that link, so a link that is not visible on the shown by default
-     * subeditor lines is not visible."*
+     * **Scroll a node opened *for* a link to the row that link lands on.**
      *
-     * The reported case is `tree-links` step 6 → 5 (and 6 → 7): `ValidationHandler` opens showing its focus
-     * range, lines 18–24, and the link is on 37 — inside a *context* range further down the same node. The
-     * node was open, the pair was drawn, and one end of it was below the fold of a viewport nothing had
-     * scrolled: [CodeNestView.revealNodes] scrolls the nodes the **step** names, and this is by definition a
-     * node the step does not name.
+     * A node opens showing its focus range, and a link end may sit in a *context* range further down the same
+     * node — below the fold of a viewport nothing has scrolled: [CodeNestView.revealNodes] scrolls the nodes
+     * the **step** names, and this is by definition a node the step does not name.
      *
      * [CodeNodeView.showOwnRow] rather than [CodeNestView.revealRow]: the row belongs inside its own node,
      * and the chain walk a `revealRow` does would scroll the **outer** pane too — dragging the step's own
@@ -485,9 +446,9 @@ class TreePlanView(
      * releases the landing, and it has to: expanding a nesting re-arms it, and a re-armed landing pulls the
      * node back to the top of its excerpt a pass later and undoes exactly this scroll.
      *
-     * **Twice, the second time deferred**, for constraint 20's reason and the one
-     * [CodeNestView.revealNode]'s own follow-up gives: the first pass runs against an extent the expansion
-     * has not been laid out at yet. Queued *after* the reveal above, so its follow-up cannot land on top.
+     * **Twice, the second time deferred**, for the reason [CodeNestView.revealNode]'s own follow-up gives:
+     * the first pass runs against an extent the expansion has not been laid out at yet. Queued *after* the reveal
+     * above, so its follow-up cannot land on top.
      *
      * A node the step **does** paint is left alone — its own step reveal is the right destination, and a link
      * row is not a reason to move it.
@@ -510,43 +471,25 @@ class TreePlanView(
     }
 
     /**
-     * **Fold away the nestings this step is not narrating** — [StepFold], and the K3 round is what made it a
-     * setting rather than a consequence.
+     * **Fold away the nestings this step is not narrating** — [StepFold].
      *
-     * It began as the line budget's enforcement (Phase 2 decision 8 moved the cap from per-plan to
-     * per-*scene*, and a scene's `keep` total is what the reader takes in), so it only ran when the mounted
-     * scene was over [com.audioexplainer.PlanLoader.LINE_BUDGET]. K3's plan was four frames well under the
-     * cap and read wrong anyway: *"for some steps explainer keeps expanded items, though it's not required
-     * and only takes up space."* The budget was never the reason a nesting the step ignores is worth its
-     * height — it only decided whether anything was done about it.
-     *
-     * So the trigger is now [StepFold] and the budget is one of its three values. **The action is identical
-     * in all three**: every nesting whose subtree this step does not touch is collapsed to its stub, which
-     * never folds an ancestor of a touched node (that would hide the narration) and never strands the reader
-     * — [CodeNestView.setActiveNode] re-expands innermost-first on the way back in, which is the invariant the
-     * G1c⁗ round established.
+     * A nesting the step ignores is not worth its height whether or not the scene is over
+     * [com.audioexplainer.PlanLoader.LINE_BUDGET]; the budget is just one of [StepFold]'s three triggers.
+     * **The action is identical in all three**: every nesting whose subtree this step does not touch is
+     * collapsed to its stub, which never folds an ancestor of a touched node (that would hide the narration)
+     * and never strands the reader — [CodeNestView.setActiveNode] re-expands innermost-first on the way back in.
      *
      * **A node holding one end of a drawn link counts as touched** ([linkedNodes], straight from
-     * [paintLinkPairs]) — K4, and the one case the first cut got wrong: *"sometimes we treat subnode as not
-     * required, even though it contains a visible link target."* The step names the frames it narrates; a
-     * relation reaches a frame it does not name, by construction — that is what a relation is for. Folding
-     * that frame leaves a pair with one end drawn and the other inside a stub, which reads as the plugin
-     * having lost half the link rather than as a tidy screen. The fold runs *after* the pairs are allocated
-     * precisely so this set exists to ask.
+     * [paintLinkPairs]). The step names the frames it narrates; a relation reaches a frame it does not name,
+     * by construction — that is what a relation is for. Folding that frame leaves a pair with one end drawn
+     * and the other inside a stub, which reads as the plugin having lost half the link. The fold runs *after*
+     * the pairs are allocated precisely so this set exists to ask.
      *
-     * **And it opens, not merely refrains from closing** — K5, which is where the K4 cut fell down.
-     * [CodeNestView.collapseAllExcept] only ever sets `collapsed = true`; a nesting some *earlier* step folded
-     * stays folded however wanted it now is, and the only thing that reopened anything was
-     * [CodeNestView.setActiveNode] walking the **primary's** chain. So on `tree-links` step 2 — three portal
-     * links from the root into three children that step 1 had just folded — all three pairs drew one end into
-     * a stub. The round found it from the other side too: *"step 3 expands ValidationHandler and going back to
-     * step 2 leaves it expanded, so its second end is visible then"*, which is the same fact told as a
-     * discrepancy.
-     *
+     * **And it opens, not merely refrains from closing.** [CodeNestView.collapseAllExcept] only ever sets
+     * `collapsed = true`, so a nesting some *earlier* step folded would stay folded however wanted it now is.
      * The step therefore decides the **whole** open set, in both directions: every node in `keep` gets its
-     * chain expanded ([CodeNestView.expandTo], innermost-first per constraint 17), and everything else folds.
-     * A helper frame nested inside a fold had the same bug and gets the same answer — the set is what matters,
-     * not why a node is in it.
+     * chain expanded ([CodeNestView.expandTo], innermost-first), and everything else folds. A helper frame
+     * nested inside a fold gets the same answer — the set is what matters, not why a node is in it.
      *
      * It runs on a step *change* only ([repaintStep] and [reassertViewport] do not call it), so a reader who
      * opens a node by hand keeps it open for as long as they stay on the step.
@@ -584,17 +527,16 @@ class TreePlanView(
     }
 
     /**
-     * **Fold, for this step, the part of each open frame it does not use** — [StepCondense], from the 2026-10-14
-     * round: *"all generated walkthroughs make much less use of code collapsing, showing quite a lot of
-     * unrelevant code"*. [foldUntouched] folds whole nestings, and can never fold an ancestor of the frame it
+     * **Fold, for this step, the part of each open frame it does not use** — [StepCondense]. [foldUntouched]
+     * folds whole nestings, and can never fold an ancestor of the frame it
      * narrates; this folds *lines*, inside the frames that stay open.
      *
      * **What always stays**, in any frame it touches: the first line of each `keep` range (the class and member
      * headers, by the schema's own advice on writing them), every call line a child hangs from — a call line
      * folded away would bury the child, `PlanLoader.dropUnkeptCallSites`'s whole reason — the step's own ranges,
      * and the ends of the links this step draws, so no link points into a fold. And above each of those, the
-     * headers of the blocks it sits in ([StepCondense.chain]) — the 2026-10-15 round: *"it would be best if
-     * this method would try to leave the nesting chain visible"*, for a step and for a link's far end alike.
+     * headers of the blocks it sits in ([StepCondense.chain]), so the nesting chain stays visible for a step
+     * and for a link's far end alike.
      *
      * - **Ancestors** of the step's frame ([StepCondense.ANCESTORS] and up) fold everything else.
      * - **The step's frame** folds the stretch between a long link's ends ([StepCondense.LINKS]), and the
@@ -708,8 +650,7 @@ class TreePlanView(
 
     /**
      * **Put the current step's viewport back where the plan put it, without repainting it** — what pressing
-     * Play does after the reader has scrolled around (Phase 3's scroll policy, via
-     * `TreePlanController.onResume`).
+     * Play does after the reader has scrolled around (via `TreePlanController.onResume`).
      *
      * Deliberately not [repaintStep]. A repaint re-docks the callout, re-runs the link allocator and
      * re-starts the reveal from a clean slate, all to move a scrollbar; and the reader may be mid-hover on a
@@ -728,13 +669,12 @@ class TreePlanView(
     }
 
     /**
-     * **Re-shape the open tree to what the settings now say** — Phase 4's Apply, and the half a repaint
+     * **Re-shape the open tree to what the settings now say** — Settings ▸ Apply, and the half a repaint
      * cannot do.
      *
-     * Constraint 11's *"a per-render derivation means re-rendering is re-styling"* covers every **colour**,
-     * because [com.audioexplainer.SpotlightRenderer] derives them all per render. It does not cover the
-     * tree's own shape: the leader mode decides which border edges the token box and the child frame draw
-     * (constraint 16), the height ceiling decides what a node is sized to, and neither is re-derived by
+     * Re-rendering re-styles every **colour**, because [com.audioexplainer.SpotlightRenderer] derives them all
+     * per render. It does not cover the tree's own shape: the leader mode decides which border edges the token
+     * box and the child frame draw, the height ceiling decides what a node is sized to, and neither is re-derived by
      * painting a step. So Apply comes here first and [repaintStep] second.
      *
      * **Returns false when nothing changed, and that is the point rather than an optimisation.**
@@ -769,9 +709,8 @@ class TreePlanView(
     }
 
     /**
-     * Re-paint the current step (constraint 11: re-render, do not merely resync). Two callers: a colour-scheme
-     * change, via each node's own subscription; and **Settings ▸ Apply**, via `TreePlanController.refresh()` —
-     * which used to reach the deleted in-place surface instead, and would have become a silent no-op.
+     * Re-paint the current step (re-render, do not merely resync). Two callers: a colour-scheme change, via
+     * each node's own subscription; and **Settings ▸ Apply**, via `TreePlanController.refresh()`.
      *
      * A no-op before the first step lands, so applying settings to a freshly-opened tree does nothing rather
      * than painting step -1.
@@ -827,8 +766,8 @@ class TreePlanView(
     }
 
     /**
-     * **The link pair, and the step's slot allocator** — round 2's replacement for the cross-frame pointer,
-     * widened in round 6 to own *every* link on screen rather than only the cross-frame ones.
+     * **The link pair, and the step's slot allocator** — it owns *every* link on screen, not only the
+     * cross-frame ones.
      *
      * Each node's renderer has just reported the relations belonging to this step
      * ([com.audioexplainer.LinkRequest]); only this class can finish them, because only this class knows
@@ -836,17 +775,14 @@ class TreePlanView(
      * ends get a half: same pair id, same **slot**, mirrored arrowheads, each one clickable and aimed at the
      * other. That is the pair, and it is what a lone pointer could never be — a link you can see both ends of.
      *
-     * **The slot is why this also owns same-editor links now.** A slot picks a colour, a rail offset and a
+     * **The slot is why this also owns same-editor links.** A slot picks a colour, a rail offset and a
      * channel offset ([com.audioexplainer.LinkArt]), and those have to be allocated *across the whole tree*
-     * or two links a reader sees at once can be given the same one. Before round 6 an in-file relation was
-     * drawn by the renderer on the spot with a single colour and its own channel, while a portal was numbered
-     * here — so *"same editor-line and out-of editor links nearby should have different colors"* was not
-     * merely unimplemented, it was unimplementable. One allocator, one step, one numbering.
+     * or two links a reader sees at once can be given the same one. One allocator, one step, one numbering.
      *
      * Five decisions live here:
      *
-     * - **One pair per link, however many ends declared it.** `tree-links.json` states its sibling → sibling
-     *   relation from *both* ends deliberately, and the pointer form drew both. Pairing is keyed by
+     * - **One pair per link, however many ends declared it.** A plan may state a relation from *both* ends.
+     *   Pairing is keyed by
      *   *(frame, line)* on each side, order-independent, so a link declared twice is still one pair: the plan
      *   says what is related, the plugin decides how many pictures that is.
      * - **Keyed on frame ids, not paths.** The two ends arrive in different forms — one resolved off the
@@ -856,9 +792,9 @@ class TreePlanView(
      *   only thing that knows whether the far line is in its own document and near enough to reach with a
      *   line. A same-file link too far apart for that gets [LinkJoin.PORTAL] with both halves in one node —
      *   nothing about a portal needs two editors; what it needs is two ends that cannot be joined by a line.
-     * - **Lanes are handed out same-editor-first, then in declaration order**, which is the reader's
-     *   *"same-editor links should turn (sequentially, each in own column) first, and portal links should
-     *   turn/U-turn sequentially into their portals next"*. It is also what makes the fan fit: a same-editor
+     * - **Lanes are handed out same-editor-first, then in declaration order**: same-editor links turn first,
+     *   each in its own column, and portal links turn into their portals next. It is also what makes the fan
+     *   fit: a same-editor
      *   lane is 4 px wide and a portal lane is 24, so putting the thin ones nearest the code costs the wide
      *   ones nothing and buys the step room it would otherwise clamp away. Within a join the order is the
      *   plan's, so a reader who learns "the blue one is the invoker" keeps being right as long as the step
@@ -871,8 +807,8 @@ class TreePlanView(
      *
      * **Returns each node that ended up holding a half, and the topmost row it holds one on** — neither is
      * derivable from [painted]: a pair's far end belongs to whichever node owns the target file, and that node
-     * is very often one the step never names. [foldUntouched] needs the keys (K4) and [revealLinkRows] needs
-     * the rows (K5). The topmost when a node holds several, because one viewport cannot show two distant rows
+     * is very often one the step never names. [foldUntouched] needs the keys and [revealLinkRows] needs the
+     * rows. The topmost when a node holds several, because one viewport cannot show two distant rows
      * and the first one down is the predictable answer.
      */
     private fun paintLinkPairs(painted: Set<Int>): Map<Int, Int> {
@@ -978,8 +914,7 @@ class TreePlanView(
         // needs the pass before it finished everywhere. A node cannot pick its column until every member has
         // declared its demand and its room; it cannot work out which side of a row a rail leaves on until the
         // *other* end of that link has a row to compare screen positions with; and it cannot buy that side
-        // its blank space until it knows which side that is. Round 6 did all three in one pass, which was
-        // survivable only because nothing then depended on the answer.
+        // its blank space until it knows which side that is.
         for ((node, _) in drawing) {
             node.spotlight.linkAlign = column
             column.join(node.spotlight)
@@ -997,19 +932,17 @@ class TreePlanView(
         }
         for ((node, _) in drawing) node.spotlight.reserveLinkSpace()
         val asked = halves.values.sumOf { it.size }
-        // One line per step that has a link, and it is the line a judged round reads: `drawn < asked` means a
-        // half landed on a line folded away, which is the one way a pair can come out half-drawn. The two
-        // joins are counted separately because they are two pictures, and a round that asked for one of each
-        // needs to see that it got one of each.
+        // One line per step that has a link: `drawn < asked` means a half landed on a line folded away, which
+        // is the one way a pair can come out half-drawn. The two joins are counted separately because they
+        // are two pictures.
         val byJoin = halves.values.flatten().distinctBy { it.pairId }.groupingBy { it.join }.eachCount()
         log.info(
             "links on step $stepIndex: ${found.size} link(s) " +
                 "(${LinkJoin.LINE.name.lowercase()}=${byJoin[LinkJoin.LINE] ?: 0}, " +
                 "${LinkJoin.PORTAL.name.lowercase()}=${byJoin[LinkJoin.PORTAL] ?: 0}), " +
                 "$drawn of $asked end(s) drawn" +
-                // **Folding, which `Item 1′` named as the one link case never verified.** `drawn < asked`
-                // says an end was lost; these two say it was a fold rather than a bad line number, and that
-                // the survivor degraded to a lone portal instead of a leg to nowhere.
+                // `drawn < asked` says an end was lost; these two say it was a fold rather than a bad line
+                // number, and that the survivor degraded to a lone portal instead of a leg to nowhere.
                 (if (foldedOut > 0) ", $foldedOut folded away" else "") +
                 (if (degraded > 0) ", $degraded degraded to a lone portal" else "") +
                 (if (dropped > 0) ", $dropped past the cap of $MAX_LINKS_PER_STEP" else ""),
@@ -1020,9 +953,8 @@ class TreePlanView(
     /**
      * A link both of whose ends have been found, **before the step's lanes are handed out**.
      *
-     * It exists because round 7 made the lane order depend on the whole step: same-editor links take the
-     * inner lanes, so no link can be numbered until every link on the step has been found and its join
-     * decided. Round 6 numbered each one as it arrived, which is why its lanes could not be ordered at all.
+     * The lane order depends on the whole step: same-editor links take the inner lanes, so no link can be
+     * numbered until every link on the step has been found and its join decided.
      */
     private class PendingLink(
         val nodeIdx: Int,
@@ -1053,11 +985,12 @@ class TreePlanView(
             ?: baseName(ep.file)
             ?: "line ${ep.line}"
 
-    /** The whole sentence, for a hover: where the half goes, and the relation's own note if it has one. */
     /**
+     * The whole sentence, for a hover: where the half goes, and the relation's own note if it has one.
+     *
      * [mutual] is `Relation.KIND_BACKFORTH`: both ends of the link are arrived at, so neither "goes to" nor
      * "comes from" is true of either — and a hover that insisted on one would contradict the two arrowheads
-     * now drawn beside it.
+     * drawn beside it.
      */
     private fun linkTooltip(
         ep: Endpoint,
@@ -1097,15 +1030,13 @@ class TreePlanView(
     /**
      * One end of a [pairKey]: its frame, its line, **and the token it names**.
      *
-     * The token is what round 8 added, and it is the whole of *"steps 1 and 2 in link-fan.json scenario have
-     * 4 links only"*. Two relations may legitimately join the same two **rows** and mean different things —
-     * `link-fan.json` has two of them on purpose, distinguished only by which identifier each names — and a
-     * key of frame and line alone read the second as a redeclaration of the first and dropped it. The step
-     * then drew four links, and the fifth lane, its colour and its rail were never allocated at all.
+     * Two relations may legitimately join the same two **rows** and mean different things, distinguished
+     * only by which identifier each names; a key of frame and line alone would read the second as a
+     * redeclaration of the first and drop it.
      *
-     * It still collapses the case the key exists for: **one relation declared in both frames**, which
-     * `tree-links.json` does for its sibling → sibling link. Each declaration names the same token at the
-     * same end, and each end is keyed with its own, so the two normalise to one key from either side.
+     * It still collapses the case the key exists for: **one relation declared in both frames**. Each
+     * declaration names the same token at the same end, and each end is keyed with its own, so the two
+     * normalise to one key from either side.
      *
      * `occurrence` is in it for the same reason as the token: a plan may point at the second `total` on a
      * row and the third on the same row, and those are two links.
@@ -1120,14 +1051,12 @@ class TreePlanView(
      * give the same answer to the chip that draws a link and to the click that follows it, or a portal could
      * be drawn pointing at one node and land in another.
      *
-     * **The line is half the key, and leaving it out was the defect.** A path alone identifies a *file*, and
-     * a file is routinely cut into several frames — two classes in one `.cs`, a caller and its callee. This
-     * took the first frame on the path whatever line was asked for, so every far end in the second window
-     * routed to the first node. The consequences compounded: [paintLinkPairs] saw `farIdx != nodeIdx` and
-     * downgraded a perfectly local relation to [LinkJoin.PORTAL], then planted the far half on a row that
-     * node does not display — a portal with no reachable other end, and a click that scrolled to nothing.
-     * The near frame wins a tie ([prefer]) because a link whose ends are both in the reporting node is a
-     * line, not a portal, and because overlapping windows would otherwise decide by mount order.
+     * **The line is half the key.** A path alone identifies a *file*, and a file is routinely cut into
+     * several frames — two classes in one `.cs`, a caller and its callee. Taking the first frame on the path
+     * would route every far end in the second window to the first node: [paintLinkPairs] would then see
+     * `farIdx != nodeIdx`, downgrade a local relation to [LinkJoin.PORTAL], and plant the far half on a row
+     * that node does not display. The near frame wins a tie ([prefer]) because a link whose ends are both in the
+     * reporting node is a line, not a portal, and because overlapping windows would otherwise decide by mount order.
      *
      * Falls back to the first frame on the path when no window holds the line: an endpoint naming a line the
      * scene folds away is still better aimed at that file's node than dropped.
@@ -1157,8 +1086,7 @@ class TreePlanView(
      * pulses, so a link into a child or a sibling lands the eye on the target instead of describing it.
      *
      * **Not a drawn connector.** A line joining two nodes would have to be painted on the nest rather than in
-     * either editor, which is [LeaderArt]'s surface and its own judged question (constraint 16 — one outline,
-     * one owner). Deferred deliberately; this is the behaviour that can be built and checked today.
+     * either editor, which is [LeaderArt]'s surface (one outline, one owner).
      *
      * Returns false when no frame owns the endpoint's file, which is the caller's cue to fall back to opening
      * it as a file: a plan may legitimately point at code it never made a frame for — the leaf below the
@@ -1167,9 +1095,8 @@ class TreePlanView(
      * **The search is scoped to the mounted scene**, and that is a decision rather than an oversight. A frame
      * in another scene is not on screen, so following the link would have to mount that scene — which moves
      * the tree somewhere the walkthrough's own position does not agree with, mid-narration. Falling back to a
-     * tab is the honest outcome for that case, and it is legitimate for the reason round 1 established: this
-     * is reached from a **click**, not as a side effect of stepping. A link *within* a scene is the case the
-     * portal pair (item 1) is being built for.
+     * tab is the honest outcome for that case, and it is legitimate because this is reached from a
+     * **click**, not as a side effect of stepping. A link *within* a scene is what the portal pair is for.
      */
     fun revealEndpoint(ep: Endpoint): Boolean {
         // A fileless endpoint means "the file already showing", which in a tree does not name one node.
@@ -1178,15 +1105,14 @@ class TreePlanView(
         val path = ep.file?.trim()?.takeIf { it.isNotEmpty() } ?: return false
         val frameId = frameOwning(path, ep.line) ?: return false
         val node = nodeIndexOf[frameId]?.let { nest.nodes.getOrNull(it) } ?: return false
-        // **The row the link names, not the step's own band**, and that distinction is the reported defect:
-        // `revealNode` scrolls to whatever the current step is looking at and re-centres it on the way, so
-        // following a link the reader could already see moved the view for nothing. `revealRow` scrolls the
+        // **The row the link names, not the step's own band**: `revealNode` scrolls to whatever the current
+        // step is looking at and re-centres it on the way, so following a link the reader could already see
+        // would move the view for nothing. `revealRow` scrolls the
         // named row into view and only as far as it has to.
         val line = ep.line - 1
         if (ep.line > 0) nest.revealRow(node, line) else nest.revealNode(node)
         // The caret lands on the target's own token, focused so it is visible. No flash on arrival: the token
-        // now carries a portal **tint**, which a pulse competed with. Dropped on the reader's word that it
-        // need not be kept — [SpotlightRenderer.flashToken] still serves `playback_started`.
+        // carries a portal **tint**, which a pulse would compete with.
         if (ep.line > 0) node.spotlight.landOn(line, ep.token, ep.occurrence)
         log.info("relation followed into the tree: frame $frameId, ${ep.file}:${ep.line}")
         return true
@@ -1198,13 +1124,13 @@ class TreePlanView(
      *
      * This is also what a **render-time** flash draws, which is the case with no clock at all: narration
      * switched off, where `SpotlightRenderer.flashOnRender` makes the paint itself the cue. Two triggers,
-     * one beat — not two competing anchors, which is what `Step.token` alongside `beats` used to be.
+     * one beat — not two competing anchors.
      */
     private fun startBeat(step: ResolvedStep): Beat? = step.step.beats.firstOrNull { it.atStart }
 
     /**
      * Fire this step's at-start beat — the `playback_started` cue, which is deliberately *not* ridden by
-     * the render (measured 1.8–6.0 s early, MoreUI.md §2.8).
+     * the render (which lands 1.8–6.0 s before the audio).
      */
     fun flashStartBeat() {
         val step = plan.steps.getOrNull(stepIndex) ?: return
@@ -1213,14 +1139,13 @@ class TreePlanView(
     }
 
     /**
-     * Pulse one beat (B1b, MoreUI §4.3) — either because the voice reached the sentence it is timed to,
+     * Pulse one beat — either because the voice reached the sentence it is timed to,
      * or, for the at-start beat, because the audio began.
      *
      * **The window is the beat's own line**, which is what makes this the same anchor a link end and a call
      * site already use: one line, the nth match on it. A beat with `line = 0` is the legacy shape — a plan
      * that predates the field, synthesised out of `Step.token` by the loader — and falls back to the step's
-     * **whole span** rather than its first range. That fallback is not cosmetic: a token in a step's second
-     * range used to resolve to nothing at all.
+     * **whole span** rather than its first range, so a token in a step's second range still resolves.
      */
     fun flashBeat(index: Int) {
         val step = plan.steps.getOrNull(stepIndex) ?: return
@@ -1233,7 +1158,7 @@ class TreePlanView(
         val hi = if (beat.line > 0) beat.line else ranges.maxOf { it.end }
         node.spotlight.flashToken(beat.token, beat.occurrence, lo, hi)
         // Every beat that fires says so. A beat the webview could not place never reaches here, and its
-        // absence from this run of lines is the only way an author can tell (§2.2).
+        // absence from this run of lines is the only way an author can tell.
         log.info(
             "beat $index of step $stepIndex fired " +
                 (if (beat.atStart) "at audio start" else "on \"${beat.say.take(40)}\"") +
@@ -1241,13 +1166,10 @@ class TreePlanView(
         )
     }
 
-    /** Every node in the tree, so a caller can count editors or ask what a node published. */
-    fun nodes(): List<CodeNodeView> = nest.nodes
-
     override fun dispose() {
         if (disposed) return
         disposed = true
-        // The subscription first and unconditionally (constraint 13): a VFS event arriving after the nest is
+        // The subscription first and unconditionally: a VFS event arriving after the nest is
         // released would revalidate against disposed nodes, and it is the failure that shows up long after
         // the tab was closed rather than while anyone is looking at it.
         try {
@@ -1272,11 +1194,10 @@ class TreePlanView(
         /**
          * **Helper callouts drawn beside the primary's, per step.**
          *
-         * Phase 1 judged one box per step to read well and Phase 3's bullet keeps that verdict as the
-         * default it is departing from: *"one Primary (brightest, keeps the scroll and the flash) plus
-         * visibly secondary Helper callouts, one per other active node, **capped**"*. Two is the cap, so a
-         * three-frame step draws at most three boxes and a wide fan of siblings cannot fill the tree with
-         * them. Past it a frame keeps its glow, which is the same degrade a link past its own cap gets.
+         * One Primary (brightest, keeps the scroll and the flash) plus visibly secondary Helper callouts, one
+         * per other active node, **capped**. Two is the cap, so a three-frame step draws at most three boxes and a wide
+         * fan of siblings cannot fill the tree with them. Past it a frame keeps its glow, which is the same degrade a
+         * link past its own cap gets.
          */
         private const val MAX_HELPER_CALLOUTS = 2
     }

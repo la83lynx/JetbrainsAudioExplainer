@@ -3,25 +3,17 @@ package com.audioexplainer
 import kotlinx.serialization.Serializable
 
 /**
- * Wire types for the `set_plan` message — **`frames` (structure) + `steps` (timeline)**, Phase 2 of
- * `TreeOfCode.rules.md`.
+ * Wire types for the `set_plan` message — **`frames` (structure) + `steps` (timeline)**.
  *
  * Line numbers are **1-based** and ranges are **inclusive** on both ends, everywhere in this file.
  *
- * **What changed and why the old shape could not stay.** Until Phase 2 the wire format was
- * `Segment{file,start,end,highlights[]}`, mirroring code-explainer's `vscode-extension/src/types.ts`. That
- * shape *fuses* structure and narration: a step cannot span files, one file cannot host two steps in
- * unrelated places, and there is nowhere to say that this frame is called from that line of that other
- * frame. The tree surface needs all three. So structure and timeline are split
- * (the pre-Phase-1 evaluation's shape, amended by every measurement in Phase 1), and this file is no longer a
- * mirror of anything upstream.
+ * Structure and timeline are split because the tree needs what a fused `Segment{file,start,end,highlights[]}`
+ * shape (code-explainer's `types.ts`) cannot say: a step spanning files, one file hosting two steps in
+ * unrelated places, and a frame called from a line of another frame. This file mirrors nothing upstream.
  *
- * **The runtime types below the split are gone.** `Segment` and `Highlight` were the in-place editor
- * surface's vocabulary, kept through Phase 2 as `PlanProjection`'s output so five components that Phase 3
- * was going to rewrite anyway did not have to be converted twice. Phase 3 did the rewrite: position is one
- * plan step index, the surface renders `frames`/`steps` directly, and what the sidebar needs is a *view* of
- * the plan rather than a second model of it — [Outline] and [StepView], built by [PlanOutline]. A stale
- * `segments` key in a saved walkthrough is ignored like `view` was, not rejected.
+ * Position is one plan step index, and the sidebar gets a *view* of the plan rather than a second model of
+ * it — [Outline] and [StepView], built by [PlanOutline]. A stale `segments` or `view` key in a saved
+ * walkthrough is ignored, not rejected.
  */
 
 // ─────────────────────────── The schema: frames + steps ───────────────────────────
@@ -29,12 +21,12 @@ import kotlinx.serialization.Serializable
 /**
  * A 1-based inclusive line range, with the **role** that decides how it is drawn.
  *
- * Roles are Phase 2 decision 3, and they are a property of a [Frame]'s `keep` ranges only:
+ * Roles are a property of a [Frame]'s `keep` ranges only:
  *
  * - [ROLE_CONTEXT] (the default) — kept so the reader can place the code: the class header, the method
  *   signature, a field the focus refers to. Drawn de-emphasised.
  * - [ROLE_FOCUS] — **the excerpt of interest**: the range a nested node is sized to and lands on
- *   (§1a⁵ 4). At most one per frame; [PlanLoader] reports the rest and infers one when a frame states none.
+ *   At most one per frame; [PlanLoader] reports the rest and infers one when a frame states none.
  *
  * A role on a [Step]'s ranges is **ignored** — a step's ranges are active by definition, which is not
  * something an author can vary. Kept as one type all the same, because two types differing by one ignored
@@ -63,9 +55,9 @@ data class LineRange(
  * natural rather than less.
  *
  * @param id Identity, and the **only** identity: two frames may share one [file] (a caller and a callee in
- *   one document is legal per constraint 2 and the `same-file` fixture exists to prove it reads), so
+ *   one document is legal, and the `same-file` fixture proves it reads), so
  *   nothing may key a frame by its path. Referenced by [Step.frame] and by a child's [parent].
- * @param file The real file on disk. Semantic colour follows the file being real (constraint 3), so this is
+ * @param file The real file on disk. Semantic colour follows the file being real, so this is
  *   a path to resolve through the VFS, never a synthetic name.
  * @param title Short label — the member this frame is about (`"MidInvoker.InvokeOn"`). Shown in the node's
  *   caption band and in the sidebar outline.
@@ -81,11 +73,10 @@ data class LineRange(
  *   tree. **A [parent] must be in the same scene**; a cross-scene parent is degraded to top level and
  *   reported, because the parent's node does not exist while this one is showing.
  *
- *   The cost is stated in `TreeOfCode.rules.md`'s caps: a scene change releases N editors and creates M, so it is
- *   one nest rebuild — the operation Phase 1 measured 25 times with clean disposal — and the reader's own
- *   collapse and dragged-height state does not survive it.
- * @param parent The frame this one is **called from**, or null for a root. Phase 2 decision 1: the link
- *   lives on the child because a nested child has exactly one parent *by construction* — which is what makes
+ *   The cost: a scene change releases N editors and creates M, so it is one nest rebuild (disposal is
+ *   clean), and the reader's own collapse and dragged-height state does not survive it.
+ * @param parent The frame this one is **called from**, or null for a root. The link lives on the
+ *   child because a nested child has exactly one parent *by construction* — which is what makes
  *   a second parent unexpressable rather than merely rejected. There is no edge list.
  * @param callLine 1-based line **in the parent's file** where the call into this frame sits. `0` = not
  *   stated, and the child then renders at top level ([com.audioexplainer.tree.EmbedState.NO_CALL_LINE]) —
@@ -95,14 +86,14 @@ data class LineRange(
  * @param callToken The **invoking token** on [callLine] — the text the renderer boxes and runs the leader
  *   from. A line places a child *under* a call; it cannot point at the call *inside* the line, and
  *   `_pricing.Handle(order, verdict)` / `_audit.Handle(order, priced)` can share one. Null ⇒ the whole
- *   trimmed line. A token, not a column pair, because §4.4 rule 2 committed this project to text-search
- *   locators for Rider parity — and because the agent can copy a token out of code it just read.
+ *   trimmed line. A token, not a column pair, because locators are text searches (no PSI) for Rider
+ *   parity — and because the agent can copy a token out of code it just read.
  * @param callOccurrence Which match of [callToken] on that line, 1-based. Rarely needed.
  * @param keep The lines to show; everything else in the file is elided. The agent states *what to show* and
- *   the plugin picks the placeholder — the same division of labour as [relations] (MoreUI.md §4.3 B3).
+ *   the plugin picks the placeholder — the same division of labour as [relations].
  *   **Class/method header rows are listed here as [LineRange.ROLE_CONTEXT] ranges**, by the agent: deriving
  *   an enclosing declaration needs PSI, and measured `firstKept` ran 9–18 across the fixture, so an inferred
- *   header would land the reader on a line the plan never named (Phase 2 decision 6).
+ *   header would land the reader on a line the plan never named.
  * @param relations Links between two places in this frame's code, drawn per *step* exactly as before. On the
  *   frame rather than the step because a relation spans steps. Endpoint `file`s take part in
  *   [WalkthroughStorage]'s relative-path rewrite, like [file] itself.
@@ -134,7 +125,7 @@ data class StepFrame(
  *
  * The tree stays still while the narration walks it, which is the whole point of the split: **the step order
  * is the plan's, not the tree's**, so a step may return to a frame the walk has already left. No synthesised
- * node-major walk can express that (§1b's first requirement).
+ * node-major walk can express that.
  *
  * A step may light ranges in **several** frames at once — the original multi-file ask. [frames] is the
  * canonical spelling and `frame` + [ranges] is sugar for the one-frame case, normalised by [frameRefs];
@@ -186,19 +177,17 @@ data class Step(
 /**
  * **A pulse timed to a point in the narration** — "when she says *this*, flash *that*".
  *
- * Today a step gets one flash, at the moment its audio starts (`playback_started`). A step that walks
- * through three things says three things and can only point at one. [Step.beats] lets it point at each as
- * it is spoken.
+ * Without beats a step gets one flash, at the moment its audio starts (`playback_started`). A step that
+ * walks through three things says three things; [Step.beats] lets it point at each as it is spoken.
  *
  * **[line] + [token] + [occurrence] is the anchor shape this whole plugin uses** — the same one an
  * [Endpoint] uses for a link end and a [Frame] uses for its call site. There is only ever one mechanism
  * underneath: a plain text scan of one line for the nth match of a string, never PSI and never a column
- * (§4.4 rule 2, Rider parity). What used to make the step's pulse the odd one out was not the mechanism
- * but the missing line: with nothing to search but a range, a token a line or two outside it resolved to
- * nothing, silently. A line makes the pulse checkable at load, where a token never can be.
+ * (Rider parity). The line is what makes a pulse checkable at load: with only a range to search, a token a
+ * line or two outside it resolves to nothing, silently.
  *
- * @param line 1-based line in the step's primary frame holding [token]. **0 means the legacy shape** — a
- *   plan that predates this field, read from `Step.token` — and is resolved over the step's whole span
+ * @param line 1-based line in the step's primary frame holding [token]. **0 means the legacy shape** — read
+ *   from `Step.token` — and is resolved over the step's whole span
  *   instead of one line.
  * @param token The word to pulse, copied verbatim out of [line]. A beat with no token has nothing to do
  *   and `PlanLoader` drops it.
@@ -206,7 +195,7 @@ data class Step(
  * @param say A phrase from this step's own [Step.ttsText], deciding **when** the pulse fires. Matching
  *   collapses whitespace and ignores case, and is otherwise a plain substring test. **Blank means "when
  *   the audio starts"**, which is what a step with one pulse and no interest in timing wants — and what
- *   the old `Step.token` did.
+ *   the legacy `Step.token` does.
  *
  *   Never a sentence *number*: the author, the synthesizer and the player each split sentences differently
  *   (the server splits on an ASCII ender plus whitespace, so `e.g.` splits, and re-chops anything over 320
@@ -253,11 +242,9 @@ data class Beat(
  * plan (title, frame titles & explanations, step `ttsText` & labels & notes) is written in it. Missing/blank
  * ⇒ `"en"`.
  *
- * **There is no `view` field.** A plan used to choose between this tree and an in-place spotlight over the
- * user's own editor; round 3 judged a one-frame scene rendered as a one-node tree as good as the in-place
- * surface for the commonest case, so that surface, this field and its `wantsTree()` accessor were deleted
- * together. A stale `"view"` key in a saved walkthrough or an old plan is ignored, not rejected — every
- * decoder here sets `ignoreUnknownKeys`.
+ * **There is no `view` field**: every plan renders as the tree, and a one-frame scene is a one-node tree. A
+ * stale `"view"` key in a saved walkthrough or an old plan is ignored, not rejected — every decoder here
+ * sets `ignoreUnknownKeys`.
  */
 @Serializable
 data class Plan(
@@ -267,7 +254,7 @@ data class Plan(
     val steps: List<Step> = emptyList(),
 )
 
-// ─────────────────────────── Relations (unchanged, now on the frame) ───────────────────────────
+// ─────────────────────────── Relations (carried on the frame) ───────────────────────────
 
 /**
  * One end of a [Relation] — a **text-search locator**, the same shape [Step.token] establishes and for the
@@ -276,7 +263,7 @@ data class Plan(
  *
  * @param file The endpoint's file. Absent ⇒ the frame's own file, which is the common case. A *different*
  *   file is what makes an endpoint "outside": no on-screen arrow can point at it, so the relation renders as
- *   a matched pair of portals instead — one at each end (MoreUI.md §4.3 B3).
+ *   a matched pair of portals instead — one at each end.
  * @param line 1-based line within [file]. `0` = unspecified, which is legitimate for an off-screen target
  *   named only by [symbol] — it just can't anchor an arrow.
  * @param token A literal substring of [line]. Optional, and it does real work: the plugin requires it to be
@@ -303,23 +290,16 @@ data class Endpoint(
  * The division of labour is deliberate: **the agent describes the semantics, the plugin picks the picture.**
  * An agent cannot know whether both endpoints are visible, how far apart they land, or whether the target
  * file is even open, so it never chooses between "arrow" and "pointer" — it states the relation and the
- * renderer degrades gracefully (MoreUI.md §4.3 B3).
+ * renderer degrades gracefully.
  *
  * @param kind [KIND_FLOW] (A feeds B) or [KIND_BACKFORTH] (they refer to each other). Anything else is read
  *   as [KIND_FLOW]: `ignoreUnknownKeys` already makes the wire format tolerant, and an unfamiliar kind should
  *   cost a nuance, not the whole relation.
  *
- *   **It draws again.** For a while it did not: round 6's unified link system takes direction from the
- *   geometry — which end the link *arrives* at — so both kinds rendered identically and `kind` reached only the
- *   log. The agent-authored-plan gate found it, reading the docs' promise of two arrowheads against a drawing
- *   that had stopped keeping it. It was documented rather than repaired, because the drawing had just been
- *   accepted at round 11 and changing an accepted design unasked was not that phase's business.
- *
- *   What it draws is the promise and no more than it: [KIND_BACKFORTH] means the link **arrives at both ends**,
+ *   [KIND_BACKFORTH] means the link **arrives at both ends**,
  *   so both ends get the arrowhead an arrived-at end already had, and both rail indicators point *out* of the
  *   channel instead of one in and one out. Nothing else moves — same colour, same lane, same routing, same
- *   hover, same hit test — because the two kinds are one relation drawn two ways and not two drawings. That
- *   distinction is what round 6 bought and what this is careful not to spend.
+ *   hover, same hit test — because the two kinds are one relation drawn two ways and not two drawings.
  * @param note Optional short phrase naming what flows or why they're linked ("parsed value"). Drawn beside
  *   the arrow, or after the target in the pointer form.
  */
@@ -398,13 +378,10 @@ internal fun Endpoint.inStepBand(startLine: Int, endLine: Int, frameFile: String
 /**
  * **One step of the plan, as one row of the sidebar outline.**
  *
- * [index] is the plan's own step index and it is the whole position model — Phase 3 flattened the two-level
- * `(segment, highlightIndex)` pair that four components had to keep in agreement into this one number, so a
- * click, a narration advance and a tree paint all name a step the same way.
+ * [index] is the plan's own step index and it is the whole position model, so a click, a narration advance
+ * and a tree paint all name a step the same way.
  *
- * **There is no third field, and that is the point.** The row used to carry `start`–`end` line numbers; they
- * were dropped on the reader's word — *"putting line numbers/FileNames in outline is actually redundant …
- * it should only show which step/substep we're currently in"*. A file and a line still exist, on
+ * **No file or line numbers**: the outline only shows which step is current. A file and a line exist on
  * [StepView], which is what the Now Playing location link reads.
  */
 @Serializable
@@ -414,19 +391,18 @@ data class OutlineStep(val index: Int, val label: String)
  * A run of consecutive steps sharing a primary frame — the outline's middle level, and the only one it
  * invents rather than reads off the plan.
  *
- * It is the rule the deleted `PlanProjection` used to make a segment, kept because a reader wants to see
- * which frame a run of steps is about and the schema does not spell that out anywhere else. A frame that
+ * A reader wants to see which frame a run of steps is about, and the schema does not spell that out
+ * anywhere else. A frame that
  * non-adjacent steps return to produces **two** of these, never one merged run.
  */
 @Serializable
 data class OutlineGroup(val frame: Int, val title: String, val steps: List<OutlineStep>)
 
 /**
- * **One mount of one scene** — the outline's top level, supplied by decision 11 rather than invented.
+ * **One mount of one scene** — the outline's top level, read off [Frame.scene] rather than invented.
  *
  * One row per *crossing*, not per distinct scene: a plan that leaves a scene and comes back rebuilds the
- * tree twice, so it gets two rows. That is what lets a reader see **why** the tree is about to be replaced,
- * which round 3 asked as a question and this answers structurally.
+ * tree twice, so it gets two rows. That is what lets a reader see **why** the tree is about to be replaced.
  *
  * [label] is `"Scene 2"`, numbered on first appearance and reused on a revisit, so the number names a set of
  * nodes. It carries no file count: the outline says which step you are on and nothing else.
@@ -437,10 +413,9 @@ data class OutlineScene(val id: Int, val label: String, val groups: List<Outline
 /**
  * The whole outline, as pushed to the sidebar.
  *
- * @param scened Whether to draw the scene level at all. False for a single-scene plan — three of the four
- *   acceptance plans — where a lone `"Scene 1"` header over everything is an indent that separates nothing.
- *   The level appears exactly when it starts carrying information, which is why the commonest plan's outline
- *   is unchanged by Phase 3 and `scenes-tour.json`'s gains a level.
+ * @param scened Whether to draw the scene level at all. False for a single-scene plan, where a lone
+ *   `"Scene 1"` header over everything is an indent that separates nothing. The level appears exactly when it
+ *   starts carrying information.
  * @param steps How many steps the plan has, for the global progress counter.
  */
 @Serializable
@@ -474,21 +449,10 @@ data class StepView(
     val start: Int = 0,
     val end: Int = 0,
     /**
-     * The step's [Step.beats], carried verbatim. The webview owns beat timing (§4.2 invariant 5): it holds
+     * The step's [Step.beats], carried verbatim. The webview owns beat timing: it holds
      * the sentence map and the only clock that knows what is being *heard*, so it decides when each beat is
      * due and posts the index back. The plugin never resolves a phrase.
      */
     val beats: List<Beat> = emptyList(),
 )
 
-/**
- * Extension → agent action delivered over `/api/actions` long-poll. `type` is fixed to `"user_action"`.
- * (Produced by the sidebar in Phase 4.)
- */
-@Serializable
-data class UserAction(
-    val action: String,
-    val segmentId: Int,
-    val question: String? = null,
-    val type: String = "user_action",
-)

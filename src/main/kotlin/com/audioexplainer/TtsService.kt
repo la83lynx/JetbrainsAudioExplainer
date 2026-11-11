@@ -35,7 +35,6 @@ import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -69,7 +68,7 @@ data class EspeakTune(
 }
 
 /**
- * Phase 7 — the local Kokoro TTS backbone.
+ * The local Kokoro TTS backbone.
  *
  * Owns the lifecycle of the bundled `tts_server.py` (a persistent Kokoro-82M server over a TCP
  * loopback socket) and streams synthesized audio to callers. Also detects the runtime prerequisites
@@ -96,7 +95,6 @@ class TtsService : Disposable {
     private val serverLock = Any()
     private var serverHandler: OSProcessHandler? = null
     private var serverPort: Int = -1
-    private var serverSynthetic: Boolean = false
 
     @Volatile private var cachedStatus: TtsStatus? = null
     @Volatile private var cachedCatalog: PiperCatalog? = null
@@ -106,7 +104,7 @@ class TtsService : Disposable {
     enum class Availability { READY, PYTHON_MISSING, KOKORO_MISSING, MODEL_MISSING, SCRIPT_MISSING, UNKNOWN }
 
     /**
-     * One Piper voice model the user has downloaded, as reported by `--check`'s `piperVoices` (Phase L8).
+     * One Piper voice model the user has downloaded, as reported by `--check`'s `piperVoices`.
      * [key] is the bare Piper voice key (e.g. "de_DE-eva_k-x_low"); [code] is the reduced walkthrough code
      * (the locale's family, e.g. "de"). The rest is display/diagnostic metadata for the settings panel.
      */
@@ -119,13 +117,13 @@ class TtsService : Disposable {
         val sampleRate: Int,
         val speakers: Int,
         val sizeBytes: Long,
-        /** Speaker names by id for a multi-speaker model (Phase L9); empty for single-speaker. Often opaque
+        /** Speaker names by id for a multi-speaker model; empty for single-speaker. Often opaque
          *  numeric ids ("00737") — the UI falls back to "Speaker N" for those. */
         val speakerNames: List<String> = emptyList(),
     )
 
     /**
-     * One voice in the Piper download catalog (the normalized `voices.json`, Phase L9) — what the voice-
+     * One voice in the Piper download catalog (the normalized `voices.json`) — what the voice-
      * manager dialog browses. [key] is the download key (e.g. "de_DE-thorsten-medium"); [code] the
      * walkthrough language code (the locale family); [sizeBytes] the total download size; [md5] the model's
      * published digest. Not necessarily installed — [TtsService.cachedPiperVoices] tells you which are.
@@ -145,7 +143,7 @@ class TtsService : Disposable {
     )
 
     /**
-     * The Piper voice catalog plus where it came from (Phase L9): `source` is "network" (freshly fetched),
+     * The Piper voice catalog plus where it came from: `source` is "network" (freshly fetched),
      * "cache" (served from the on-disk copy — [offline] true), or "none" (couldn't fetch and no cache).
      * [error] carries the fetch failure message when we fell back to cache / returned nothing.
      */
@@ -171,9 +169,9 @@ class TtsService : Disposable {
         val misakiZh: Boolean = false,
         /** espeak-ng robotic-tier language codes the local build supports (from `--check`'s `espeakLanguages`). */
         val espeakLanguages: List<String> = emptyList(),
-        /** Whether the `piper-tts` package is importable (from `--check`'s `piperImportable`, Phase L8). */
+        /** Whether the `piper-tts` package is importable (from `--check`'s `piperImportable`). */
         val piperImportable: Boolean = false,
-        /** Piper voice models the user has downloaded (from `--check`'s `piperVoices`, Phase L8). */
+        /** Piper voice models the user has downloaded (from `--check`'s `piperVoices`). */
         val piperVoices: List<InstalledPiperVoice> = emptyList(),
     ) {
         val ready get() = availability == Availability.READY
@@ -191,30 +189,30 @@ class TtsService : Disposable {
 
     /**
      * Language codes the last (cached) probe reported ready to narrate — no subprocess. Empty if never
-     * probed. Used to annotate ja/zh in the settings combos until their misaki packs are installed (L5).
+     * probed. Used to annotate ja/zh in the settings combos until their misaki packs are installed.
      */
     fun cachedLanguagesReady(): List<String> = cachedStatus?.languagesReady ?: emptyList()
 
     /**
      * espeak robotic-tier language codes the last (cached) probe reported — no subprocess. Empty if never
      * probed or espeak is unavailable. Used to confirm the local espeak build (Set up TTS) and, if needed,
-     * to gate the robotic-tier menu to what's actually installed (L6).
+     * to gate the robotic-tier menu to what's actually installed.
      */
     fun cachedEspeakLanguages(): List<String> = cachedStatus?.espeakLanguages ?: emptyList()
 
-    /** Whether the last (cached) probe found `piper-tts` importable — no subprocess. Phase L8. */
+    /** Whether the last (cached) probe found `piper-tts` importable — no subprocess. */
     fun cachedPiperImportable(): Boolean = cachedStatus?.piperImportable == true
 
     /** Piper voice models the last (cached) probe reported as installed — no subprocess. Empty if never
-     *  probed. Used by the settings Piper panel + to register the voices in [Languages]. Phase L8. */
+     *  probed. Used by the settings Piper panel + to register the voices in [Languages]. */
     fun cachedPiperVoices(): List<InstalledPiperVoice> = cachedStatus?.piperVoices ?: emptyList()
 
-    // ── Windows SAPI voice discovery (Phase L7) ───────────────────────────────────
+    // ── Windows SAPI voice discovery ───────────────────────────────────────────────
 
     @Volatile private var cachedSapiVoices: List<SapiVoice>? = null
 
     /**
-     * Discover the installed Windows SAPI5 voices (Phase L7) via System.Speech and push them into
+     * Discover the installed Windows SAPI5 voices via System.Speech and push them into
      * [Languages] (so the language menu + voice combo see them). **Windows-only** — elsewhere it returns
      * empty and clears any prior list. Cached; [refresh] re-probes (a ~0.3–1 s PowerShell call), so call
      * this OFF the EDT. Reaches whatever SAPI5 voices are installed, including the neural Edge "Online"
@@ -283,7 +281,7 @@ class TtsService : Disposable {
         if (!refresh) cachedStatus?.let { return it }
         val s = probeStatus()
         cachedStatus = s
-        syncPiperVoices(s.piperVoices)  // register discovered Piper voices in the language menus (Phase L8)
+        syncPiperVoices(s.piperVoices)  // register discovered Piper voices in the language menus
         return s
     }
 
@@ -325,7 +323,7 @@ class TtsService : Disposable {
         )
     }
 
-    /** Parse `--check`'s `piperVoices` array into [InstalledPiperVoice]s (Phase L8). Reduces the locale to a
+    /** Parse `--check`'s `piperVoices` array into [InstalledPiperVoice]s. Reduces the locale to a
      *  walkthrough code (the model's `family`, else the locale prefix, else the key prefix). */
     private fun parsePiperVoices(arr: JsonArray?): List<InstalledPiperVoice> {
         if (arr == null) return emptyList()
@@ -352,11 +350,11 @@ class TtsService : Disposable {
     }
 
     /** A JSON array of (possibly null) strings → a `List<String>` with nulls kept as "" so positional index
-     *  = speaker id is preserved (Phase L9). */
+     *  = speaker id is preserved. */
     private fun parseStringArray(arr: JsonArray?): List<String> =
         arr?.map { it.jsonPrimitive.contentOrNull ?: "" } ?: emptyList()
 
-    /** Parse `--piper-catalog`'s `voices` array into [PiperCatalogVoice]s (Phase L9). */
+    /** Parse `--piper-catalog`'s `voices` array into [PiperCatalogVoice]s. */
     private fun parseCatalogVoices(arr: JsonArray?): List<PiperCatalogVoice> {
         if (arr == null) return emptyList()
         return arr.mapNotNull { el ->
@@ -391,8 +389,8 @@ class TtsService : Disposable {
     }
 
     /**
-     * Push the given installed Piper voices into [Languages] so the menus + voice combo see them (Phase L8;
-     * multi-speaker expansion L9). A single-speaker model becomes one voice; a multi-speaker model is expanded
+     * Push the given installed Piper voices into [Languages] so the menus + voice combo see them.
+     * A single-speaker model becomes one voice; a multi-speaker model is expanded
      * into one voice per speaker (id suffix `#<n>`, label "… — Speaker n"), so the dropdown *is* the speaker
      * picker. A model with more than [MAX_EXPANDED_SPEAKERS] speakers (rare research sets — VCTK/libriTTS)
      * would blow up the dropdown, so only its default speaker is offered. Called after each fresh `--check`;
@@ -421,7 +419,7 @@ class TtsService : Disposable {
     }
 
     /** Human label for speaker [i]: the model's speaker name if it's meaningful (not a blank / opaque numeric
-     *  id), else "Speaker N" (1-based). Phase L9. */
+     *  id), else "Speaker N" (1-based). */
     private fun speakerLabel(names: List<String>, i: Int): String {
         val nm = names.getOrNull(i)?.takeIf { it.isNotBlank() && !it.all(Char::isDigit) }
         return nm ?: "Speaker ${i + 1}"
@@ -557,16 +555,15 @@ class TtsService : Disposable {
     }
 
     /**
-     * `pip install misaki[ja]` / `misaki[zh]` — the extra packs Japanese/Chinese narration needs (Phase L5).
+     * `pip install misaki[ja]` / `misaki[zh]` — the extra packs Japanese/Chinese narration needs.
      * Base `kokoro-onnx` does not pull these; they add large transitive deps (fugashi/unidic/mojimoji for
      * Japanese, jieba/pypinyin/cn2an for Chinese), so they're an explicit opt-in surfaced from **Audio
      * engines…**. [langs] are language codes (`"ja"`, `"zh"`); unknown codes are ignored.
      *
-     * **One `pip` run per language, deliberately.** They used to go in one invocation, and pip installs a
-     * command's whole set as a single transaction — so the first pack that cannot build took the other down
-     * with it. That is not hypothetical: on CPython 3.13 `misaki[ja]` pulls **mojimoji**, a Cython extension
+     * **One `pip` run per language, deliberately.** pip installs a command's whole set as a single
+     * transaction, so one pack that cannot build would take the other down with it: on CPython 3.13 `misaki[ja]` pulls **mojimoji**, a Cython extension
      * with no 3.13 wheel, which has to compile and therefore needs the MSVC build tools; a machine without
-     * them lost Chinese too, though every `zh` dependency is a pure-Python wheel. Split, `zh` survives `ja`.
+     * them would lose Chinese too, though every `zh` dependency is a pure-Python wheel.
      */
     fun installLanguagePacks(
         indicator: ProgressIndicator,
@@ -607,7 +604,7 @@ class TtsService : Disposable {
      * or null when it is not one this recognises.
      *
      * Only causes the user can act on are worth a sentence; anything else is better served by the log, which
-     * now has the tail. The compiler case earns its place because the message pip prints is long, the fix is
+     * has the tail. The compiler case earns its place because the message pip prints is long, the fix is
      * an unrelated download, and the failure looks identical to a network problem from the notification.
      */
     private fun failureHint(tail: List<String>): String? {
@@ -652,7 +649,7 @@ class TtsService : Disposable {
         return ok
     }
 
-    /** `python -m pip install piper-tts` — the offline-neural tier's package (Phase L8). Additive: it reuses
+    /** `python -m pip install piper-tts` — the offline-neural tier's package. Additive: it reuses
      *  the onnxruntime/numpy Kokoro already pulled, so it won't disturb the Kokoro stack. */
     fun installPiper(indicator: ProgressIndicator, sink: InstallSink? = null): Boolean {
         val python = pythonCommand() ?: return false
@@ -664,7 +661,7 @@ class TtsService : Disposable {
     }
 
     /** Download one Piper voice model into the models dir via `--download-piper <key>`, surfacing per-file
-     *  percentage on [indicator] (same frames as [downloadModel]). Phase L8. */
+     *  percentage on [indicator] (same frames as [downloadModel]). */
     fun downloadPiperVoice(indicator: ProgressIndicator, voiceKey: String, sink: InstallSink? = null): Boolean {
         val python = pythonCommand() ?: return false
         val script = ensureScript() ?: return false
@@ -688,7 +685,7 @@ class TtsService : Disposable {
     }
 
     /**
-     * The Piper download catalog (Phase L9) via `--piper-catalog`, cached in memory. [refresh] forces a
+     * The Piper download catalog via `--piper-catalog`, cached in memory. [refresh] forces a
      * re-fetch (`--refresh`, ~1–3 s network); otherwise the server serves its on-disk cache and this the
      * in-memory copy, so the manager dialog re-opens instantly. Run OFF the EDT (it spawns a subprocess).
      */
@@ -715,7 +712,7 @@ class TtsService : Disposable {
         return cat
     }
 
-    /** Delete one installed Piper voice's model files via `--delete-piper <key>` (Phase L9). Invalidates the
+    /** Delete one installed Piper voice's model files via `--delete-piper <key>`. Invalidates the
      *  cached status so the next probe re-discovers. Returns true on a clean `done`. Run OFF the EDT. */
     fun deletePiperVoice(voiceKey: String): Boolean {
         val python = pythonCommand() ?: return false
@@ -736,7 +733,7 @@ class TtsService : Disposable {
         fun onMeta(sampleRate: Int) {}
         /**
          * A PCM frame, plus its sentence index, that sentence's word count, and the sentence **as spoken**
-         * (all three for the webview: the first two drive the read-along, the third lets a B1b beat match a
+         * (all three for the webview: the first two drive the read-along, the third lets a beat match a
          * phrase against real output instead of counting sentences nobody counts the same way).
          *
          * [sentenceText] is empty against a `tts_server.py` older than the field — the installed copy is
@@ -795,8 +792,8 @@ class TtsService : Disposable {
                     put("text", text)
                     put("speed", speed)
                     // Engine is per-VOICE. Kokoro voices omit "engine" and use the primary engine; espeak
-                    // (robotic tier, L6), SAPI (Windows System.Speech tier, L7) and Piper (offline-neural
-                    // tier, L8) each set their own.
+                    // (robotic tier), SAPI (Windows System.Speech tier) and Piper (offline-neural tier) each
+                    // set their own.
                     when (Languages.engineOfVoice(voice)) {
                         Engine.SAPI -> {
                             // The Windows tier's `voice` is the bare SAPI5 name (the `sapi:<code>:` prefix is
@@ -873,41 +870,24 @@ class TtsService : Disposable {
         }
     }
 
-    /** A liveness ping to the running server (starts it if needed). Returns true on a `pong`. */
-    fun ping(): Boolean {
-        val port = ensureServer() ?: return false
-        return try {
-            Socket().use { s ->
-                s.connect(InetSocketAddress("127.0.0.1", port), 3_000)
-                s.getOutputStream().apply { write("{\"ping\":true}\n".toByteArray()); flush() }
-                val line = s.getInputStream().bufferedReader().readLine()
-                val obj = line?.let { runCatching { json.parseToJsonElement(it.trim()).jsonObject }.getOrNull() }
-                obj?.get("type")?.jsonPrimitive?.contentOrNull == "pong"
-            }
-        } catch (_: Exception) {
-            false
-        }
-    }
-
     // ── Server lifecycle ─────────────────────────────────────────────────────────
 
     /**
      * Ensure the TTS server process is up and return its port, or null if it can't start (bad
-     * prerequisites). Reuses a live process. Synthetic mode (for internal testing) is off by default;
-     * production always launches the real Kokoro engine.
+     * prerequisites). Reuses a live process.
      */
-    private fun ensureServer(synthetic: Boolean = false): Int? {
+    private fun ensureServer(): Int? {
         synchronized(serverLock) {
             val h = serverHandler
-            if (h != null && !h.isProcessTerminated && serverPort > 0 && serverSynthetic == synthetic) {
+            if (h != null && !h.isProcessTerminated && serverPort > 0) {
                 return serverPort
             }
             stopServerLocked()
-            return startServerLocked(synthetic)
+            return startServerLocked()
         }
     }
 
-    private fun startServerLocked(synthetic: Boolean): Int? {
+    private fun startServerLocked(): Int? {
         val python = pythonCommand() ?: return null
         val script = ensureScript() ?: return null
         val params = buildList {
@@ -915,7 +895,6 @@ class TtsService : Disposable {
             add("--host"); add("127.0.0.1")
             add("--port"); add("0")
             addAll(modelDirArgs())
-            if (synthetic) add("--synthetic")
         }
         val cmd = try {
             GeneralCommandLine(python)
@@ -972,8 +951,7 @@ class TtsService : Disposable {
         }
         serverHandler = handler
         serverPort = port
-        serverSynthetic = synthetic
-        log.info("TTS server ready on 127.0.0.1:$port (synthetic=$synthetic)")
+        log.info("TTS server ready on 127.0.0.1:$port")
         return port
     }
 
@@ -988,12 +966,10 @@ class TtsService : Disposable {
      *
      * **It deliberately leaves [cachedStatus] alone.** [TtsStatus] describes the *environment* — which
      * interpreter, which packages import, which model and Piper voice files are on disk — and nothing about
-     * the server process, so stopping that process invalidates none of it. Clearing it here was a real defect:
-     * every provisioning path in [TtsSetup] runs `status(refresh = true)` and then `restart()`, so the wipe
-     * landed **after** the refresh and threw away the very answer that had just been fetched. The
-     * [PiperVoiceManagerDialog] then read `cachedPiperVoices()` in its completion callback, got an empty list,
-     * and showed a freshly downloaded voice as not installed — surviving a dialog reopen (same null cache) and
-     * curable only by "Re-check engines", which probes again. Whoever *changes* the environment refreshes it.
+     * the server process, so stopping that process invalidates none of it. Every provisioning path in [TtsSetup] runs
+     * `status(refresh = true)` and then `restart()`; clearing the cache here would discard that fresh answer
+     * and make [PiperVoiceManagerDialog] show a just-downloaded voice as not installed. Whoever *changes* the
+     * environment refreshes it.
      */
     fun restart() {
         synchronized(serverLock) { stopServerLocked() }
@@ -1056,17 +1032,14 @@ class TtsService : Disposable {
         }
     }
 
-    /** Run a command, feeding each stdout/stderr line to [onLine]; returns true on exit code 0. */
     /**
      * Run [argv] to completion, feeding each output line to [onLine] (which the provisioning tasks use to
      * drive `indicator.text2`) and returning whether it exited 0.
      *
      * **It also keeps the last [FAIL_TAIL_LINES] lines and logs them on a non-zero exit**, which is the point
      * of the ring buffer. Every failure notification in [TtsSetup] ends with *"See the IDE log for details"*,
-     * and before this the log held nothing at all: pip's diagnosis went to `text2`, a progress-bar line that
-     * is gone the moment the task ends. A failed `misaki[ja]` install was therefore unexplainable after the
-     * fact — the one case where the user cannot retry usefully, because the reason (no compiler for
-     * `fugashi`, a resolver conflict, a proxy) is exactly what was discarded. Logged at WARN, tail-only,
+     * and otherwise pip's diagnosis only reaches `text2`, a progress-bar line gone the moment the task ends.
+     * Logged at WARN, tail-only,
      * because a successful pip run is hundreds of lines nobody needs.
      *
      * [tailSink], when given, receives that same tail so a caller can *diagnose* rather than merely record —
@@ -1158,12 +1131,9 @@ class TtsService : Disposable {
          *  exits non-zero. Enough for a pip traceback's verdict without archiving a successful install. */
         private const val FAIL_TAIL_LINES = 40
 
-        /** Max speakers a multi-speaker Piper model is expanded into individual dropdown voices (Phase L9).
+        /** Max speakers a multi-speaker Piper model is expanded into individual dropdown voices.
          *  Above this (rare research sets like VCTK/libriTTS with 50–900 speakers) only the default speaker
          *  is offered, to keep the voice dropdown usable. */
         const val MAX_EXPANDED_SPEAKERS = 24
-
-        @Suppress("unused")
-        private val counter = AtomicInteger(0) // reserved for future per-request tracing
     }
 }

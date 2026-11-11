@@ -13,20 +13,14 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 
 /**
- * **Drives the tree surface from walkthrough state, and it is now the only surface.** Resolves N files, opens
- * one tab and tells N node editors what to draw.
+ * **Drives the tree surface from walkthrough state; it is the only surface**, so every plan reaches this.
+ * Resolves N files, opens one tab and tells N node editors what to draw.
  *
- * There was a second renderer beside this one — an in-place spotlight over the user's own editor — and a
- * `Plan.view` field chose between them. Round 3 judged a one-frame scene rendered as a one-node tree as good
- * as the in-place surface for the commonest case, so both are gone and there is no guard here any more: every
- * plan reaches this.
+ * **One timeline, one number.** This runs no step counter of its own: [WalkthroughListener.onStep] carries
+ * the plan's own step index, so the narration controller, the sidebar and the tree cannot disagree about
+ * which step is showing.
  *
- * **One timeline, and since Phase 3 one number.** This does not run a step counter of its own and no longer
- * has to translate one: [WalkthroughListener.onStep] carries the plan's own step index, so the narration
- * controller, the sidebar and the tree cannot disagree about which step is showing. The `(segment,
- * highlight)` pair that used to arrive here and be mapped back through the projection is gone with it.
- *
- * Threading, for measured reasons: callbacks arrive on the server's HTTP worker thread while the walkthrough
+ * Threading: callbacks arrive on the server's HTTP worker thread while the walkthrough
  * lock is held, so file resolution goes to a pooled thread (a VFS refresh is a prohibited slow op on the EDT
  * and unwelcome under the lock) and only the editor mutations are marshalled to the EDT.
  */
@@ -45,7 +39,7 @@ class TreePlanController(private val project: Project, private val walkthrough: 
         if (resolved.frames.isEmpty()) {
             notify(
                 "Nothing to render",
-                "The plan asked for the tree view but no frame in it is renderable.<br/>" +
+                "No frame in the plan is renderable.<br/>" +
                     resolved.issueReport().replace("\n", "<br/>"),
                 NotificationType.WARNING,
             )
@@ -75,7 +69,7 @@ class TreePlanController(private val project: Project, private val walkthrough: 
     /**
      * **Playback resumed — put the step back where the plan put it.**
      *
-     * Phase 3's scroll policy: a reader may scroll a node freely while a step is up, and pressing Play
+     * A reader may scroll a node freely while a step is up, and pressing Play
      * re-asserts the authored viewport. It is a separate callback from [onStep] because the step has *not*
      * changed — re-painting it would be wrong (the callout would re-dock, the links would re-allocate) and
      * doing nothing would leave the reader's own scroll in front of the narration that is about to start.
@@ -99,7 +93,7 @@ class TreePlanController(private val project: Project, private val walkthrough: 
 
     /**
      * Pulse the [beat]-th beat of [step] — the webview reports one whenever the voice reaches the sentence
-     * that beat is timed to. Checked against the painted step for the same reason [flashCurrentToken] is.
+     * that beat is timed to. Checked against the painted step for the same reason [flashStartBeat] is.
      */
     fun flashBeat(step: Int, beat: Int) {
         if (step < 0 || beat < 0) return
@@ -122,17 +116,10 @@ class TreePlanController(private val project: Project, private val walkthrough: 
     fun revealInTree(filePath: String, line1: Int): Boolean =
         view?.revealEndpoint(Endpoint(file = filePath, line = line1)) == true
 
-    /** The live view, for a bench or a report. EDT only. */
-    fun currentView(): TreePlanView? = view
-
     /**
      * **Re-style the open tree with whatever the settings now say** — Settings ▸ Apply's live path.
      *
-     * This replaces `EditorHighlighter.refresh()`, which was the only thing the settings dialog knew how to
-     * reach — deleting that surface without putting this here would have left Apply compiling and doing
-     * nothing (constraint 11).
-     *
-     * **Two halves, and Phase 4 added the first one.** The tree's *shape* — the leader mode, the height
+     * **Two halves.** The tree's *shape* — the leader mode, the height
      * ceiling, the elision style — is not re-derived by painting a step, so [TreePlanView.restyle] has to be
      * asked; every *colour* is derived per render, so [TreePlanView.repaintStep] is enough for the rest.
      * The `else` is not a fallback: `restyle` repaints on its way out when it changed something, and doing
@@ -205,10 +192,8 @@ class TreePlanController(private val project: Project, private val walkthrough: 
     /**
      * **A relation pointer was clicked** — follow it inside the tree when the tree contains its target.
      *
-     * The in-place surface answers this by opening the target's file, which is right when a file tab is what
-     * the reader is looking at. In the tree it would be the same defect the G2 round found: a tab in front of
-     * the tree. So the tree is asked first, and only a target no node owns falls back to a file — and that
-     * fallback is a *click*, not a side effect of stepping, which is the whole difference.
+     * Opening the target's file would put a tab in front of the tree, so the tree is asked first, and only a
+     * target no node owns falls back to a file — and that fallback is a *click*, not a side effect of stepping.
      */
     private fun followRelation(ep: Endpoint) {
         if (view?.revealEndpoint(ep) == true) return

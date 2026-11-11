@@ -3,7 +3,7 @@
  *
  *   node probes/ClockProbe.js
  *
- * The read-along cursor, click-to-seek and (B1b) the beat scheduler all map a time onto the transcript,
+ * The read-along cursor, click-to-seek and the beat scheduler all map a time onto the transcript,
  * and they all read one number: audio-content seconds since the step's audio began. Two clocks produce
  * that number and they disagree exactly when playback starves — which is the defect this file exists to
  * pin down, and the reason the fix needs an instrument at all: a cursor three words ahead of the voice
@@ -79,7 +79,7 @@ const sandbox = {
     stepBuffers: [],
     stepSentences: [],
     transcriptWordSpans: [],
-    // Beats (B1b)
+    // Beats
     sentenceTexts: [],
     firedBeats: new Set(),
     beatSentence: [],
@@ -229,7 +229,7 @@ check("a word past the end resolves to nothing rather than the last sentence",
 header("beatKey — the matching rule, against the table Protocol.kt is also held to");
 
 // probes/beat-normalize.tsv is read by BOTH this file and PlanProbe.java. A phrase the loader accepts and
-// the webview never matches is the one failure in B1b with no symptom, so the two sides are asserted
+// the webview never matches is the one beat failure with no symptom, so the two sides are asserted
 // against one table rather than against each other.
 let rows = 0;
 for (const line of fs.readFileSync(path.join(__dirname, "beat-normalize.tsv"), "utf8").split(/\r?\n/)) {

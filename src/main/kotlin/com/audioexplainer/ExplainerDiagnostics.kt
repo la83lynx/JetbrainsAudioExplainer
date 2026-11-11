@@ -61,15 +61,14 @@ class DiagnosticContext(
  * **"Check permissions and settings"** — read-only checks over the things that decide whether an
  * Explain This run can work at all, each with the fix it needs.
  *
- * It exists because the speed round's three defects were all invisible from inside the IDE: a POST helper
- * that corrupted its payload and printed nothing, a tool the agent reaches for that the allow-list
- * forbade, and an inherited `effortLevel` costing minutes per walkthrough. None of the three would show
- * up in a log anybody reads, and two of them produced no error at all.
+ * It exists because what it looks for is invisible from inside the IDE: a POST helper that corrupts its
+ * payload and prints nothing, a tool the agent reaches for that the allow-list forbids, an inherited
+ * `effortLevel` costing minutes per walkthrough. None of these shows up in a log anybody reads, and two
+ * produce no error at all.
  *
  * **Nothing here writes**, with one bounded exception: the round-trip check POSTs a `ping` (and writes a
- * temp file to send). `ping` was added to [ExplainerServer] for exactly this — `set_plan` would have
- * replaced whatever walkthrough the reader currently has loaded, which is a rude thing for a diagnostic
- * to do.
+ * temp file to send). [ExplainerServer] has `ping` for exactly this — `set_plan` would replace whatever
+ * walkthrough the reader currently has loaded, which is a rude thing for a diagnostic to do.
  */
 object ExplainerDiagnostics {
 
@@ -79,7 +78,7 @@ object ExplainerDiagnostics {
     /**
      * The round-trip payload: an em dash, an arrow, a middle dot and two non-Latin scripts.
      *
-     * Not decoration — `E2 80 94` (the em dash) is the sequence that came back as `E2 3F 22` through a
+     * Not decoration — `E2 80 94` (the em dash) is the sequence that comes back as `E2 3F 22` through a
      * single-byte code page, and that `0x22` is a double quote landing inside a JSON string, so the
      * *document* broke rather than the word. Any check that sends ASCII proves nothing.
      */
@@ -114,7 +113,7 @@ object ExplainerDiagnostics {
         DiagnosticCheck(
             "CLI version", CheckOs.ANY,
             "Update Claude Code (`claude update`, or your installer). Below $EFFORT_CLI_FLOOR the `--effort` " +
-                "flag this plugin now passes is not understood and the run fails before it starts.",
+                "flag the plugin passes is not understood and the run fails before it starts.",
         ) { ctx ->
             val exe = ExecutableFinder.findClaude(ctx.state.claudeExecutablePath)
                 ?: return@DiagnosticCheck Outcome(CheckStatus.FAIL, "no `claude` to ask")
@@ -134,8 +133,8 @@ object ExplainerDiagnostics {
         DiagnosticCheck(
             "Effort in force", CheckOs.ANY,
             "Set Effort in Settings → Tools → Audio Explainer → Explanation. A blank effort inherits " +
-                "`~/.claude/settings.json`'s `effortLevel`, which is chosen for interactive coding: it was " +
-                "measured costing a walkthrough 255s where `medium` took 118s for the same plan shape.",
+                "`~/.claude/settings.json`'s `effortLevel`, which is chosen for interactive coding: at `xhigh` " +
+                "a walkthrough takes about 255s, where `medium` takes 118s for the same plan shape.",
         ) { ctx ->
             val cli = claudeSettings()
             val inherited = stringAt(cli, "effortLevel")
@@ -369,8 +368,8 @@ object ExplainerDiagnostics {
      * Send [ROUND_TRIP_TEXT] **through the platform's real helper** to the running server and compare what
      * arrived with what was sent.
      *
-     * This is the only check that exercises the path end to end, and it is the one that would have caught
-     * the encoding defect on day one instead of during a performance investigation.
+     * This is the only check that exercises the path end to end, so it is the one that catches an encoding
+     * defect in the helper.
      *
      * The verdict is taken from [ExplainerServer.lastPingEcho] — what this process decoded off the wire —
      * and not from the helper's printed reply, because printing is a second encoding hop: a correct POST
@@ -460,17 +459,16 @@ object ExplainerDiagnostics {
         }
     }
 
-    private class Exec(val exit: Int, val text: String)
+    private class Exec(val text: String)
 
     /** Run [cmd], merging stderr into stdout, decoding UTF-8. Never throws; a failure becomes its text. */
     private fun exec(cmd: List<String>, timeoutSec: Long = 15): Exec = try {
         val p = ProcessBuilder(cmd).redirectErrorStream(true).start()
         val text = p.inputStream.use { it.readBytes().toString(StandardCharsets.UTF_8) }
-        val finished = p.waitFor(timeoutSec, TimeUnit.SECONDS)
-        if (!finished) p.destroyForcibly()
-        Exec(if (finished) p.exitValue() else -1, text)
+        if (!p.waitFor(timeoutSec, TimeUnit.SECONDS)) p.destroyForcibly()
+        Exec(text)
     } catch (e: Exception) {
-        Exec(-1, e.message ?: e.javaClass.simpleName)
+        Exec(e.message ?: e.javaClass.simpleName)
     }
 
     /** `~/.claude/settings.json`, or null when it is absent or unreadable. */

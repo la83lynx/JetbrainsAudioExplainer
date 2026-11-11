@@ -39,7 +39,7 @@ object ClaudeSkillInstaller {
     fun ensureInstalled(): Path? {
         val dir = skillDir()
         return try {
-            val bundledVersion = readResource("VERSION")?.trim()
+            val bundledVersion = bundledVersion()
             if (bundledVersion.isNullOrEmpty()) {
                 log.warn("bundled skill VERSION missing; skipping skill install")
                 return null

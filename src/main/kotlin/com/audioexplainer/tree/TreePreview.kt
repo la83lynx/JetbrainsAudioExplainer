@@ -23,14 +23,11 @@ import javax.swing.JComponent
  * **A still frame of the code tree, for the settings page** — one host node, one nested frame, and the join
  * between them, repainted whenever a *Code tree* control changes.
  *
- * It exists because five of that section's six dropdowns choose a *shape*, and a shape described in a
- * paragraph is a shape the reader has to imagine. `Nesting leader` alone cost 338 characters of prose to say
- * what three strokes say at a glance; `Collapse control` cost 520, most of it explaining that the bottom-edge
- * mode has no mark while a frame is open and puts an accent triangle in the strip instead — which this draws.
+ * Most of that section's dropdowns choose a *shape*, and a shape described in a paragraph is a shape the
+ * reader has to imagine.
  *
- * **Every mark here is production's, and that is the whole design.** The repo deleted its `spikes/` because
- * standalone Swing files re-derived the geometry they drew and then agreed with the renderer only until one
- * of the two was edited — and the edit always lands in the renderer, where the work happens. So this asks
+ * **Every mark here is production's, and that is the whole design.** A preview that re-derives the geometry
+ * it draws agrees with the renderer only until one of the two is edited. So this asks
  * [LeaderArt] for the leader path, the token box, the chevron and the collapse hint; [LeaderArt.framePath]
  * for the frame; [CodeNodeView]'s companion for the caption text, the caption band's colour, the title face
  * and the non-active wash; and [ElidedLinesRenderer.paintSealed] for the sealed elision row. It names no
@@ -42,7 +39,7 @@ import javax.swing.JComponent
  * frame is, which node is the active one. That is a stage, not a rule: production lays a node out from a live
  * `Editor`'s line heights and an inlay's bounds, neither of which exists in a modal dialog. The stage is
  * arranged so each setting has something to change, and the one identity that *is* load-bearing is honoured
- * rather than approximated — [LeaderArt.BOX_BOTTOM_IS_STRIP_ROW_0], the box's bottom edge and the strip's row
+ * rather than approximated — the shared-origin identity ([LeaderArt]), the box's bottom edge and the strip's row
  * 0 being one row, is why the strip starts at the box's bottom and not in a gap below it.
  *
  * **The drawing is a function of [Ink], not of the running IDE**, so `probes/TreeBench.java` can paint every
@@ -192,7 +189,7 @@ internal class TreePreview : JComponent() {
             }
 
             // ── The leader strip ───────────────────────────────────────────────
-            // [LeaderArt.BOX_BOTTOM_IS_STRIP_ROW_0]: row 0 of the strip *is* the box's bottom edge, so the
+            // the shared-origin identity ([LeaderArt]): row 0 of the strip *is* the box's bottom edge, so the
             // strip starts there rather than below it, and every leader's origin is the box's own corners.
             val stripTop = box.y + box.height
             val stripH = nest.stripHeight()

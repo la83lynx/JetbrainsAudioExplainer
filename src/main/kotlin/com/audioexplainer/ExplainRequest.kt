@@ -10,15 +10,15 @@ package com.audioexplainer
 enum class ExplainScope { CURSOR, FILE, DIRECTORY }
 
 /**
- * The context an "Explain This (Audio)" request hands to Claude (Phase 5).
+ * The context an "Explain This (Audio)" request hands to the agent.
  *
- * Matches the plan's `{file, caretLine, selectionText}` contract, plus a few fields the Phase 6
- * subprocess needs (the project root as `claude`'s cwd, the absolute path as a fallback). The C#
+ * The `{file, caretLine, selectionText}` context, plus a few fields the agent's
+ * subprocess needs (the project root as its cwd, the absolute path as a fallback). The C#
  * symbol is intentionally *not* resolved here — expanding {caretLine, selection} to the enclosing
- * method/class is Claude's job (see the plan's decision 2).
+ * method/class is the agent's job.
  *
  * [file] is project-relative when the file lives under the project root (so it resolves against
- * Claude's cwd = [projectBasePath] in Phase 6), otherwise absolute. All line numbers are 1-based,
+ * the agent's cwd = [projectBasePath]), otherwise absolute. All line numbers are 1-based,
  * matching the plan/segment schema. [caretLine]/[selectionText] only carry meaning for [ExplainScope.CURSOR];
  * for the Solution-Explorer scopes the target is the whole [file] (plus [extraPaths] for a multi-selection).
  */
@@ -36,8 +36,8 @@ data class ExplainRequest @JvmOverloads constructor(
     val extraPaths: List<String> = emptyList(),
     /**
      * Per-run `claude --effort` override from the "Explain This with…" dialog, or null to take the saved
-     * [AudioExplainerSettings.State.explainEffort]. **Null for the plain menu entry**, which is what keeps
-     * the one-click path on exactly today's arguments.
+     * [AudioExplainerSettings.State.explainEffort]. **Null for the plain menu entry**, which keeps
+     * the one-click path on exactly the saved settings.
      */
     val effort: String? = null,
     /** Per-run depth override, or null to take the saved [AudioExplainerSettings.State.explainDepth]. */
@@ -60,20 +60,4 @@ data class ExplainRequest @JvmOverloads constructor(
     /** Bare file name, for progress/notification text. */
     val displayName: String
         get() = file.substringAfterLast('/')
-
-    /** How the target is described to the user and (in Phase 6) to Claude. */
-    val target: String
-        get() = when (scope) {
-            ExplainScope.CURSOR ->
-                if (selectionText != null && selectionStartLine != null && selectionEndLine != null) {
-                    if (selectionStartLine == selectionEndLine) "selection on line $selectionStartLine"
-                    else "selection (lines $selectionStartLine–$selectionEndLine)"
-                } else {
-                    "symbol at line $caretLine"
-                }
-            ExplainScope.FILE -> "file $displayName"
-            ExplainScope.DIRECTORY ->
-                if (extraPaths.isEmpty()) "directory $displayName"
-                else "${extraPaths.size + 1} selected items"
-        }
 }

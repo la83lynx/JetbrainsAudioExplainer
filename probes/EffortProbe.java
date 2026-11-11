@@ -33,7 +33,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The two generation knobs and the per-run free text (`Effort.md`), asserted on the exact strings the
+ * The two generation knobs and the per-run free text, asserted on the exact strings the
  * plugin hands `claude`.
  *
  * It calls the REAL {@link ExplainPrompt}, which is why that object exists separately from
@@ -44,14 +44,12 @@ import java.util.Map;
  *
  * <h2>The golden file</h2>
  *
- * {@code probes/prompt-standard.txt} is the prompt as it was before depth existed, frozen. It was
- * written by {@code java EffortProbe --freeze} against the commit that moved `buildPrompt` out of
- * `ClaudeExplainer` unchanged (a pure motion — the literals were not touched), and the assertion below
- * compares every Standard-depth prompt against it byte for byte.
+ * {@code probes/prompt-standard.txt} is the Standard-depth prompt, frozen. {@code java EffortProbe --freeze}
+ * writes it, and the assertion below compares every Standard-depth prompt against it byte for byte.
  *
- * That is the assertion that matters. The prompt is the part an upgrade could silently change for
- * everyone, so it has to be provably identical for a user who never opens the new controls. The argv
- * deliberately is NOT identical: it gains `--effort medium`, which is the fix.
+ * That is the assertion that matters. The prompt is the part a change could silently alter for
+ * everyone, so it has to be provably identical for a user who never opens the depth or instructions
+ * controls. The argv is not frozen: it carries `--effort`.
  *
  * Every "X is absent" assertion here sits beside a case where X is present — Brief's missing asks are
  * measured against Standard's and Deep's, so a green tick cannot come from an instrument that is blind.
@@ -71,7 +69,7 @@ public final class EffortProbe {
     static final Path SKILL = Paths.get("/home/u/.claude/skills/audio-explainer");
 
     /**
-     * A fixed plan dir, for the same reason (`Saving.md` B): the real one is a fresh temp directory per run,
+     * A fixed plan dir, for the same reason: the real one is a fresh temp directory per run,
      * and a golden holding it would differ on every machine and every run.
      */
     static final Path PLAN_DIR = Paths.get("/tmp/audio-explainer/plans/run-0");
@@ -266,7 +264,7 @@ public final class EffortProbe {
      * **The run's progress bar** (`ExplainProgress`), fed a synthetic run on a hand-stepped clock that goes
      * exactly as its `RunShape` expects — so an even bar is the right answer at every sample. The plan `Write`
      * arrives in 3-character deltas, so **no delta holds a whole key** — asserted, as the control, because that is
-     * what bench3 recorded (1 key of 13 whole) and what a per-delta count gets wrong.
+     * what a timed run recorded (1 key of 13 whole) and what a per-delta count gets wrong.
      */
     static void progress() {
         List<String> argv = ExplainPrompt.INSTANCE.buildArgs("P", "medium", "", PLAN_DIR);
@@ -508,9 +506,9 @@ public final class EffortProbe {
         String DETAILED = AudioExplainerSettings.DEPTH_DETAILED;
         String DEEP = AudioExplainerSettings.DEPTH_DEEP;
 
-        // ── (a) Standard is today's prompt, byte for byte ─────────────────────
-        // The one that matters. A user who never opens the new group must be asked for exactly what they
-        // were asked for before depth existed — for every scope, both languages, with and without the skill.
+        // ── (a) Standard is the frozen prompt, byte for byte ──────────────────
+        // The one that matters. A user who never opens the depth or instructions controls must be asked for
+        // exactly what the golden holds — for every scope, both languages, with and without the skill.
         Map<String, String> golden = readGolden();
         List<Case> cases = goldenCases();
         check("the golden file holds one section per case (" + cases.size() + ")",
@@ -676,8 +674,8 @@ public final class EffortProbe {
                 prompt(ExplainScope.CURSOR, SKILL, BRIEF, typed).contains("DEPTH: brief")
                         && countOf(prompt(ExplainScope.CURSOR, SKILL, BRIEF, typed), typed) == 1);
 
-        // ── (f) the plan directory (`Saving.md` B) ─────────────────────────────
-        // The payloads the agent POSTs must not land in the project, where they showed up as blank rows in
+        // ── (f) the plan directory ─────────────────────────────────────────────
+        // The payloads the agent POSTs must not land in the project, where they show up as blank rows in
         // the saved list. The prompt names the directory, and the argv grants it explicitly, so a headless
         // `Write` outside the working directory does not rest on the user's own permission settings.
         String planLine = "Write the JSON file you POST in "
@@ -937,7 +935,7 @@ public final class EffortProbe {
                 && Providers.INSTANCE.settingsJson(ollama, null).contains("\"ANTHROPIC_AUTH_TOKEN\":\"ollama\""));
         check("  control: OpenRouter needs one", Providers.INSTANCE.needsKey(p));
 
-        // The lines are real ones (2026-11-05, bad key / OpenRouter).
+        // The lines are real ones (a bad key on OpenRouter).
         String r401 = "{\"type\":\"system\",\"subtype\":\"api_retry\",\"attempt\":1,\"max_retries\":10,\"retry_delay_ms\":602,\"error_status\":401,\"error\":\"authentication_failed\",\"session_id\":\"s\"}";
         String r403 = r401.replace("401", "403");
         String r429 = r401.replace("401", "429").replace("authentication_failed", "rate_limit");

@@ -1,21 +1,16 @@
 package com.audioexplainer
 
 /**
- * **The sidebar's outline, built from the plan's own grouping** — and the replacement for `PlanProjection`,
- * which was the bridge from the schema to a surface that no longer exists.
- *
- * The projection existed to fake a `Segment`/`Highlight` runtime for the in-place editor, and it carried a
- * two-level position (`segment`, `highlightIndex`) that four components had to keep in agreement. Round 3's
- * outline defect was one symptom of that; Phase 3 flattens the position to a single **plan step index** and
- * this object is what is left over — a pure read-only *view* of the plan for drawing rows, holding no
- * position at all. Nothing maps back through it, because there is nothing to map back from.
+ * **The sidebar's outline, built from the plan's own grouping** — a pure read-only *view* of the plan for
+ * drawing rows, holding no position at all. Position is a single **plan step index**, owned by [Walkthrough];
+ * nothing maps back through this object.
  *
  * **Three levels, and the middle one is the only one the outline invents.** A scene row per *mount*, a group
  * per run of consecutive steps sharing a primary frame, a row per step. The scene is the plan's own grouping
- * (decision 11) and the step is the plan's own timeline; the run in between is the same rule the projection
- * used, kept because it is the one thing a reader wants that the schema does not spell out.
+ * and the step is the plan's own timeline; the run in between is the one thing a reader wants that the schema
+ * does not spell out.
  *
- * Two rules it inherits verbatim from the projection, both of which the schema exists to express:
+ * Two rules, both of which the schema exists to express:
  *
  * - **It must not merge a revisit.** A frame two non-adjacent steps return to produces **two** groups, and a
  *   scene the narration leaves and comes back to produces **two scene rows**. Merging either would show the
@@ -24,8 +19,8 @@ package com.audioexplainer
  * - **The step order is the plan's.** The walk below is over `steps` in index order and nothing sorts it.
  *
  * **What it deliberately does not carry: line numbers and file names.** The outline answers *which step am I
- * on*, and nothing else — the reader's words, and the location link under Now Playing is where a file and a
- * line still belong. That is also why [OutlineStep] is an index and a label and has no third field.
+ * on*, and nothing else; the location link under Now Playing is where a file and a line belong. That is also
+ * why [OutlineStep] is an index and a label and has no third field.
  */
 object PlanOutline {
 
@@ -86,9 +81,8 @@ object PlanOutline {
 
         return Outline(
             scenes = scenes,
-            // The scene row is drawn only when there is more than one of them: on a single-scene plan — three
-            // of the four acceptance plans — a header saying "Scene 1" over the whole outline is a level of
-            // indent that separates nothing. The level appears exactly when it starts carrying information.
+            // The scene row is drawn only when there is more than one of them: on a single-scene plan a header
+            // saying "Scene 1" over the whole outline is a level of indent that separates nothing.
             scened = scenes.size > 1,
             steps = resolved.steps.size,
         )
@@ -105,8 +99,7 @@ object PlanOutline {
         val step = resolved.steps.getOrNull(index) ?: return null
         val frame = resolved.frame(step.primaryFrameId) ?: return null
         val ranges = step.rangesIn(frame.id)
-        // The enclosing span of the step's ranges in its primary frame — the same number the projection put
-        // on a `Highlight`, and all the location link ever wanted.
+        // The enclosing span of the step's ranges in its primary frame — all the location link needs.
         val lo = ranges.minOfOrNull { it.lines().first } ?: 0
         val hi = ranges.maxOfOrNull { it.lines().last } ?: 0
         return StepView(
@@ -126,8 +119,8 @@ object PlanOutline {
      * A group's heading: the frame's own title.
      *
      * The fallback is the file's **stem** rather than its name, because a blank title is a plan defect and
-     * `MidInvoker` reads as the thing being explained where `Invokers.cs` reads as a path — which is the
-     * category the outline just had removed from it.
+     * `MidInvoker` reads as the thing being explained where `Invokers.cs` reads as a path, which the outline
+     * deliberately does not show.
      */
     private fun groupTitle(frame: ResolvedFrame?): String {
         if (frame == null) return "?"

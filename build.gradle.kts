@@ -1,6 +1,5 @@
-// Phase 1-2 skeleton. Verify plugin/dependency versions against current releases before first build:
-//   - IntelliJ Platform Gradle Plugin: https://github.com/JetBrains/intellij-platform-gradle-plugin/releases
-//   - Rider platform version must be an existing build (targeting latest stable Rider 2026.1.4 / branch 261).
+// Targets Rider 2026.1.4 (branch 261). When bumping, check the IntelliJ Platform Gradle Plugin releases:
+//   https://github.com/JetBrains/intellij-platform-gradle-plugin/releases
 plugins {
     id("java")
     id("org.jetbrains.kotlin.jvm") version "2.3.0"
@@ -47,7 +46,7 @@ kotlin {
 /**
  * Dev-run diagnostics.
  *
- * Where the log actually is — this cost a debugging session, so it is written down:
+ * Where the log is:
  *  1. NOT `build/idea-sandbox/`. That tree is a leftover from an older Gradle-plugin sandbox layout
  *     and its `log/`+`system/` dirs are empty forever, which looks exactly like "no log is written".
  *     The live sandbox is under `.intellijPlatform/sandbox/<project>/<ide>/`, so the log is:
@@ -65,8 +64,7 @@ kotlin {
 tasks.runIde {
     systemProperty("idea.log.debug.categories", "#com.audioexplainer")
 
-    // The sandbox reopens whichever solution was last used. The `-PspikeFixture` flag that used to point it
-    // at a bundled C# fixture solution came out with the dev round vehicle; open a real .NET solution by hand.
+    // The sandbox reopens whichever solution was last used; open a real .NET solution by hand the first time.
     //
     // Close any running sandbox IDE first: a live one holds a Windows jar lock and prepareSandbox fails.
 }

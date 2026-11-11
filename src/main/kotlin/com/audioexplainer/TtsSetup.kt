@@ -12,15 +12,14 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
 
 /**
- * Phase 7 — the guided TTS provisioning tasks. A plugin cannot hook its own Marketplace install, so
+ * The guided TTS provisioning tasks. A plugin cannot hook its own Marketplace install, so
  * provisioning is a first-run/on-demand flow instead: the [firstRunPrompt] balloon (shown once when the
  * user first presses Play with Kokoro not set up) offers a one-click install or an opt-out, and the
  * **Settings → Tools → Audio Explainer → Audio engines** section drives the same [install] /
- * [installLanguagePacks] background tasks from its per-engine buttons (Phase L7 cleanup — the old modal
- * "Set up TTS" chooser was retired in favour of the by-engine settings UI).
+ * [installLanguagePacks] background tasks from its per-engine buttons.
  *
- * Kokoro is the primary engine; the robotic espeak tier (L6) and — on Windows — the System.Speech tier
- * (L7) ride the same server and are chosen per voice. The install helpers here are Kokoro/pack specific;
+ * Kokoro is the primary engine; the robotic espeak tier and — on Windows — the System.Speech tier
+ * ride the same server and are chosen per voice. The install helpers here are Kokoro/pack specific;
  * the Windows voices are auto-discovered and installing neural ones is the user's own
  * NaturalVoiceSAPIAdapter step (linked from the settings section).
  */
@@ -45,7 +44,7 @@ object TtsSetup {
                     NotificationType.INFORMATION,
                 )
                 .addAction(NotificationAction.createSimple("Install Kokoro (~340 MB)") { install(p) })
-                .addAction(NotificationAction.createSimple("Turn off audio") { setEngine(AudioExplainerSettings.ENGINE_OFF, p) })
+                .addAction(NotificationAction.createSimple("Turn off audio") { turnOffAudio(p) })
                 .notify(p)
         }
     }
@@ -109,7 +108,7 @@ object TtsSetup {
     }
 
     /**
-     * Background install of the Japanese/Chinese misaki packs (Phase L5), then re-check + report which
+     * Background install of the Japanese/Chinese misaki packs, then re-check + report which
      * of the two ended up importable. Independent of the Kokoro model download; if the base model isn't
      * present yet the packs still install, and the notification points the user to install Kokoro too.
      */
@@ -159,7 +158,7 @@ object TtsSetup {
     }
 
     /**
-     * Background install of the Piper offline-neural tier (Phase L8): `pip install piper-tts`, then re-check
+     * Background install of the Piper offline-neural tier: `pip install piper-tts`, then re-check
      * + restart the server so it routes `engine=piper`. Additive — reuses the onnxruntime/numpy Kokoro
      * already pulled. [onDone] runs on the EDT (`ModalityState.any()`) so the settings panel can refresh.
      */
@@ -201,7 +200,7 @@ object TtsSetup {
     }
 
     /**
-     * Background download of one Piper voice model (Phase L8): installs `piper-tts` first if needed, fetches
+     * Background download of one Piper voice model: installs `piper-tts` first if needed, fetches
      * the voice via `--download-piper <key>`, then re-checks + restarts. [voiceKey] is an HF piper-voices key
      * (chosen in the [PiperVoiceManagerDialog]). [onDone] runs on the EDT so the settings panel can refresh.
      */
@@ -250,7 +249,7 @@ object TtsSetup {
     }
 
     /**
-     * Background delete of one installed Piper voice model (Phase L9): removes its `.onnx`/`.onnx.json` via
+     * Background delete of one installed Piper voice model: removes its `.onnx`/`.onnx.json` via
      * `--delete-piper <key>`, then re-checks + restarts so the language/voice menus drop it. [onDone] runs on
      * the EDT (`ModalityState.any()`) so the voice-manager dialog / settings panel can refresh.
      */
@@ -272,21 +271,12 @@ object TtsSetup {
         })
     }
 
-    private fun setEngine(engine: String, project: Project?) {
-        settings.state.ttsEngine = engine
+    private fun turnOffAudio(project: Project?) {
+        settings.state.ttsEngine = AudioExplainerSettings.ENGINE_OFF
         settings.state.ttsSetupPrompted = true
         tts.restart()
-        val msg = when (engine) {
-            AudioExplainerSettings.ENGINE_OFF -> "Audio narration turned off. The walkthrough will show silently."
-            else -> "Narration engine set to ${engineLabel(engine)}."
-        }
-        notify(project, NotificationType.INFORMATION, "Audio Explainer", msg)
-    }
-
-    private fun engineLabel(engine: String): String = when (engine) {
-        AudioExplainerSettings.ENGINE_KOKORO -> "Kokoro (local neural TTS)"
-        AudioExplainerSettings.ENGINE_OFF -> "Off (silent)"
-        else -> engine
+        notify(project, NotificationType.INFORMATION, "Audio Explainer",
+            "Audio narration turned off. The walkthrough will show silently.")
     }
 
     private fun notify(project: Project?, type: NotificationType, title: String, content: String) {
@@ -298,18 +288,12 @@ object TtsSetup {
     }
 
     /**
-     * Run [block] (a background task body) and then fire [onDone] on the EDT with `ModalityState.any()`,
-     * on **every** exit path — normal completion, an early `return`, or an exception. `inline` so the
-     * `return`s inside the install bodies stay non-local (they return from `run`) while still passing
-     * through the `finally`. The `any()` modality lets the callback update the Settings dialog's status
-     * labels while that (modal) dialog is still open.
-     */
-    /**
-     * Run [block], then hand [onDone] to the EDT — and leave [console] in a finished state whatever path was
-     * taken. The console verdict is a `finally` for the same reason `onDone` is: every one of these tasks has
-     * early `return`s, and a console still saying "Working…" an hour after the task ended is a worse lie
-     * than no console at all. [InstallConsoleDialog.finish] is idempotent, so a path that stated its own
-     * verdict keeps it.
+     * Run [block] (a background task body), then fire [onDone] on the EDT with `ModalityState.any()` and
+     * leave [console] in a finished state, on **every** exit path — normal completion, an early `return`, or
+     * an exception. `inline` so the `return`s inside the install bodies stay non-local (they return from
+     * `run`) while still passing through the `finally`. The `any()` modality lets the callback update the
+     * Settings dialog's status labels while that (modal) dialog is still open. [InstallConsoleDialog.finish]
+     * is idempotent, so a path that stated its own result keeps it.
      */
     private inline fun withDone(
         noinline onDone: (() -> Unit)?,

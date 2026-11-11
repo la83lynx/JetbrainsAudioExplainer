@@ -9,7 +9,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /** One entry in the `/api/walkthroughs` listing. [language] is the saved plan's language code (see
- *  [Languages]); "en" for plans saved before the field existed (the [Plan.language] default). */
+ *  [Languages]); "en" when the save carries none (the [Plan.language] default). */
 data class WalkthroughEntry(
     val name: String,
     val title: String,
@@ -19,14 +19,12 @@ data class WalkthroughEntry(
 
 /**
  * Per-workspace persistence of walkthroughs. Files live in `<workspaceRoot>/.walkthroughs/<slug>.json` and
- * hold a whole [Plan] — `{title, language, frames, steps}` (frames and steps since Phase 2; the `view` key
- * went with the in-place surface). A file saved while `view` still existed loads unchanged: the decoder below
- * sets `ignoreUnknownKeys`, so the dropped field is ignored rather than failing the load.
+ * hold a whole [Plan] — `{title, language, frames, steps}`. The decoder sets `ignoreUnknownKeys`, so a file
+ * carrying a field the schema no longer has (`view`, `segments`) loads rather than failing.
  *
  * **`frames[].file` is what gets rewritten**, relative on save and absolute again on load, so a saved
- * walkthrough survives being opened from a different absolute root (§4.4 rule 6). It replaces the segment
- * paths that used to be rewritten here for the same reason and by the same rule: the frame is where a file
- * path lives now, and a relation endpoint's own `file` still travels with it.
+ * walkthrough survives being opened from a different absolute root. A relation endpoint's own `file` travels
+ * with it.
  */
 class WalkthroughStorage(private val workspaceRoot: Path) {
     private val dir: Path = workspaceRoot.resolve(".walkthroughs")
@@ -73,8 +71,8 @@ class WalkthroughStorage(private val workspaceRoot: Path) {
      * files already on disk, which carry no marker:
      *  - **a top-level `type` means a wire message, not a save.** [Plan] has no `type` field, so [save] cannot
      *    write one; a file with it is an agent's `set_plan` payload, written into the project by an agent
-     *    that was told "a temp file" and not where (`Saving.md`). Decoded leniently it becomes a [Plan] with
-     *    a blank title and no frames — the blank rows that errored on open.
+     *    that was told "a temp file" and not where. Decoded leniently it becomes a [Plan] with
+     *    a blank title and no frames — a blank row that errors on open.
      *  - **a blank `title` or no `frames`** is what `saveCurrentWalkthrough` refuses to write, so it is not a
      *    save whatever else it is.
      */

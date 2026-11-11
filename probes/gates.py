@@ -58,7 +58,7 @@ note(not bad, 'every resource XML parses', '%d files' % n + ('  ' + '; '.join(ba
 mixed = []
 for root, dirs, files in os.walk('.'):
     dirs[:] = [d for d in dirs
-               if d not in ('.git', 'build', '.gradle', '.intellijPlatform', 'scratchpad', '.idea', 'spikes')]
+               if d not in ('.git', 'build', '.gradle', '.intellijPlatform', 'scratchpad', '.idea')]
     for f in files:
         if os.path.splitext(f)[1] in ('.kt', '.java', '.json', '.md', '.xml', '.py', '.ps1', '.txt'):
             p = os.path.join(root, f)
@@ -77,7 +77,7 @@ note(not mixed, 'no mixed line endings', str(len(mixed)) + ' files'
 skill = 'src/main/resources/claude-skill'
 sep = chr(92)
 listed = set()
-mf = os.path.join(skill, 'MANIFEST.txt')
+mf = os.path.join(skill, 'manifest.txt')
 if os.path.exists(mf):
     for line in io.open(mf, encoding='utf-8'):
         line = line.strip()
@@ -116,8 +116,8 @@ else:
 
 # 7. markdown fences balanced ------------------------------------------------
 unbalanced = []
-docs = ['README.md', 'JetbrainsAudioExplainer.md', 'ExplainerLanguages.md', 'probes/README.md',
-        os.path.join(skill, 'docs/plan-schema.md')]
+docs = ['README.md', 'probes/README.md', os.path.join(skill, 'docs/plan-schema.md')]
+# Plan docs are checked while they are in the tree; they do not ship, so their absence is not a failure.
 for f in docs:
     t = io.open(f, encoding='utf-8').read()
     if t.count('\n```') % 2:
@@ -126,10 +126,10 @@ note(not unbalanced, 'markdown fences balanced',
      '%d files' % len(docs) + ('  ' + ','.join(unbalanced) if unbalanced else ''))
 
 # 8. one destination for a plan ----------------------------------------------
-# Phase 4's *"there is no second destination to choose"*, as a check rather than as a claim. The `view`
-# field that used to pick between the tree and an in-place spotlight is deleted, so the way a second
-# destination comes back is not a field — it is a second listener that also opens something. So: exactly
-# one place constructs the tree controller, exactly one registers it, and no source names the dead field.
+# A plan has exactly one destination, the tree. The deleted `view` field once picked between the tree and
+# an in-place spotlight; a second destination would now come back as a second listener that also opens
+# something. So: exactly one place constructs the tree controller, exactly one registers it, and no source
+# names the dead field.
 #
 # The control is built in: the same sweep counts the *registration*, which must also be 1. A check that
 # only counted constructions would pass on a controller built and never subscribed — a tree that no plan

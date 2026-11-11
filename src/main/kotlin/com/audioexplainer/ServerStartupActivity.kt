@@ -11,10 +11,7 @@ import java.nio.file.Path
  * On project open: touches the app service (starting the loopback server on first access), points
  * per-workspace save/load at this project's base path, and installs the tree surface's listener for this
  * project. The last opened project wins the per-workspace save/load root; the listener is registered per
- * project and removed on project close.
- *
- * There used to be two listeners here, one per rendering surface, and a plan chose between them. Round 3
- * settled that: the tree is the only surface, so there is nothing to choose and nothing to guard.
+ * project and removed on project close. The tree is the only rendering surface.
  */
 class ServerStartupActivity : ProjectActivity {
     override suspend fun execute(project: Project) {

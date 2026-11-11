@@ -4,7 +4,6 @@
 #   explainer.sh plan <json_file>      Send walkthrough plan from file
 #   explainer.sh send <json_string>    Send raw JSON message
 #   explainer.sh state                 Get current walkthrough state
-#   explainer.sh wait-action [timeout] Wait for user action (default 30s)
 #   explainer.sh stop                  Stop the walkthrough
 #   explainer.sh save [name]           Save current walkthrough
 #   explainer.sh load <name>           Load a saved walkthrough
@@ -28,6 +27,11 @@ else
     echo '{"error": "No auth token found"}' >&2
     exit 1
 fi
+
+# Escape a string for use inside a JSON string literal (backslash and double quote).
+json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
 
 case "$1" in
     plan)
@@ -53,10 +57,6 @@ case "$1" in
     state)
         curl -s -H "$AUTH_HEADER" "$BASE/api/state"
         ;;
-    wait-action)
-        TIMEOUT="${2:-30}"
-        curl -s --max-time "$((TIMEOUT + 5))" -H "$AUTH_HEADER" "$BASE/api/actions?timeout=$TIMEOUT"
-        ;;
     stop)
         curl -s -X POST "$BASE/api/message" \
             -H 'Content-Type: application/json' \
@@ -64,7 +64,7 @@ case "$1" in
             -d '{"type": "stop"}'
         ;;
     save)
-        NAME="${2:-}"
+        NAME=$(json_escape "${2:-}")
         if [ -n "$NAME" ]; then
             curl -s -X POST "$BASE/api/save" \
                 -H 'Content-Type: application/json' \
@@ -85,13 +85,13 @@ case "$1" in
         curl -s -X POST "$BASE/api/load" \
             -H 'Content-Type: application/json' \
             -H "$AUTH_HEADER" \
-            -d "{\"name\": \"$2\"}"
+            -d "{\"name\": \"$(json_escape "$2")\"}"
         ;;
     list)
         curl -s -H "$AUTH_HEADER" "$BASE/api/walkthroughs"
         ;;
     *)
-        echo "Usage: explainer.sh {plan|send|state|wait-action|stop|save|load|list}" >&2
+        echo "Usage: explainer.sh {plan|send|state|stop|save|load|list}" >&2
         exit 1
         ;;
 esac

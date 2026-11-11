@@ -1,20 +1,16 @@
 package com.audioexplainer.tree
 
 /**
- * **How much of a frame's `keep` a step folds away for itself** — the 2026-10-14 round: *"all generated
- * walkthroughs make much less use of code collapsing, showing quite a lot of unrelevant code"*, with two
- * cases named: a step inside a nested frame playing under the whole of its parent, and a link from the bottom
- * of a frame to its top *"with quite a lot of lines in between"*.
+ * **How much of a frame's `keep` a step folds away for itself.**
  *
- * Measured on that round's plans, the agent's `keep` is not the problem — 80-95 % of a frame's kept lines are
- * narrated by *some* step. What a reader does not need is relative to the **current** step, which a plan
- * cannot say and the plugin can: `keep` stays the plan's word on what the frame is, and this folds part of it
- * for one step, openable like any other fold, and gives it back on the next.
+ * A plan's `keep` is mostly right — 80-95 % of a frame's kept lines are narrated by *some* step. What a reader does not
+ * need is relative to the **current** step, which a plan cannot say and the plugin can: `keep` stays the plan's word on
+ * what the frame is, and this folds part of it for one step, openable like any other fold, and gives it back on the next.
  *
  * Each value includes the ones before it.
  */
 enum class StepCondense {
-    /** Every frame shows its whole `keep` at every step — what shipped before the round. */
+    /** Every frame shows its whole `keep` at every step. */
     OFF,
 
     /**
@@ -33,10 +29,10 @@ enum class StepCondense {
 
     /**
      * And in the step's own frame, **the members the step is not in** fold: the method the step narrates
-     * stays whole, the frame's other methods go. The 2026-10-19 round's shape — 11 of 14 saved plans put one
-     * 50-60-line frame per scene and step through it ~6 lines at a time, so at any step most of the frame
-     * is other steps' members. A member is the outermost block around a step line that does not hold the
-     * whole `keep` ([member]); the class does, so it is never the one kept.
+     * stays whole, the frame's other methods go. Most plans put one 50-60-line frame per scene and
+     * step through it ~6 lines at a time, so at any step most of the frame is other steps' members. A member is the
+     * outermost block around a step line that does not hold the whole `keep` ([member]); the class does, so it is never
+     * the one kept.
      */
     MEMBER,
 
@@ -89,9 +85,9 @@ enum class StepCondense {
 
         /**
          * **The lines that say where 1-based [line] sits** — the header of each block around it, innermost
-         * first in the walk: the `if (…)` and its `{`, the method's signature and its `{`, the class's — the
-         * 2026-10-15 round: a fold that keeps a step but hides the `if` it is inside, or keeps a link's end but
-         * not even the method it lands in, leaves the reader to guess where they are.
+         * first in the walk: the `if (…)` and its `{`, the method's signature and its `{`, the class's. A fold
+         * that keeps a step but hides the `if` it is inside, or keeps a link's end but not even the method it
+         * lands in, leaves the reader to guess where they are.
          *
          * By indentation, not by a parser, so it is one rule for every language a frame can be in (and Rider's
          * frontend has no C# tree to ask). Walking up, the first line indented less than the current one opens
@@ -166,7 +162,7 @@ enum class StepCondense {
          * the first type or namespace header ([TYPE_HEADER]) and below any block holding every [kept] line;
          * null when [line] is such a header itself. Outermost, so a step on one statement keeps the whole
          * method; below the type, so the class is never the member even when the frame also keeps the
-         * interfaces above it — which "below the block holding everything" alone got wrong on hig-standard-1.
+         * interfaces above it, which "below the block holding everything" alone would get wrong.
          */
         fun member(line: Int, kept: Collection<Int>, text: (Int) -> String?): IntRange? {
             val lo = kept.minOrNull() ?: return null

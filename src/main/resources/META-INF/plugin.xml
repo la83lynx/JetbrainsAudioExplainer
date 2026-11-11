@@ -5,10 +5,14 @@
 
     <description><![CDATA[
         Right-click <b>"Explain This (Audio)"</b> to get a spoken, line-highlighted walkthrough of the
-        selected code — or the method/class under the cursor. Uses Claude Code (headless) as the
-        reasoning backbone and a local Kokoro TTS server for narration.
+        selected code, the method or class under the cursor, or a file or folder. An AI agent reads the code
+        and writes the walkthrough; a <b>tree of code</b> tab shows only the lines that matter, nests each
+        callee under the line that calls it, and follows the narration step by step.
         <br/><br/>
-        Requires the Claude CLI on PATH and a local TTS server (see the plugin's setup docs).
+        <b>Requires</b> an agent: the Claude Code CLI on PATH, or an ACP agent (opencode, Qwen Code or a
+        custom one). Narration needs Python 3.10+; <i>Tools → Audio Explainer → Audio engines…</i> installs
+        the voices (Kokoro, Piper, Windows SAPI, espeak-ng; ~50 languages). Without them a walkthrough still
+        loads and highlights, silently.
     ]]></description>
 
     <!-- Depending only on the platform module makes this a pure frontend plugin,
@@ -25,10 +29,8 @@
                     icon="AllIcons.Toolwindows.Documentation"
                     factoryClass="com.audioexplainer.AudioExplainerToolWindowFactory"/>
         <postStartupActivity implementation="com.audioexplainer.ServerStartupActivity"/>
-        <!-- The tree host, and now the only one (Phase 2). Accepts only TreePlanVirtualFile, so no file of
-             the user's can reach it; HIDE_DEFAULT_EDITOR keeps the platform from offering a text tab beside it.
-             The dev bench provider that used to sit here, and the fixture-plan menu beside it, came out with
-             the com.audioexplainer.spike package before release. -->
+        <!-- The walkthrough tree host. Accepts only TreePlanVirtualFile, so no file of the user's can reach
+             it; HIDE_DEFAULT_EDITOR keeps the platform from offering a text tab beside it. -->
         <fileEditorProvider implementation="com.audioexplainer.tree.TreePlanEditorProvider"/>
         <applicationService serviceImplementation="com.audioexplainer.ExplainerServerService"/>
         <applicationService serviceImplementation="com.audioexplainer.AudioExplainerSettings"/>
@@ -39,8 +41,8 @@
                                  displayName="Audio Explainer"
                                  instance="com.audioexplainer.HighlightSettingsConfigurable"/>
         <notificationGroup id="Audio Explainer" displayType="BALLOON"/>
-        <!-- Saving.md D: an unsaved walkthrough is asked about before the project closes. The vetoable hook,
-             so Cancel keeps the project open. -->
+        <!-- An unsaved walkthrough is asked about before the project closes. The vetoable hook, so Cancel
+             keeps the project open. -->
         <projectCloseHandler implementation="com.audioexplainer.UnsavedWalkthroughCloseHandler"/>
     </extensions>
 
@@ -54,7 +56,7 @@
             <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
         </action>
 
-        <!-- The per-run overrides (Effort.md). Declared AFTER the plain entry and anchored "last" in the
+        <!-- The per-run overrides. Declared AFTER the plain entry and anchored "last" in the
              same two groups, so it lands directly under it: the common case stays one click and does not
              move, and the dialog is the thing you go looking for. -->
         <action id="AudioExplainer.ExplainThisWith"

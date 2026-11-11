@@ -5,8 +5,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 /**
- * The token anchor's boundary behaviour (B1a) — the last thing in `MoreUI.md` §2.7 that had been traced by
- * hand and never asserted.
+ * The token anchor's boundary behaviour, asserted rather than traced by hand.
  *
  * It calls the REAL `SpotlightRenderer.findNth`, the same one `resolveToken` runs twice (whole-word, then
  * bare substring), so like every probe here it cannot drift from the code it measures: a rename breaks it

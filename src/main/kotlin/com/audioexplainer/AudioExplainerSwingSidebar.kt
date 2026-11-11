@@ -15,7 +15,7 @@ import javax.swing.JPanel
 import javax.swing.SwingConstants
 
 /**
- * Swing fallback sidebar (Phase 4) for environments where JCEF is unavailable
+ * Swing fallback sidebar for environments where JCEF is unavailable
  * (`JBCefApp.isSupported()` is false, or the browser fails to initialise). No webview / audio — just
  * the walkthrough title, status, current segment, and the core transport controls, driving the same
  * [Walkthrough] state machine (which in turn drives the tree-of-code surface via [TreePlanController]).
@@ -37,7 +37,7 @@ class AudioExplainerSwingSidebar(
     private val segmentLabel = JBLabel("")
     private val playPauseBtn = JButton("Play")
 
-    // Phase 7.5 #5 — one-level undo of a replaced walkthrough.
+    // One-level undo of a replaced walkthrough.
     private val undoPanel: JPanel
     private val trackerListener = ExplainSessionTracker.Listener { renderGeneration(it) }
 

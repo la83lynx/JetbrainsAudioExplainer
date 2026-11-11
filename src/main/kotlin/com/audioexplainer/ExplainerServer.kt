@@ -27,8 +27,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.security.SecureRandom
 import java.util.concurrent.Executors
-import java.util.concurrent.LinkedBlockingDeque
-import java.util.concurrent.TimeUnit
 
 /** What [ExplainerServer.saveCurrentWalkthrough] wrote: the name it answers to, and the file. */
 data class SavedWalkthrough(val name: String, val filePath: String)
@@ -37,9 +35,8 @@ data class SavedWalkthrough(val name: String, val filePath: String)
  * **One headless run's own way in**: `/mcp/<id>`, answered only to its own [token] and only until
  * [ExplainerServer.closeRun]. The run is never handed the server's token, so nothing it is given outlives it.
  *
- * [planDir] keeps each plan the tool receives, as the POST's payload file used to be kept — the evidence when a
- * run fails. [onPlan] is told about every plan that loads, with its issues, so the run can say it is ready
- * without waiting for the agent to finish.
+ * [planDir] keeps each plan the tool receives — the evidence when a run fails. [onPlan] is told about every
+ * plan that loads, with its issues, so the run can say it is ready without waiting for the agent to finish.
  */
 class McpRun internal constructor(
     val id: String,
@@ -66,14 +63,12 @@ class McpRun internal constructor(
 
 /**
  * Loopback HTTP server, port + auth token published to `~/.claude-explainer-{port,token}` for discovery.
- * It began as a byte-for-byte port of code-explainer's `vscode-extension/src/server.ts`; the `set_plan`
- * body is the `frames` + `steps` schema since Phase 2 and the three segment-surgery messages are retired
- * with it (`TreeOfCode.rules.md` Phase 2 decision 10), so the wire contract is this project's own now.
+ * It began as a port of code-explainer's `vscode-extension/src/server.ts`; the `set_plan` body is this
+ * project's own `frames` + `steps` schema, so the wire contract is its own too.
  *
  * Routes (all JSON, auth via `Authorization: Bearer <token>` or `x-auth-token`, `OPTIONS` un-authed):
  *   GET  /api/health        -> {"status":"ok"}
  *   GET  /api/state         -> {title,step,stepCount,status,totalFrames,totalScenes,frame,...}
- *   GET  /api/actions?timeout=<sec>  -> long-poll: 200 UserAction | 204 on timeout (1..120s, default 30)
  *   POST /api/message       -> {"ok":true,"frames":N,"steps":N,"issues":[...]}  (set_plan|goto|resume|stop|ping)
  *   POST /api/save          -> {"ok":true,"filePath":...}
  *   GET  /api/walkthroughs  -> {"walkthroughs":[{name,title,filePath}]}
@@ -82,12 +77,12 @@ class McpRun internal constructor(
  *
  * **`issues` on a `set_plan` reply is the one channel that reaches the agent that authored the plan.** A
  * frame dropped, a cycle cut, a step lighting a line its frame elides — all of it comes back on the POST,
- * because §1b's requirement is that a plan rendering three of its four frames says so. So does what only the
+ * because a plan rendering three of its four frames must say so. So does what only the
  * code can show — a token not on its line, a file that does not resolve ([PlanSourceCheck]).
  *
  * The upstream WebSocket channel is intentionally NOT ported: it only carried `state` broadcasts
  * and inbound AgentMessages (both redundant with HTTP), no reused client ever connects to it, and
- * its `queueAction` producer is dead code upstream. The JCEF sidebar (Phase 4) bridges via
+ * its `queueAction` producer is dead code upstream. The JCEF sidebar bridges via
  * JBCefJSQuery, not WS. Revisit only if a genuine WS client appears.
  */
 class ExplainerServer {
@@ -99,10 +94,7 @@ class ExplainerServer {
     /** The headless runs with an MCP endpoint open, by the id in their path. */
     private val runs = java.util.concurrent.ConcurrentHashMap<String, McpRun>()
 
-    /** Pending user actions for the `/api/actions` long-poll (FIFO; produced by the sidebar in Phase 4). */
-    private val actions = LinkedBlockingDeque<UserAction>()
-
-    /** Walkthrough state machine; Phase 3/4 register a [WalkthroughListener] on it to drive editor/UI. */
+    /** Walkthrough state machine; the tree and the sidebar register a [WalkthroughListener] on it. */
     val walkthrough = Walkthrough()
 
     @Volatile
@@ -173,16 +165,11 @@ class ExplainerServer {
     /** Where [run]'s endpoint answers. */
     fun mcpUrl(run: McpRun): String = "http://127.0.0.1:$port$MCP_PREFIX${run.id}"
 
-    /** Queue a user action for the agent's next `/api/actions` long-poll (Phase 4 sidebar). */
-    fun enqueueAction(action: UserAction) {
-        actions.offerLast(action)
-    }
-
-    // ── In-process helpers for the sidebar (Phase 4) — same storage the HTTP routes use ──
+    // ── In-process helpers for the sidebar — same storage the HTTP routes use ──
 
     /**
      * Save the current walkthrough. `name` overrides the file stem (else the title is slugified), and the
-     * walkthrough becomes that save (`Saving.md` C) — the next Save writes the same file without asking.
+     * walkthrough becomes that save — the next Save writes the same file without asking.
      * Returns what was written, or null if there is no workspace storage or no active walkthrough.
      */
     fun saveCurrentWalkthrough(name: String?): SavedWalkthrough? {
@@ -262,7 +249,6 @@ class ExplainerServer {
         when {
             method == "GET" && path == "/api/health" -> sendJson(ex, 200, buildJsonObject { put("status", "ok") })
             method == "GET" && path == "/api/state" -> handleGetState(ex)
-            method == "GET" && path == "/api/actions" -> handleGetActions(ex)
             method == "POST" && path == "/api/message" -> handleMessage(ex)
             method == "POST" && path == "/api/save" -> handleSave(ex)
             method == "GET" && path == "/api/walkthroughs" -> handleListWalkthroughs(ex)
@@ -276,9 +262,7 @@ class ExplainerServer {
         val now = walkthrough.currentStepView()
         sendJson(ex, 200, buildJsonObject {
             put("title", state.title)
-            // **One position.** `currentSegment` + `currentIndex` + `currentHighlight` were three spellings
-            // of a two-level cursor into a projected list that no longer exists; an agent polling this now
-            // reads the plan's own step index, which is the same number the sidebar and the tree hold.
+            // **One position**: the plan's own step index, the same number the sidebar and the tree hold.
             put("step", state.stepIndex)
             put("stepCount", state.stepCount)
             put("status", state.status)
@@ -289,21 +273,6 @@ class ExplainerServer {
             // The step showing, as the sidebar's Now Playing sees it: which frame, its prose, the narration.
             put("frame", if (now != null) json.encodeToJsonElement(now) else JsonNull)
         })
-    }
-
-    private fun handleGetActions(ex: HttpExchange) {
-        val timeoutMs = parseTimeoutMs(ex.requestURI.rawQuery)
-        val action = actions.pollFirst(timeoutMs, TimeUnit.MILLISECONDS)
-        if (action == null) {
-            sendEmpty(ex, 204)
-            return
-        }
-        try {
-            sendJson(ex, 200, json.encodeToJsonElement(action))
-        } catch (t: Throwable) {
-            actions.offerFirst(action) // client vanished mid-write — don't drop the action
-            throw t
-        }
     }
 
     private fun handleMessage(ex: HttpExchange) {
@@ -339,9 +308,8 @@ class ExplainerServer {
 
     /**
      * The reply to a plan, POSTed or sent with the tool: everything wrong with it, back to the only reader who can
-     * fix it — the agent that just wrote it. §1b's second requirement: a plan that renders three of its four
-     * frames has to say so, or the fourth reads as a renderer defect. `issues` is absent when the plan was clean,
-     * so a well-formed plan's reply is byte-identical to what it always was.
+     * fix it — the agent that just wrote it. A plan that renders three of its four frames has to say so, or
+     * the fourth reads as a renderer defect. `issues` is absent when the plan was clean.
      */
     private fun planReply(resolved: ResolvedPlan, issues: List<PlanIssue>): JsonObject = buildJsonObject {
         put("ok", true)
@@ -398,20 +366,17 @@ class ExplainerServer {
      * Run one agent message, returning the [ResolvedPlan] when the message loaded one (so the responder can
      * report its issues) and null otherwise.
      *
-     * **`insert_after` / `replace_segment` / `remove_segments` are gone** (Phase 2 decision 10): they edited
-     * a segment list that is no longer the source of truth, and a live plan is now changed by POSTing a new
-     * `set_plan` — which the agent can do, because it is holding the whole plan already.
+     * There are no in-place plan edits: a live plan is changed by POSTing a new `set_plan`, which the agent
+     * can do because it is holding the whole plan already.
      */
     private fun dispatchAgentMessage(obj: JsonObject): ResolvedPlan? {
         when (obj["type"]!!.jsonPrimitive.content) {
             "set_plan" -> return walkthrough.setPlanUnlessShowing(json.decodeFromJsonElement<Plan>(obj))
             "goto" -> {
-                // `frameId` is the name since Phase 2; `segmentId` is still read as an alias, because an
-                // agent holding an old prompt spells it that way. Both resolve the same: the **first step**
-                // whose primary frame is that id. A `stepIndex` may also be given, which is exact — an agent
-                // that knows the plan's own step order no longer has to name a frame to reach a step.
+                // A `frameId` resolves to the **first step** whose primary frame is that id. A `stepIndex` is
+                // exact, and takes precedence.
                 val step = obj["stepIndex"]?.jsonPrimitive?.int
-                    ?: (obj["frameId"] ?: obj["segmentId"])?.jsonPrimitive?.int
+                    ?: obj["frameId"]?.jsonPrimitive?.int
                         ?.let { walkthrough.firstStepOfFrame(it) }
                     ?: return null
                 walkthrough.navigateToStep(step)
@@ -530,7 +495,7 @@ class ExplainerServer {
     /**
      * Everything wrong with [resolved] **including what only the code can show** — the loader's structural
      * issues, then [PlanSourceCheck]'s: a token not on its line, a line past the end, a file that does not
-     * resolve. That second half is what the agent used to check for itself, with a script, on every run.
+     * resolve.
      *
      * It runs here, on the HTTP thread, because this is where the reply is built and nothing else needs to
      * wait for it: a few files read once each. **A failure costs the check and never the POST**, since the
@@ -559,8 +524,7 @@ class ExplainerServer {
             // narration, which the loader reports (`plan.no-steps`) rather than rejects. Rejecting at the
             // wire level would turn a reportable authoring mistake into a 400 with no detail.
             "set_plan" -> isJsonString(obj["title"]) && obj["frames"] is JsonArray
-            "goto" -> isJsonNumber(obj["frameId"]) || isJsonNumber(obj["segmentId"]) ||
-                isJsonNumber(obj["stepIndex"])
+            "goto" -> isJsonNumber(obj["frameId"]) || isJsonNumber(obj["stepIndex"])
             // `echo` is optional and free-form; a `ping` with none is still a valid liveness poke.
             "ping" -> true
             "resume", "stop" -> true
@@ -656,8 +620,6 @@ class ExplainerServer {
 
     companion object {
         private const val MAX_BODY_SIZE = 1024 * 1024 // 1 MB
-        private const val MAX_LONG_POLL_TIMEOUT_MS = 120_000L
-        private const val MIN_LONG_POLL_TIMEOUT_MS = 1_000L
         private const val PORT_FILE = ".claude-explainer-port"
         private const val TOKEN_FILE = ".claude-explainer-token"
         private const val MCP_PREFIX = "/mcp/"
@@ -668,17 +630,6 @@ class ExplainerServer {
             val bytes = ByteArray(32)
             SecureRandom().nextBytes(bytes)
             return bytes.joinToString("") { "%02x".format(it) }
-        }
-
-        /** `?timeout=<sec>` → ms, matching upstream: default 30s, clamped to [1s, 120s]. */
-        private fun parseTimeoutMs(rawQuery: String?): Long {
-            val seconds = rawQuery
-                ?.split('&')
-                ?.firstOrNull { it.startsWith("timeout=") }
-                ?.substringAfter('=')
-                ?.toIntOrNull()
-                ?: 30
-            return (seconds * 1000L).coerceIn(MIN_LONG_POLL_TIMEOUT_MS, MAX_LONG_POLL_TIMEOUT_MS)
         }
 
         private fun isJsonString(e: JsonElement?): Boolean = (e as? JsonPrimitive)?.isString == true

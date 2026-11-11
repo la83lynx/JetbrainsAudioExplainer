@@ -168,9 +168,9 @@ class ExplainOptionsDialog(project: Project?) : DialogWrapper(project) {
             "<b>low</b> — the fastest, and the likeliest to get a line number or a call chain wrong. " +
                 "Measured: 74s, against 255s at <code>xhigh</code>.",
             "<b>medium</b> — about half the time of <code>xhigh</code>, same plan shape. " +
-                "Measured: 118s vs 255s. This is what the plugin ships.",
+                "Measured: 118s vs 255s. The default.",
             "<b>high</b> — between <code>medium</code> and <code>xhigh</code>. Not measured.",
-            "<b>xhigh</b> — what a run inherited before this control existed, if that is your CLI default. " +
+            "<b>xhigh</b> — thorough but slow. " +
                 "Measured: 255s (mean of two runs).",
             "<b>max</b> — the most careful, and the slowest. Not measured; expect more than <code>xhigh</code>.",
         )

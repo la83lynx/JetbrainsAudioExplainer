@@ -31,7 +31,7 @@ internal class RunResult(
  * the `set_plan` tool did not connect, a provider rejected the key.
  */
 internal object ClaudeHarness {
-    /** The run's timeline keeps the category `idea.log` has always had it under. */
+    /** Under [ClaudeExplainer]'s category, so a run's whole timeline reads as one in `idea.log`. */
     private val log = Logger.getInstance(ClaudeExplainer::class.java)
 
     fun run(

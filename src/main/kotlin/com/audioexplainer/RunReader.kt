@@ -12,9 +12,8 @@ import kotlinx.serialization.json.contentOrNull
  * provider's retries.
  *
  * **The timeline** is a line per tool call with its elapsed time, and a closing line with the run's own
- * accounting. It exists because a sandbox round could not answer the two questions every speed measurement asks: how
- * long the run took, and what it spent the time on. INFO, so it reaches `idea.log` and stays out of the `runIde`
- * console.
+ * accounting: it answers how long the run took, and what it spent the time on. INFO, so it reaches `idea.log` and
+ * stays out of the `runIde` console.
  *
  * Fed under the harness's stream lock ([onLine]); the fields the run loop polls from its own thread are volatile.
  * [now] is injected so a recorded run can be replayed (`probes/RunEventGolden.java`).
@@ -60,7 +59,7 @@ class RunReader(
         private set
 
     /** Seconds since the run started, for log lines. */
-    fun at(): String = "%.1fs".format(now() - started)
+    fun at(): String = "%.1fs".format(java.util.Locale.ROOT, now() - started)
 
     /**
      * The events of one line of the agent's output, in order. A line that is not a retry clears [retryNote]: the

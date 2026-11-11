@@ -7,7 +7,6 @@
 #   explainer.ps1 plan <json_file>      Send walkthrough plan from file
 #   explainer.ps1 send <json_string>    Send raw JSON message
 #   explainer.ps1 state                 Get current walkthrough state
-#   explainer.ps1 wait-action [timeout] Wait for user action (default 30s)
 #   explainer.ps1 stop                  Stop the walkthrough
 #   explainer.ps1 save [name]           Save current walkthrough
 #   explainer.ps1 load <name>           Load a saved walkthrough
@@ -107,26 +106,24 @@ switch ($Command) {
     'state' {
         Invoke-Api 'Get' '/api/state'
     }
-    'wait-action' {
-        $timeout = if ($Arg) { [int]$Arg } else { 30 }
-        Invoke-Api 'Get' "/api/actions?timeout=$timeout" $null ($timeout + 5)
-    }
     'stop' {
         Invoke-Api 'Post' '/api/message' '{"type": "stop"}'
     }
     'save' {
-        $body = if ($Arg) { "{`"name`": `"$Arg`"}" } else { '{}' }
+        $name = $Arg -replace '\\', '\\' -replace '"', '\"'
+        $body = if ($Arg) { "{`"name`": `"$name`"}" } else { '{}' }
         Invoke-Api 'Post' '/api/save' $body
     }
     'load' {
         if (-not $Arg) { [Console]::Error.WriteLine('Usage: explainer.ps1 load <name>'); exit 1 }
-        Invoke-Api 'Post' '/api/load' "{`"name`": `"$Arg`"}"
+        $name = $Arg -replace '\\', '\\' -replace '"', '\"'
+        Invoke-Api 'Post' '/api/load' "{`"name`": `"$name`"}"
     }
     'list' {
         Invoke-Api 'Get' '/api/walkthroughs'
     }
     default {
-        [Console]::Error.WriteLine('Usage: explainer.ps1 {plan|send|state|wait-action|stop|save|load|list}')
+        [Console]::Error.WriteLine('Usage: explainer.ps1 {plan|send|state|stop|save|load|list}')
         exit 1
     }
 }

@@ -5,10 +5,9 @@ import com.intellij.openapi.diagnostic.Logger
 /**
  * How loud a [PlanIssue] is, and the three levels mean three different things to whoever reads the report.
  *
- * The distinction is the deliverable, not the enum: §1b's fixture produced the rule that **nothing resolves
- * silently** because *"a plan that renders three of its four nodes must say so or the fourth reads as a
- * renderer defect"*. A report that cannot separate "this was dropped" from "this is over a soft cap" is a
- * report the reader learns to ignore.
+ * The rule is that **nothing resolves silently**: a plan that renders three of its four nodes must say so, or
+ * the fourth reads as a renderer defect. A report that cannot separate "this was dropped" from "this is over a
+ * soft cap" is a report the reader learns to ignore.
  */
 enum class IssueLevel {
     /** Something in the plan was **dropped** — a frame, a step, a step's whole frame reference. */
@@ -39,7 +38,7 @@ data class PlanIssue(val level: IssueLevel, val code: String, val message: Strin
  *
  * @param parentId The frame this one nests in, or null for a root. **Null here can mean "authored as a
  *   root" or "degraded to one"** — the difference is in [ResolvedPlan.issues], never silent.
- * @param focus The excerpt of interest (§1a⁵ 4): what a nested node is sized to and lands on. Stated by the
+ * @param focus The excerpt of interest: what a nested node is sized to and lands on. Stated by the
  *   plan when it carries a `focus` role, inferred from range order otherwise (and the inference is
  *   reported).
  */
@@ -92,7 +91,7 @@ class ResolvedStep(val step: Step, val frames: List<StepFrame>) {
  * two models do not:
  *
  * - **One node per frame for the whole plan** cannot express a long walkthrough — a plan explaining twelve
- *   files would keep twelve editors open, which is Phase 4's named risk taken deliberately.
+ *   files would keep twelve editors open.
  * - **Retargeting one node's document per step is not available.** Verified against the platform rather than
  *   assumed: `Editor`, `EditorEx` and `EditorImpl` expose `getDocument()` and no setter, and every
  *   `EditorFactory` factory method takes the document as a *creation* parameter with `releaseEditor` as the
@@ -158,9 +157,6 @@ class ResolvedPlan(
     /** Frames that are not nested in another — the tree's top level, in plan order. */
     fun roots(): List<ResolvedFrame> = frames.filter { it.parentId == null }
 
-    /** Direct children of [id], in plan order. */
-    fun childrenOf(id: Int): List<ResolvedFrame> = frames.filter { it.parentId == id }
-
     fun isEmpty(): Boolean = frames.isEmpty() || steps.isEmpty()
 
     fun issues(level: IssueLevel): List<PlanIssue> = issues.filter { it.level == level }
@@ -192,8 +188,7 @@ private fun buildScenes(frames: List<ResolvedFrame>, steps: List<ResolvedStep>):
 /**
  * **Validation, and the only place a malformed plan is interpreted.**
  *
- * Every check here exists because something measured in Phase 1 has no sensible render-time recovery, and
- * `TreeOfCode.rules.md`'s caps are the list: a cycle would land as
+ * Every check here exists because the failure has no sensible render-time recovery: a cycle would land as
  * [com.audioexplainer.tree.EmbedState.FAILED] by edge order, an over-deep frame would put a few hundred
  * pixels of code inside two thousand, a step lighting an elided line would highlight a fold placeholder and
  * read as a lost step. So the plan is checked and **the plan is wrong** — the renderer is never asked to
@@ -212,11 +207,11 @@ object PlanLoader {
 
     private val log = Logger.getInstance(PlanLoader::class.java)
 
-    // ── Caps (`plan-schema.md`; provenance in TreeOfCode.rules.md). Soft unless said otherwise. ──
+    // ── Caps (documented for authors in `plan-schema.md`). Soft unless said otherwise. ──
 
     /**
-     * **Nesting depth, 0-based: a root plus two levels of nesting.** The binding cap and the one number in
-     * the caps file that is a judgement — depth 3 is proven, depth 4 has never been run, and depth
+     * **Nesting depth, 0-based: a root plus two levels of nesting.** The binding cap — depth 3 is proven,
+     * depth 4 has never been run, and depth
      * compounds where nothing else does (a node's height is its own excerpt *plus* its children at full
      * height: measured 1584 / 954 / 510 px). Past it the frame renders **at top level**, which is the same
      * answer the renderer already gives a child whose edge names no call line.
@@ -224,22 +219,13 @@ object PlanLoader {
     const val MAX_NEST_DEPTH: Int = 2
 
     /**
-     * Sibling frames in one host. Additive, not nested — a taller host and nothing worse. Soft.
+     * Sibling frames in one host. Additive, not nested — a taller host and nothing worse. Soft. Six still read
+     * cleanly as siblings; unlike [MAX_NEST_DEPTH], this cap does not compound.
      *
-     * **3 → 6 on the reader's judgement in G2 round 2**, having seen three on screen: *"All siblings read as
-     * siblings cleanly … we can safely increase the cap to 5–7."* 6 is the middle of that range.
-     *
-     * Two things worth recording rather than quietly deciding. The round's words were *"nesting cap"* while
-     * the row was the **sibling** row, so this reads it as siblings — and [MAX_NEST_DEPTH] stays where it is,
-     * because depth is the one cap that compounds and nothing beyond three levels has ever been rendered.
-     *
-     * And **[LINE_BUDGET] is still what binds**: six siblings at ~12 kept lines each is 72 before the parent's
-     * own header rows. That is not a reason to raise the budget — it is the budget doing its job, and since the
-     * scene decision it has a remedy an author can act on, which it did not have before. *Split the scene.*
-     *
-     * K3's fold softened this one case and only this one: siblings are the shape a step *can* fold away, so
-     * six of them cost the reader whichever one the step is in, not all six. The budget still counts them all,
-     * because a reader who expands two of them by hand is owed a scene that fits when they do.
+     * **[LINE_BUDGET] is still what binds**: six siblings at ~12 kept lines each is 72 before the parent's own
+     * header rows, and the remedy is to split the scene. The step fold means siblings cost the reader only the
+     * one the step is in, but the budget still counts them all, because a reader who expands two of them by
+     * hand is owed a scene that fits when they do.
      */
     const val MAX_SIBLINGS: Int = 6
 
@@ -254,34 +240,16 @@ object PlanLoader {
     const val WIDEN_MAX_LINES: Int = 6
 
     /**
-     * **Lines of code on screen, across every frame** — Phase 2 decision 8. A judgement, and the number
-     * moved once before it was ever run in anger, which is worth recording because the correction came from
-     * the cheapest possible check.
+     * **Lines of code on screen, across every frame.** The tree lives in a tool window beside a sidebar, at
+     * whatever zoom and monitor the reader keeps it; measured viewports there range from 25 to 55 lines, and
+     * the cap sits at the top of that range so it flags only what fails on every screen. (A three-deep chain
+     * of 26 + 26 + 14 = 66 kept lines is flagged, correctly: it scrolls.)
      *
-     * It started at 60, from arithmetic alone: an editor viewport is ~45–55 lines at a typical line height,
-     * and the tallest tree measured (a 1584 px root) is already more than a screenful. Then the loader probe
-     * ran the fixture's own three-deep `chain` through it — 26 + 26 + 14 = **66 kept lines** — and the plan
-     * the reader judged *"sufficiently good"* came back over budget, so it moved to **80**: above what had
-     * been read and liked, below two of those viewports.
-     *
-     * **K4 and K5 measured the viewport instead of deriving it.** K4, on one monitor: *"my IDE shows 25-40
-     * lines (depending on subwindows, zoom, etc.)"*. K5, on another: *"I now see 55 lines in IDE. Guess we
-     * should make 60 default."* The 45–55 was an editor filling a window; this tree lives in a tool window
-     * beside a sidebar, at whatever zoom and on whichever monitor the reader keeps it — so the honest reading
-     * of the two measurements is a **range**, 25 to 55, and the cap is set at the top of it.
-     *
-     * **60**, therefore, and note what moved and what did not. 80 was never "below two viewports" — it was
-     * above two of the smaller real one — and 60 still flags the 66-line chain above, which is the point
-     * rather than a regression: that chain never fitted, it scrolled, and the round that liked it was judging
-     * how it rendered and not whether it sat still. A cap chosen at the *top* of a measured range is a cap
-     * that flags only what fails on every screen.
-     *
-     * **Reported once per scene**, because a scene is exactly "the frames on screen at once". What changed
-     * under it is that the fold no longer waits for this cap ([com.audioexplainer.tree.StepFold], K3): every
-     * nesting a step does not use is collapsed anyway. So the lines this cap is really about are the ones a
-     * fold cannot reclaim — **the frames one step needs open together**. That was all of a nested chain
-     * until [com.audioexplainer.tree.StepCondense] (2026-10-14) folded a nested step's ancestors to their
-     * headers and the call line; the count still sums them, so a chain is the one shape it overstates.
+     * **Reported once per scene**, because a scene is exactly "the frames on screen at once". The fold
+     * ([com.audioexplainer.tree.StepFold]) collapses every nesting a step does not use, so the lines this cap
+     * is really about are **the frames one step needs open together**. [com.audioexplainer.tree.StepCondense]
+     * folds a nested step's ancestors to their headers and the call line, but the count still sums them, so a
+     * chain is the one shape it overstates.
      */
     const val LINE_BUDGET: Int = 60
 
@@ -376,10 +344,8 @@ object PlanLoader {
      * Every frame's parent link, degraded to null where it cannot stand: unknown id, itself, a dropped
      * frame, or a cycle.
      *
-     * **The cycle is broken at the frame that closes it**, which is what §1b's deleted loader did and what
-     * the caps file says to copy. A schema that cannot express a cycle would be worth more, and `parent` on
-     * the child gets as close as JSON allows — one parent per frame is unexpressable-by-construction, a
-     * cycle is not.
+     * **The cycle is broken at the frame that closes it.** `parent` on the child makes two parents per frame
+     * unexpressable by construction; a cycle is not, so it is cut here.
      */
     private fun resolveLinks(frames: List<Frame>, issues: MutableList<PlanIssue>): Map<Int, Int?> {
         val ids = frames.map { it.id }.toHashSet()
@@ -441,8 +407,8 @@ object PlanLoader {
     }
 
     /**
-     * Depth per frame, with **over-deep frames re-rooted** rather than refused (the caps file's "degrade,
-     * not refuse"). Processed shallowest-first so a re-rooted frame's own children measure from where they
+     * Depth per frame, with **over-deep frames re-rooted** rather than refused. Processed shallowest-first
+     * so a re-rooted frame's own children measure from where they
      * actually land.
      */
     private fun resolveDepths(
@@ -505,11 +471,9 @@ object PlanLoader {
      * **A step lighting a few lines just past its frame's `keep` widens the nearest kept range** instead of
      * being a `[warn]`.
      *
-     * As a `[warn]` it sent the agent back to re-send the whole plan — ~25s at xhigh (2026-11-05,
-     * `xhigh / detailed`: "step 3 lights lines 18-21 of frame 0, but 3 of them are not kept") — to fix what is
-     * almost always an off-by-a-few at the end of a member. The earlier verdict here was that growing `keep`
-     * overrides the author's elision; for a handful of lines next to what they kept, the author's own step is
-     * the better statement of what they meant to show.
+     * A `[warn]` sends the agent back to re-send the whole plan (~25s at xhigh) to fix what is almost always
+     * an off-by-a-few at the end of a member. For a handful of lines next to what the author kept, their own
+     * step is the better statement of what they meant to show.
      *
      * The nearest range is grown to cover the step range and any gap between them, keeping its role (so a
      * widened focus is still the focus). Only when that adds at most [WIDEN_MAX_LINES] lines not already kept;
@@ -568,9 +532,9 @@ object PlanLoader {
     /**
      * The frame's focus range — **stated, or inferred and reported.**
      *
-     * The inference is Phase 1's own guess about authoring: a frame keeps its class header first and the
-     * member it is about second. It was in `CodeNodeSpec.focusRange()` because the fixture could not state
-     * it; now the schema can, so a frame that does not is a frame whose landing the plan never chose.
+     * The inference guesses at authoring: a frame keeps its class header first and the member it is about
+     * second. The schema can state the focus, so a frame that does not is one whose landing the plan never
+     * chose — hence the report.
      */
     private fun focusOf(frameId: Int, ordered: List<LineRange>, issues: MutableList<PlanIssue>): LineRange? {
         val stated = ordered.filter { it.isFocus }
@@ -646,13 +610,7 @@ object PlanLoader {
     // ── Relations ──
 
     /**
-     * **What the loader can say about `relations` without opening a file** — which is not everything, and the
-     * line between the two halves is the whole reason this arrived a phase late.
-     *
-     * Until now `issues` covered frames, steps, scenes and `keep`, and said **nothing whatever** about
-     * relations: `plan-schema.md` had to tell authors *"check them yourself, because nothing else will."* For
-     * an agent writing a plan from the docs alone, a relation was the one thing that could be wrong and give
-     * nothing back.
+     * **What the loader can say about `relations` without opening a file** — which is not everything.
      *
      * **Every check here is structural** — the plan against itself — because that is what this class is. It
      * never touches the filesystem: `frame.call-line-not-kept` compares a line against the frame's own `keep`,
@@ -667,9 +625,8 @@ object PlanLoader {
      * draws these — see [inStepBand] for why a validator must not carry its own copy.
      *
      * **An end on an elided line drops the relation** rather than drawing it into the placeholder, and says so
-     * at `info`. It was a `warn` the author was asked to fix, and an agent sending the plan through a tool call
-     * fixed it by re-sending the whole plan — ~20s for one arrow. A link into nothing is
-     * worse than no link, so the plugin takes the author's cheaper fix itself. Returns the frames with only
+     * at `info`: as a `warn`, an agent fixes it by re-sending the whole plan (~20s for one arrow). A link into
+     * nothing is worse than no link, so the plugin takes the author's cheaper fix itself. Returns the frames with only
      * the relations left that can be drawn.
      */
     private fun checkRelations(
@@ -792,10 +749,9 @@ object PlanLoader {
      * it never made a frame for, and that end becomes a callout line rather than a drawn one.
      *
      * **Only frames of [own]'s scene**, because that is all the tree searches (`TreePlanView.frameOwning` looks
-     * at the mounted nodes). Searching the whole plan found a frame in *another* scene that keeps the line,
-     * called the endpoint fine, and the tree meanwhile drew it into this scene's frame on that file — onto a
-     * `⋯ N lines ⋯` placeholder (2026-10-14, `xhigh-deep-1`: a link from `CancelRequest.cs` to
-     * `ObjectPool.cs:88`, kept only by scene 1's frame).
+     * at the mounted nodes). Searching the whole plan would find a frame in *another* scene that keeps the
+     * line, call the endpoint fine, while the tree draws it into this scene's frame on that file — onto a
+     * `⋯ N lines ⋯` placeholder.
      */
     private fun ownerOf(ep: Endpoint, own: ResolvedFrame, frames: List<ResolvedFrame>): ResolvedFrame? {
         val path = ep.file?.trim()?.takeIf { it.isNotEmpty() } ?: return own
@@ -810,9 +766,8 @@ object PlanLoader {
     /**
      * Steps whose frame references name frames that survived, with the one-frame sugar normalised away.
      *
-     * A step's ranges are checked against its frame's `keep` — the rule that came out of writing the first
-     * hand-written plan, where the closing step was authored one line past the end of what the frame kept.
-     * It renders: as a highlight on a `⋯ N lines ⋯` placeholder, indistinguishable from a lost step. A few
+     * A step's ranges are checked against its frame's `keep`: a step lighting an unkept line still renders,
+     * but as a highlight on a `⋯ N lines ⋯` placeholder, indistinguishable from a lost step. A few
      * lines next to a kept range were already widened by [widenKeepForSteps]; what is left here is a step
      * pointing well away from anything kept, where growing `keep` would invent an excerpt and dropping the
      * step loses narration — so a report and nothing else.
@@ -903,7 +858,7 @@ object PlanLoader {
                 }
                 // A phrase the narration never says can never fire — the webview matches beats against what
                 // was actually spoken. Named rather than left silent, because "my beat didn't flash" is
-                // otherwise unanswerable. Validate-and-drop, §4.4 rule 3.
+                // otherwise unanswerable. Validate-and-drop.
                 if (!beat.atStart && !beat.spokenIn(step.ttsText)) {
                     issues += PlanIssue(
                         IssueLevel.WARN, "step.beat-unspoken",
@@ -921,9 +876,8 @@ object PlanLoader {
                     continue
                 }
                 // **The check a token alone could never get.** This is pure arithmetic — no file, no VFS —
-                // so it runs at load and reaches the agent in the `set_plan` reply, where a mis-anchored
-                // pulse used to be a FINE log line nobody opens. Kept rather than dropped: the author named
-                // that line, and honouring it beats guessing.
+                // so it runs at load and reaches the agent in the `set_plan` reply rather than only the log.
+                // Kept rather than dropped: the author named that line, and honouring it beats guessing.
                 if (beat.line > 0 && lit.none { r -> beat.line in r.lines() }) {
                     issues += PlanIssue(
                         IssueLevel.WARN, "step.beat-line-outside-ranges",
@@ -968,10 +922,9 @@ object PlanLoader {
                 )
             }
         }
-        // **Per scene, not per plan** — the scene decision moved this cap, and it is the one place the scene
-        // model pays for itself rather than merely enabling something. The budget was always "lines on screen
-        // at once", and with scenes a plan of forty frames puts only one scene's worth on screen; the old
-        // whole-plan sum would have flagged every long walkthrough for a crowding that never happens.
+        // **Per scene, not per plan**: the budget is "lines on screen at once", and a plan of forty frames puts
+        // only one scene's worth on screen. A whole-plan sum would flag every long walkthrough for a crowding
+        // that never happens.
         for (scene in buildScenes(frames, steps)) {
             val visible = scene.keptLines()
             if (visible > LINE_BUDGET) {
@@ -998,14 +951,12 @@ object PlanLoader {
     /**
      * The log half of "nothing resolves silently" — one line per issue, at the level the issue claims.
      *
-     * Deliberately not a summary count: the counts are what a caller shows, and a log line that says
-     * *"4 issues"* is the exact shape of message that made §1b's fixture worth writing.
+     * Deliberately not just a summary count: a log line that says *"4 issues"* tells nobody what went wrong.
      */
     private fun report(resolved: ResolvedPlan) {
         for (issue in resolved.issues) {
             when (issue.level) {
-                IssueLevel.ERROR -> log.warn("plan: $issue")
-                IssueLevel.WARN -> log.warn("plan: $issue")
+                IssueLevel.ERROR, IssueLevel.WARN -> log.warn("plan: $issue")
                 IssueLevel.INFO -> log.info("plan: $issue")
             }
         }

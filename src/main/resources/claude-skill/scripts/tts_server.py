@@ -24,12 +24,12 @@ Wire protocol — newline-delimited JSON, ONE request per TCP connection:
                       {"ping": true}\\n
 
   An optional ``"engine": "espeak"`` routes the request to the bundled espeak-ng synthesizer (the
-  ~100-language robotic fallback tier, Phase L6) instead of Kokoro; the ``voice`` is then an espeak
+  ~100-language robotic fallback tier) instead of Kokoro; the ``voice`` is then an espeak
   voice spec (a language code plus an optional ``+f3``/``+m3`` variant). ``"engine": "sapi"`` routes to
-  the Windows System.Speech tier (Phase L7, Windows only) — ``voice`` is then an installed SAPI5 voice
+  the Windows System.Speech tier (Windows only) — ``voice`` is then an installed SAPI5 voice
   NAME (e.g. "Microsoft Aria Online"); this reaches whatever voices the machine has, including the
   neural Edge "Online" voices surfaced by NaturalVoiceSAPIAdapter. ``"engine": "piper"`` routes to the
-  Piper offline-neural tier (Phase L8, cross-platform, requires ``pip install piper-tts`` + a per-voice
+  Piper offline-neural tier (cross-platform, requires ``pip install piper-tts`` + a per-voice
   model download) — ``voice`` is then a Piper voice key (e.g. "de_DE-eva_k-x_low"). Absent, the request
   uses the primary engine (Kokoro, or synthetic in --synthetic mode). The ``meta`` frame reports whichever
   engine actually served the request, at that engine's own sample rate (Kokoro 24 kHz, espeak/SAPI 22.05
@@ -58,7 +58,7 @@ On a fatal startup error it instead prints ``{"ready":false,"error":"..."}`` and
 
 Modes:
   (default)        load kokoro-onnx and serve. If the model can't load, exit non-zero with a JSON
-                   error line — unless --allow-fallback, which degrades to the synthetic tone engine.
+                   error line.
   --synthetic      never load a model; synthesize a short sine tone per sentence. Lets the whole
                    TCP -> plugin -> webview audio path be exercised with NO model / heavy deps.
   --download       download the Kokoro model + voices into --model-dir (progress on stdout), exit.
@@ -102,7 +102,7 @@ VOICES_NAME = "voices-v1.0.bin"
 MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
 VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
 
-# Piper offline-neural tier (Phase L8). Each voice is a standalone VITS ONNX model downloaded on demand
+# Piper offline-neural tier. Each voice is a standalone VITS ONNX model downloaded on demand
 # from the rhasspy/piper-voices HF repo into <model-dir>/piper/. The catalog lists ~170 voices / ~50
 # languages; each entry's `files` map gives the repo-relative path (+ size + md5) appended to PIPER_BASE_URL.
 PIPER_SUBDIR = "piper"
@@ -138,7 +138,7 @@ def piper_dir(model_dir):
 # CJK (Japanese/Chinese) detection + sentence/clause punctuation. CJK writes without spaces, and its
 # sentence enders (。．！？…) and commas (、，；) differ from ASCII — so the splitters below must handle
 # both alphabets, or a whole ja/zh narration stays one un-split blob (no per-sentence streaming, and the
-# webview read-along has nothing to advance through). See ExplainerLanguages.md §6.
+# webview read-along has nothing to advance through).
 _CJK_RE = re.compile(r"[぀-ヿ㐀-䶿一-鿿豈-﫿ｦ-ﾟ]")
 # Sentence boundary: an ASCII ender followed by whitespace, OR (zero-width) right after a CJK ender.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|(?<=[。．！？…])")
@@ -308,8 +308,8 @@ class KokoroEngine:
         lang = lang or lang_for_voice(voice)
         # Japanese is the one language kokoro-onnx cannot phonemize (see `_phonemize_ja`), so we do it
         # and hand the model finished phonemes. Chinese is *not* in the same boat: espeak's `cmn` voice
-        # has a Han dictionary and is what produced the Chinese narration that was judged good, so it
-        # keeps the ordinary path and misaki[zh] is not required for it.
+        # has a Han dictionary and produces good Chinese narration, so it keeps the ordinary path and
+        # misaki[zh] is not required for it.
         use_misaki_ja = lang == "ja"
         if use_misaki_ja and not _misaki_lang_ready("ja"):
             raise RuntimeError("Japanese needs 'misaki[ja]' — install it from Settings → Audio engines → Kokoro")
@@ -340,14 +340,14 @@ def _sine_pcm(freq, duration, sample_rate):
     return bytes(out)
 
 
-# ── espeak-ng robotic fallback tier (Phase L6) ──────────────────────────────────
+# ── espeak-ng robotic fallback tier ────────────────────────────────────────────
 #
 # The ~100 languages Kokoro can't voice, at lower ("robotic but intelligible") quality, with ZERO extra
 # download: `kokoro-onnx` already pulls `espeakng-loader`, which ships the espeak-ng shared library + voice
 # data (we use it for Kokoro's phonemization). The *same* library is a full synthesizer, driven here with
 # pure ctypes (no `py-espeak-ng` dependency). espeak init returns 16-bit mono @ 22 050 Hz; we convert to
 # float32-LE and stream through the identical wire protocol (the webview honours the per-stream sample rate).
-# A ctypes spike confirmed espeak and Kokoro coexist in one process, so no separate server is needed.
+# espeak and Kokoro coexist in one process, so no separate server is needed.
 
 _ESPEAK_AUDIO_RETRIEVAL = 1  # espeak_AUDIO_OUTPUT: deliver PCM to our callback (no audio device)
 _ESPEAK_CHARS_UTF8 = 1       # espeakCHARS_UTF8 flag for espeak_Synth
@@ -356,7 +356,7 @@ _ESPEAK_RATE = 1             # words-per-minute
 _ESPEAK_PITCH = 3            # base pitch 0..100 (espeak default 50)
 _ESPEAK_RANGE = 4            # pitch range / "liveliness" 0..100 (0 = monotone, espeak default 50)
 _ESPEAK_WORDGAP = 7          # extra gap between words, units of 10 ms (espeak default 0)
-# Tuning defaults (Phase L6.1 quality pass). WPM lowered from espeak's 175 default — slower is markedly
+# Tuning defaults. WPM lowered from espeak's 175 default — slower is markedly
 # clearer for the robotic tier and recovers syllables that ran together — plus a tiny word gap for the
 # same reason. Pitch/range default to espeak's neutral 50 but are user-tunable from the sidebar.
 _ESPEAK_DEFAULT_WPM = 160
@@ -526,7 +526,7 @@ def _install_espeak_variants():
 
 
 class EspeakEngine:
-    """espeak-ng via ctypes — the robotic ~100-language fallback tier (Phase L6). Synthesizes 16-bit mono
+    """espeak-ng via ctypes — the robotic ~100-language fallback tier. Synthesizes 16-bit mono
     PCM at ~22 050 Hz per sentence and converts it to float32-LE for the wire. Reuses [split_sentences].
     Installs our custom clean voice variants on init and honours per-request tuning: runtime params
     (pitch / range / word-gap via SetParameter) plus Layer-2 params (consonants / roughness / flutter /
@@ -592,7 +592,7 @@ class EspeakEngine:
             yield pcm, self.sample_rate, sentence
 
 
-# ── Windows System.Speech tier (Phase L7) ───────────────────────────────────────
+# ── Windows System.Speech tier ─────────────────────────────────────────────────
 #
 # A Windows-only tier that reaches whatever SAPI5 voices the machine has installed — the classic
 # offline voices AND, once the user installs NaturalVoiceSAPIAdapter (a third-party SAPI5 provider) and
@@ -666,7 +666,7 @@ def _wav_to_float32le(path):
 
 
 class SapiEngine:
-    """Windows System.Speech tier (Phase L7). See the section header. Synthesizes each sentence to a WAV
+    """Windows System.Speech tier. See the section header. Synthesizes each sentence to a WAV
     via a persistent PowerShell worker and converts it to the wire's float32-LE. Reuses [split_sentences]
     so read-along + streaming work as for the other engines. The server is serial (one request at a time),
     so at every yield the worker is idle and its pipe drained — a mid-stream cancel leaves it reusable."""
@@ -719,18 +719,18 @@ class SapiEngine:
             yield pcm, sr, sentence
 
 
-# ── Piper offline-neural tier (Phase L8) ────────────────────────────────────────
+# ── Piper offline-neural tier ──────────────────────────────────────────────────
 
 
 class PiperEngine:
-    """Piper VITS ONNX offline-neural tier (Phase L8). The missing middle tier — neural quality, fully
+    """Piper VITS ONNX offline-neural tier. The middle tier — neural quality, fully
     offline, cross-platform (unlike SAPI), covering the ~40 languages Kokoro can't voice. Each voice is a
     standalone ONNX model under <model-dir>/piper/, downloaded on demand (see --download-piper). Loads each
     voice lazily and caches it (like [KokoroEngine]); drives synthesis one sentence at a time via
     [split_sentences] so read-along + streaming match the other engines. ``AudioChunk.audio_float_array`` is
     already float32 in [-1, 1] → emit float32-LE directly (the Kokoro path, no ``_wav_to_float32le`` round-
-    trip). Piper ships its OWN bundled espeak-ng-data, isolated from the [EspeakEngine] tier — verified to
-    coexist with Kokoro + espeak in one process. ``voice`` is a bare Piper voice key (e.g. ``de_DE-eva_k-
+    trip). Piper ships its OWN bundled espeak-ng-data, isolated from the [EspeakEngine] tier, and coexists
+    with Kokoro + espeak in one process. ``voice`` is a bare Piper voice key (e.g. ``de_DE-eva_k-
     x_low``); ``speed`` maps to ``length_scale = 1/speed``. Sample rate is per-voice (16 kHz for x_low,
     22.05 kHz otherwise) and carried per chunk, so mixed rates need no wire change."""
 
@@ -743,7 +743,7 @@ class PiperEngine:
 
     @staticmethod
     def _split_speaker(voice):
-        """A Piper voice spec is ``<key>`` or ``<key>#<speakerIndex>`` for multi-speaker models (Phase L9).
+        """A Piper voice spec is ``<key>`` or ``<key>#<speakerIndex>`` for multi-speaker models.
         Returns ``(key, speaker_id_or_None)``; a trailing ``#N`` selects speaker N (0-based), else default."""
         key = (voice or "").strip()
         base, sep, spk = key.rpartition("#")
@@ -772,7 +772,7 @@ class PiperEngine:
         key, speaker = self._split_speaker(voice)
         v = self._voice(key)
         speed = max(0.5, min(3.0, float(speed)))
-        # speaker_id selects a voice within a multi-speaker model; None → the model's default (Phase L9).
+        # speaker_id selects a voice within a multi-speaker model; None → the model's default.
         syn = SynthesisConfig(length_scale=1.0 / speed, speaker_id=speaker)  # slower speed → longer audio
         for sentence in split_sentences(text):
             # Drive one sentence at a time: Piper splits internally but its AudioChunk carries no source
@@ -961,7 +961,7 @@ def _fetch_piper_catalog():
 
 def _speaker_names(speaker_id_map, count):
     """Turn a Piper ``speaker_id_map`` (``{name: id}``) into an id-indexed name list of length ``count``
-    (Phase L9). Many multi-speaker models use opaque numeric ids ("00737") — the plugin falls back to
+    Many multi-speaker models use opaque numeric ids ("00737") — the plugin falls back to
     "Speaker N" for those — so a missing/degenerate map just yields an empty list."""
     if not isinstance(speaker_id_map, dict) or count <= 1:
         return []
@@ -974,7 +974,7 @@ def _speaker_names(speaker_id_map, count):
 
 def _normalize_piper_catalog(raw):
     """Reduce the raw ``voices.json`` (keyed by voice key, each a big nested entry) to the compact list the
-    voice-manager UI needs (Phase L9): one row per voice with language names, quality, speaker count/names,
+    voice-manager UI needs: one row per voice with language names, quality, speaker count/names,
     total download size, and the .onnx md5. Sorted by language then quality then key for a stable menu."""
     quality_rank = {"x_low": 0, "low": 1, "medium": 2, "high": 3}
     rows = []
@@ -1008,7 +1008,7 @@ def _normalize_piper_catalog(raw):
 
 def _piper_catalog(model_dir, refresh=False):
     """Return the normalized Piper catalog (see [_normalize_piper_catalog]) plus its source, caching it to
-    ``<model-dir>/piper/catalog.json`` so the manager opens offline after the first fetch (Phase L9).
+    ``<model-dir>/piper/catalog.json`` so the manager opens offline after the first fetch.
     ``refresh`` forces a re-fetch. Returns ``(rows, source, error)`` where source ∈ network/cache/none."""
     cache = os.path.join(piper_dir(model_dir), PIPER_CATALOG_NAME)
     if not refresh and os.path.isfile(cache):
@@ -1064,7 +1064,7 @@ def _piper_installed_voices(model_dir):
             "family": None,    # walkthrough language code, e.g. "de"
             "nameEnglish": None,
             "nameNative": None,
-            "speakerNames": [],  # index = speaker_id; name from the model's speaker_id_map (Phase L9)
+            "speakerNames": [],  # index = speaker_id; name from the model's speaker_id_map
         }
         try:
             with open(cfg_path, "r", encoding="utf-8") as f:
@@ -1122,9 +1122,9 @@ def do_check(model_path, voices_path, model_dir):
             ready_langs.append("zh")
     status["languagesReady"] = ready_langs
     # Robotic-tier (espeak) language codes the local build supports — the plugin uses these to populate /
-    # validate the tier-2 menu (Phase L6). Zero extra deps: espeakng-loader ships with kokoro-onnx.
+    # validate the tier-2 menu. Zero extra deps: espeakng-loader ships with kokoro-onnx.
     status["espeakLanguages"] = _espeak_language_codes()
-    # Piper offline-neural tier (Phase L8). `piperImportable` = the pip package is installed;
+    # Piper offline-neural tier. `piperImportable` = the pip package is installed;
     # `piperVoices` = the models already downloaded into <model-dir>/piper (each with its metadata). Unlike
     # espeak, Piper needs a separate `pip install piper-tts` + per-voice downloads, so both are reported.
     status["piperImportable"] = _can_import("piper")
@@ -1172,7 +1172,7 @@ def _md5(path):
 
 def do_download_piper(model_dir, voice_key):
     """Download one Piper voice (its ``.onnx`` + ``.onnx.json``) from HF into <model-dir>/piper, resolving
-    the repo paths from the catalog and md5-verifying each file against the catalog digest (Phase L9). Emits
+    the repo paths from the catalog and md5-verifying each file against the catalog digest. Emits
     the same progress/downloaded/done frames as [do_download]; a corrupt download is removed, not kept."""
     try:
         entry = _fetch_piper_catalog().get(voice_key)
@@ -1196,7 +1196,7 @@ def do_download_piper(model_dir, voice_key):
 
 
 def do_delete_piper(model_dir, voice_key):
-    """Delete one installed Piper voice (its ``.onnx`` + ``.onnx.json``) from <model-dir>/piper (Phase L9)."""
+    """Delete one installed Piper voice (its ``.onnx`` + ``.onnx.json``) from <model-dir>/piper."""
     try:
         dest_dir = piper_dir(model_dir)
         removed = []
@@ -1212,7 +1212,7 @@ def do_delete_piper(model_dir, voice_key):
 
 
 def do_piper_catalog(model_dir, refresh=False):
-    """Print the normalized Piper voice catalog as one JSON object (Phase L9) for the voice-manager UI:
+    """Print the normalized Piper voice catalog as one JSON object for the voice-manager UI:
     ``{"type":"catalog","source":"network|cache|none","voices":[...],"error":?}``."""
     rows, source, error = _piper_catalog(model_dir, refresh=refresh)
     out = {"type": "catalog", "source": source, "voices": rows}
@@ -1229,7 +1229,6 @@ def main():
     ap.add_argument("--model", help="explicit model path (default: <model-dir>/%s)" % MODEL_NAME)
     ap.add_argument("--voices", help="explicit voices path (default: <model-dir>/%s)" % VOICES_NAME)
     ap.add_argument("--synthetic", action="store_true", help="sine-tone engine, no model (testing).")
-    ap.add_argument("--allow-fallback", action="store_true", help="degrade to synthetic if Kokoro won't load.")
     ap.add_argument("--download", action="store_true", help="download model + voices, then exit.")
     ap.add_argument("--download-piper", metavar="VOICE_KEY",
                     help="download one Piper voice (e.g. de_DE-eva_k-x_low) into <model-dir>/piper, then exit.")
@@ -1268,14 +1267,10 @@ def main():
         try:
             engine = KokoroEngine(model_path, voices_path)
         except Exception as e:  # noqa: BLE001
-            if args.allow_fallback:
-                sys.stderr.write("kokoro load failed (%s); falling back to synthetic tone\n" % e)
-                engine = SyntheticEngine()
-            else:
-                print(json.dumps({"ready": False, "error": str(e)}), flush=True)
-                sys.exit(2)
-        # Kokoro is primary; espeak (robotic ~100-language tier, L6), SAPI (System.Speech, L7, Windows) and
-        # Piper (offline-neural, L8, if `piper-tts` is installed) are available on demand — all coexist with
+            print(json.dumps({"ready": False, "error": str(e)}), flush=True)
+            sys.exit(2)
+        # Kokoro is primary; espeak (robotic ~100-language tier), SAPI (System.Speech, Windows) and
+        # Piper (offline-neural, if `piper-tts` is installed) are available on demand — all coexist with
         # Kokoro in this one process.
         engine_host = EngineHost(
             engine, model_dir=args.model_dir, allow_espeak=True,

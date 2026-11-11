@@ -14,11 +14,10 @@ fun interface SourceLines {
  * **The half of validation that needs the code** — [PlanLoader] checks a plan against itself and says so; this
  * checks it against the files it names.
  *
- * It exists because the loader's silence about the code was being filled by the agent: `plan-schema.md` told it
- * to verify its own tokens and lines before POSTing, and it did, with a script it wrote and ran every time —
- * measured at ~16 s and three turns of a run. Every one of those checks is a string comparison
- * the server can make in microseconds, against the same text the tree will render, and report in the same
- * `issues` array the agent already reads. So the agent stops checking, and the check stops being optional.
+ * Without it, an agent verifies its own tokens and lines before POSTing with a script of its own (~16 s and
+ * three turns of a run). Every one of those checks is a string comparison the server makes in microseconds,
+ * against the same text the tree will render, reported in the same `issues` array the agent already reads.
+ * So the agent need not check, and the check is never optional.
  *
  * **What it reports is what a renderer would get wrong, not what it would refuse.** Every renderer here
  * degrades: a call token that is not found boxes the whole line, a relation end without its token loses its

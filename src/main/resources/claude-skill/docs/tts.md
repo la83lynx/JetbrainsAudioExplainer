@@ -16,7 +16,7 @@ voices from more than one tier):
 | 3 | **Windows SAPI** (System.Speech) | whatever SAPI5 voices are installed; with NaturalVoiceSAPIAdapter, neural Edge voices for ~140 locales | classic → neural (online) | **none**; Windows only; online voices need internet |
 | 4 | **Piper** (VITS ONNX, `piper-tts`) | ~50 in the catalogue (the ~40 Kokoro can't voice: de, ru, uk, nl, pl, tr, cs, ar, vi, sv, …) | neural, **offline** | `pip install piper-tts` + per-voice model (~20–75 MB); cross-platform |
 
-The espeak tier (Phase L6) is a *fallback* for the languages Kokoro can't voice. `kokoro-onnx` already
+The espeak tier is a *fallback* for the languages Kokoro can't voice. `kokoro-onnx` already
 pulls **`espeakng-loader`** (we use it for Kokoro's phonemization); the same shared library is a full
 synthesizer, driven directly via `ctypes` (no extra dependency, no download). Quality is genuinely
 robotic — fine for "follow along in my language," and the settings label each such language
@@ -47,12 +47,12 @@ Wire protocol — newline-delimited JSON, **one request per connection**:
   - **Layer-2** (regenerate the variant file, then reload it): `"consonants"` (clarity, ~80-160),
     `"roughness"` (0 = smoothest), `"flutter"` (pitch wobble), `"breath"` (breathiness).
 
-  An optional `"engine": "sapi"` routes to the Windows System.Speech tier (Phase L7, Windows only); the
+  An optional `"engine": "sapi"` routes to the Windows System.Speech tier (Windows only); the
   `voice` is then an installed SAPI5 voice **name** (e.g. `"Microsoft Aria Online"`), `tune` is ignored,
-  and `speed` maps onto SAPI's rate. An optional `"engine": "piper"` routes to the Piper offline-neural tier
-  (Phase L8); the `voice` is then a Piper voice **key** (e.g. `"de_DE-eva_k-x_low"`), `tune` is ignored, and
+  and `speed` maps onto SAPI's rate. An optional `"engine": "piper"` routes to the Piper offline-neural tier;
+  the `voice` is then a Piper voice **key** (e.g. `"de_DE-eva_k-x_low"`), `tune` is ignored, and
   `speed` maps to `length_scale = 1/speed`. For a **multi-speaker** Piper model, append `#<n>` to the key to
-  pick a speaker (0-based, e.g. `"bn_BD-google-medium#3"`); no suffix uses the model default (Phase L9).
+  pick a speaker (0-based, e.g. `"bn_BD-google-medium#3"`); no suffix uses the model default.
 
   Every field is clamped and defaults applied when omitted. Absent `engine`, the primary (Kokoro) engine
   serves the request and ignores `tune`.
@@ -137,7 +137,7 @@ voice-editor dialog (adds Clarity/Smoothness/Flutter/Breath), saved per variant 
 languages. `--check` reports the local build's supported codes in `espeakLanguages` (≈140). No download —
 the espeak library + voice data ship with `kokoro-onnx`.
 
-**Windows SAPI tier (Phase L7, Windows only).** A third tier that reaches whatever SAPI5 voices the
+**Windows SAPI tier (Windows only).** A third tier that reaches whatever SAPI5 voices the
 machine has installed. The plugin discovers them at runtime (via System.Speech), maps each voice's culture
 to a walkthrough language code (`en-US`→`en`, `zh-CN`→`zh`, `ta-IN`→`ta`, …), and offers them in the voice
 combo as `sapi:<code>:<VoiceName>` ids. Every voice entry carries an engine badge for consistency across
@@ -157,7 +157,7 @@ voices. Caveats for those: they are **online** (each sentence is a network call 
 unofficial (could change/rate-limit). Classic/offline SAPI voices have none of those caveats. The tier is
 Windows-only and absent on macOS/Linux (those stay on Kokoro + espeak).
 
-**Piper tier (Phase L8, cross-platform).** The missing middle tier: **neural quality, fully offline**, for
+**Piper tier (cross-platform).** The missing middle tier: **neural quality, fully offline**, for
 the ~40 languages Kokoro can't voice — strictly better than the robotic espeak tier where a Piper voice
 exists, and unlike the SAPI Edge tier it needs no internet and runs on macOS/Linux too. Voices are
 [Piper](https://github.com/OHF-Voice/piper1-gpl) VITS ONNX models from the
@@ -168,11 +168,11 @@ PowerShell worker). Each voice is `<key>.onnx` + `.onnx.json` under `~/.cache/au
 plugin discovers installed voices via `--check`'s `piperVoices` and offers them as `piper:<code>:<voiceKey>`
 ids with the engine badge `— piper`. Speed maps to `length_scale = 1/speed`; sample rate is per voice
 (16 kHz for `x_low`, 22.05 kHz otherwise). Install + add voices from **Settings → Tools → Audio Explainer →
-Audio engines → Piper**: an "Install Piper (pip)" button plus a **"Manage voices…"** dialog (Phase L9) that
+Audio engines → Piper**: an "Install Piper (pip)" button plus a **"Manage voices…"** dialog that
 browses the whole catalogue (searchable, download size + md5-verified, delete with disk-usage). A failed
 synth is usually a missing/corrupt model file → re-download the voice.
 
-**Catalog & install-first (Phase L9).** The manager loads the normalized catalogue via `--piper-catalog`
+**Catalog & install-first.** The manager loads the normalized catalogue via `--piper-catalog`
 (cached under `…/piper/catalog.json`, so it opens offline after the first fetch; `--refresh` re-fetches).
 Design is *install-first*: a language becomes selectable for narration only once you've downloaded a voice
 for it — the manager is how you reach the full catalogue to do that. Downloads md5-verify against the

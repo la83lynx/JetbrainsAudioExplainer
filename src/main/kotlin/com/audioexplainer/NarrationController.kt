@@ -13,12 +13,12 @@ import kotlinx.serialization.json.put
 import java.util.concurrent.Executors
 
 /**
- * Phase 7 — the narration loop. Turns walkthrough playback into synced audio: for each **plan step** it
+ * The narration loop. Turns walkthrough playback into synced audio: for each **plan step** it
  * pushes a `step_advance` to the sidebar, streams that step's `ttsText` through [TtsService] as
  * `audio_chunk`s, and — when the webview reports `playback_complete` — moves the walkthrough one step on.
  *
- * This is the JetBrains analogue of the code-explainer VS Code extension's playback driver. Since Phase 3
- * it owns **no position of its own**: [stepIndex] mirrors [Walkthrough]'s, which is the one cursor, and
+ * This is the JetBrains analogue of the code-explainer VS Code extension's playback driver. It owns **no
+ * position of its own**: [stepIndex] mirrors [Walkthrough]'s, which is the one cursor, and
  * every advance here goes through [Walkthrough.nextStep] / [Walkthrough.gotoStep] rather than being pushed
  * back into the walkthrough from inside the narration. The walkthrough remains the source of truth for the
  * plan and the status.
@@ -31,7 +31,7 @@ import java.util.concurrent.Executors
  * callbacks only *push* to the webview (no state), so they run off-thread safely.
  *
  * Gated on readiness: if the engine is off / not yet set up, narration stays disengaged and playback
- * is silent (the pre-Phase-7 behaviour) — the walkthrough still loads and the spotlight still follows.
+ * is silent — the walkthrough still loads and the tree still follows.
  */
 class NarrationController(
     private val project: Project,
@@ -52,16 +52,12 @@ class NarrationController(
     private var suspended = false
 
     /**
-     * **Which plan step narration is on** — one number since Phase 3, where it was `segIndex` + `hlIndex`.
-     *
-     * It mirrors [Walkthrough.currentStepIndex] rather than owning it: the walkthrough is what moves, and
-     * this is the executor thread's copy of where it last saw the walk. The two-level version had to derive
-     * "the previous step" from a segment boundary, and did it wrongly in one of its two derivations — the
-     * whole reason the flattening was a work item rather than tidying.
+     * **Which plan step narration is on.** It mirrors [Walkthrough.currentStepIndex] rather than owning it:
+     * the walkthrough is what moves, and this is the executor thread's copy of where it last saw the walk.
      */
     private var stepIndex = -1
     /**
-     * Set when the user navigated to a different highlight *while paused*: the position + spotlight have
+     * Set when the user navigated to a different step *while paused*: the position + decorations have
      * moved but no audio was produced, so the next Play must narrate this step **fresh** (via
      * [narrateCurrent]) rather than drain-[resume] the previous step's buffered audio.
      */
@@ -88,22 +84,19 @@ class NarrationController(
         // app-level cache, so re-opening the tool window won't re-spawn the `--check` probe.
         ApplicationManager.getApplication().executeOnPooledThread {
             if (!disposed) runCatching { tts.status(refresh = false) }
-            // Discover Windows SAPI voices (Phase L7) so the voice combo + language menu include them
+            // Discover Windows SAPI voices so the voice combo + language menu include them
             // (empty no-op off Windows). Populates the [Languages] registry; the sidebar re-pushes voice
             // options once this returns so freshly-discovered voices show without reopening.
             if (!disposed) runCatching { tts.sapiVoices(refresh = false) }
         }
     }
 
-    /** True while narration is actively driving playback (used by the sidebar to route highlight nav). */
-    val isEngaged: Boolean get() = active
-
     // ── Entry points (all just enqueue) ──────────────────────────────────────────
 
-    /** A walkthrough status/segment change — re-sync narration to it. */
+    /** A walkthrough status/step change — re-sync narration to it. */
     fun onWalkthroughChanged() = submit { sync() }
 
-    /** A new plan was set (or structurally mutated) — hard-reset narration, then re-sync. */
+    /** A new plan was set (or an agent `goto` moved the reader) — hard-reset narration, then re-sync. */
     fun onPlanChanged() = submit {
         cancelStream()
         if (active) post(msg("audio_stop"))
@@ -114,7 +107,7 @@ class NarrationController(
         sync()
     }
 
-    /** The webview finished playing the current highlight's audio. */
+    /** The webview finished playing the current step's audio. */
     fun onPlaybackComplete() = submit { advanceAfterPlayback() }
 
     /** Sidebar Prev/Next: move one plan step, narrating it if narration is engaged. */
@@ -122,21 +115,21 @@ class NarrationController(
 
     /**
      * Sidebar outline click on a step row: jump to that **plan step**, preserving the current play/pause
-     * status — like the Prev/Next buttons, a click navigates but never force-plays (Phase 7.5 #4, revised).
+     * status — like the Prev/Next buttons, a click navigates but never force-plays.
      * While playing it keeps playing from the chosen step; while paused it moves silently (decorations +
      * transcript) and arms the next Play to narrate that step fresh. With narration disabled it just moves
      * the position and the decorations.
      */
     fun gotoStep(index: Int) = submit { gotoStepInternal(index) }
 
-    /** Speed/voice changed — re-stream the current highlight so it takes effect immediately. */
+    /** Speed/voice changed — re-stream the current step so it takes effect immediately. */
     fun onRateChanged() = submit { if (active && !suspended) restartCurrent() }
 
     /** Voice-editor opened: pause narration audio so it doesn't fight the Test previews. */
     fun pauseForEditing() = submit { if (active && !suspended) { cancelStream(); suspend() } }
 
     /**
-     * A short sample line for the voice-editor's Test button — the current highlight's spoken text (in the
+     * A short sample line for the voice-editor's Test button — the current step's spoken text (in the
      * walkthrough's language, so the preview is representative), or a generic line if none is loaded.
      */
     fun sampleText(): String {
@@ -224,10 +217,9 @@ class NarrationController(
      * false — stream its narration. Pass `speak = false` to reveal a step while paused (transcript updates,
      * no audio).
      *
-     * **It no longer moves the position.** Moving is the walkthrough's ([Walkthrough.gotoStep] /
+     * **It does not move the position.** Moving is the walkthrough's ([Walkthrough.gotoStep] /
      * [Walkthrough.nextStep]) and every caller here does it first, so the decorations are already on this
-     * step by the time the audio is requested. The old shape had narration push a sub-step index into the
-     * walkthrough from inside this method, which is what made the position two-level and two-owned.
+     * step by the time the audio is requested.
      */
     private fun narrateCurrent(speak: Boolean = true) {
         val resolved = walkthrough.getResolvedPlan() ?: return finish()
@@ -251,7 +243,7 @@ class NarrationController(
 
         val text = step.ttsText.trim()
         if (text.isEmpty()) {
-            // Nothing to speak for this highlight — advance without waiting on audio.
+            // Nothing to speak for this step — advance without waiting on audio.
             submit { advanceAfterPlayback() }
             return
         }
@@ -262,8 +254,8 @@ class NarrationController(
         // Robotic voices carry the saved profile for their variant (ae_f/ae_m); Kokoro voices pass null.
         val tune = if (Languages.engineOfVoice(voice) == Engine.ESPEAK)
             EspeakTune.from(settings.espeakProfile(voice.substringAfter('+', "ae_f"))) else null
-        // Timestamped so the flash-vs-voice gap is measurable: this line minus the "narrate: spotlight"
-        // line above is decoration lead time; the "first audio chunk" line below closes it.
+        // Timestamped so the flash-vs-voice gap is measurable: this line minus the "narrate: step" line
+        // above is decoration lead time; the "first audio chunk" line below closes it.
         val requestedAt = System.currentTimeMillis()
         if (log.isDebugEnabled) log.debug("narrate: requesting TTS (voice=$voice, speed=$speed, ${text.length} chars)")
         var firstChunk = true
@@ -302,12 +294,8 @@ class NarrationController(
     }
 
     /**
-     * Called by the webview after a step's audio finishes; move one step and narrate it.
-     *
-     * **One branch where there were two.** The old shape advanced *within* a segment by bumping `hlIndex`
-     * and *across* one by disengaging and letting a listener round-trip restart narration — two paths whose
-     * only difference was an accident of the projection. Every advance is one step now, and the end of the
-     * plan is [Walkthrough.nextStep] returning false (it settles a playing walkthrough to paused itself).
+     * Called by the webview after a step's audio finishes; move one step and narrate it. The end of the plan
+     * is [Walkthrough.nextStep] returning false (it settles a playing walkthrough to paused itself).
      */
     private fun advanceAfterPlayback() {
         if (!active || suspended) return
@@ -317,12 +305,8 @@ class NarrationController(
     }
 
     /**
-     * Prev/Next — one plan step, whether or not narration is engaged.
-     *
-     * **The whole method is the flattening's dividend.** It used to hold a three-way branch on whether the
-     * target crossed a segment boundary, and the backwards arm of it was a second, wrong derivation of "the
-     * previous step" (it landed on the *first* step of the previous segment, not its last). There is one
-     * derivation now — [Walkthrough.prevStep] — and no boundary to be on either side of.
+     * Prev/Next — one plan step, whether or not narration is engaged. "The previous step" has one
+     * derivation, [Walkthrough.prevStep].
      */
     private fun userAdvanceInternal(delta: Int) {
         val playing = walkthrough.getState().status == Walkthrough.STATUS_PLAYING
@@ -344,7 +328,7 @@ class NarrationController(
             restartPending = false
             narrateCurrent()
         } else {
-            // Paused: reveal the step silently (no autoplay); Play will narrate it fresh — Phase 7.5 #3.
+            // Paused: reveal the step silently (no autoplay); Play will narrate it fresh.
             suspended = true
             restartPending = true
             narrateCurrent(speak = false)
@@ -357,7 +341,7 @@ class NarrationController(
         val playing = snap.status == Walkthrough.STATUS_PLAYING
 
         // Move to the chosen step WITHOUT changing play/pause status — an outline click navigates like the
-        // Prev/Next buttons and never force-plays (Phase 7.5 #4, revised). Skipped when already there.
+        // Prev/Next buttons and never force-plays. Skipped when already there.
         if (snap.stepIndex != index) walkthrough.gotoStep(index)
 
         if (playing && narrationEnabled()) {
@@ -476,7 +460,7 @@ class NarrationController(
         stream = null
     }
 
-    // Narration rides the running Kokoro TTS server; espeak (L6) and Windows SAPI (L7) voices are hosted
+    // Narration rides the running Kokoro TTS server; espeak and Windows SAPI voices are hosted
     // by that same server process (per-VOICE engine), so readiness is the one gate. "off" is silent.
     private fun narrationEnabled(): Boolean =
         settings.state.ttsEngine != AudioExplainerSettings.ENGINE_OFF && tts.cachedReady()

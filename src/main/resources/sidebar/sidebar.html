@@ -5,7 +5,7 @@
   sidebar.js. The VS Code CSP/nonce and asWebviewUri script/style links are dropped (everything is
   inlined for JCEF loadHTML).
 -->
-<!-- Phase 7.5 #5 — docked status strips at the top of the tool window (flex-column children of body,
+<!-- Docked status strips at the top of the tool window (flex-column children of body,
      natural height, never overlapping the views which scroll in #view-scroll below). -->
 <div id="generation-banner" class="gen-banner" style="display:none;">
     <span class="gen-spinner" aria-hidden="true"></span>
@@ -43,7 +43,7 @@
             <path d="M8 1a7 7 0 100 14A7 7 0 008 1zm0 12.5a5.5 5.5 0 110-11 5.5 5.5 0 010 11zM6.5 5v6l5-3-5-3z"/>
         </svg>
         <p class="idle-text">No walkthrough loaded</p>
-        <p class="idle-hint">Run <code>/explainer</code> in your coding agent to generate one</p>
+        <p class="idle-hint">Right-click code and choose <b>Explain This (Audio)</b> to generate one</p>
     </div>
     <div id="saved-list-section" style="display:none;">
         <div class="saved-list-header">
@@ -66,7 +66,7 @@
                         <path d="M13.65 2.35A7.96 7.96 0 008 0C3.58 0 .01 3.58.01 8S3.58 16 8 16c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 018 14c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L9 8h7V1l-3.35 1.35z"/>
                     </svg>
                 </button>
-                <!-- Saving.md C: a split button. Save writes the file this walkthrough already is (or asks once);
+                <!-- A split button. Save writes the file this walkthrough already is (or asks once);
                      the caret opens Save As…. -->
                 <div class="split-btn" id="save-split">
                     <button id="btn-save" class="icon-btn" title="Save Walkthrough">
@@ -91,7 +91,7 @@
             </div>
         </div>
         <h2 id="walkthrough-title"></h2>
-        <!-- Language badge (Phase L3): shows the walkthrough's language when it isn't English. -->
+        <!-- Language badge: shows the walkthrough's language when it isn't English. -->
         <span id="wt-language" class="wt-language" style="display:none;"></span>
 
         <div class="now-playing">
@@ -101,7 +101,7 @@
             <a id="segment-location" class="seg-location" href="#"></a>
         </div>
 
-        <!-- Overview of the current segment — collapsible, sits above the play controls (Phase 7.5 #11). -->
+        <!-- Overview of the current segment — collapsible, sits above the play controls. -->
         <div class="explanation-box" id="explanation-box">
             <div class="explanation-header" id="explanation-toggle">
                 <span class="explanation-title">Overview</span>
@@ -111,7 +111,7 @@
         </div>
 
         <!-- Vol + Voice share one line and each take ~half width; the pair wraps back to a stacked layout
-             when the tool window is too narrow (flex-wrap threshold, Phase 7.5 #14 task 1). Speed keeps its
+             when the tool window is too narrow (flex-wrap threshold). Speed keeps its
              own full-width row so the four speed buttons stay roomy. -->
         <div class="audio-controls">
             <div class="audio-inline">
@@ -123,7 +123,7 @@
                 <label class="control-row">
                     <span class="label">Voice</span>
                     <!-- Options are populated dynamically per the loaded walkthrough's language via the
-                         `voice_options` message (Phase L3); this single option is only the pre-load frame. -->
+                         `voice_options` message; this single option is only the pre-load frame. -->
                     <select id="voice-select">
                         <option value="af_heart">Heart (US, F)</option>
                     </select>
@@ -158,8 +158,7 @@
             </label>
         </div>
 
-        <!-- Play controls (prev / play / next) — moved down to sit just above the transcript, next to the
-             step progress bar (Phase 7.5 #14 task 2). -->
+        <!-- Play controls (prev / play / next) — just above the transcript, next to the step progress bar. -->
         <div class="controls">
             <button id="btn-prev" title="Hold Shift to skip entire segment">
                 <svg class="icon-highlight" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M10 2L4 8l6 6V2z"/></svg>
@@ -198,12 +197,4 @@
     </div>
 </div>
 
-<div id="done-view" style="display:none;">
-    <div class="done-card">
-        <p class="done-text">Walkthrough complete</p>
-        <p id="done-summary" class="done-summary"></p>
-        <p class="done-hint">Have more questions? Ask your coding agent!</p>
-        <button id="btn-restart" class="done-restart-btn">Restart Walkthrough</button>
-    </div>
-</div>
 </div><!-- /#view-scroll -->

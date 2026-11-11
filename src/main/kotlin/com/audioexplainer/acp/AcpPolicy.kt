@@ -26,7 +26,7 @@ import kotlinx.serialization.json.put
 object AcpPolicy {
     data class Decision(val allowed: Boolean, val optionId: String?, val why: String)
 
-    private val DENIED_KINDS = setOf("edit", "delete", "move", "execute", "fetch")
+    private val DENIED_KINDS = UnaskedWatch.RISKY
     private val EXTERNAL_DIRECTORY_KEYS = setOf("filepath", "parentDir")
 
     fun decide(toolCall: JsonObject?, options: JsonArray?, roots: List<String>): Decision {
@@ -121,8 +121,8 @@ object AcpPolicy {
 /**
  * **What [AcpPolicy] cannot answer: a call the agent never asked about.** The policy is the answer to
  * `session/request_permission`, and an agent whose own config allows a tool runs it without sending one. opencode
- * launched as a Custom agent wrote a file this way (sandbox, 2026-11-09): its `tool_call` for `write` went from
- * pending to completed, and no request came. The client cannot prevent that; it can see it.
+ * launched as a Custom agent can write a file this way: its `tool_call` for `write` goes from pending to
+ * completed, and no request comes. The client cannot prevent that; it can see it.
  *
  * A call of a kind the policy never allows ([RISKY]) that reports `completed`, never having been asked about, is the
  * agent acting on its own. [update] says so once per call, with what it touched, and the run stops the agent.
