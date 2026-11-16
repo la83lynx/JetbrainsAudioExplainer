@@ -69,15 +69,15 @@ intellijPlatform {
     }
 }
 
-// code-explainer's MIT licence must travel with the reused assets: at the plugin's root in the .zip, and in
-// the jar's META-INF.
+// LICENSE carries the plugin's MIT licence and code-explainer's notice, which must travel with the reused
+// assets: at the plugin's root in the .zip, and in the jar's META-INF.
 tasks.prepareSandbox {
-    from(layout.projectDirectory.file("LICENSE-code-explainer")) {
+    from(layout.projectDirectory.file("LICENSE")) {
         into(pluginName)
     }
 }
 tasks.jar {
-    from(layout.projectDirectory.file("LICENSE-code-explainer")) {
+    from(layout.projectDirectory.file("LICENSE")) {
         into("META-INF")
     }
 }

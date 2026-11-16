@@ -141,7 +141,9 @@ The plugin ships neither a CLI nor a key. **Your code is sent to the provider yo
 
 ## License
 
+MIT — see `LICENSE`.
+
 The agent skill, plan schema, wire protocol, sidebar webview and Kokoro voice configuration are adapted from
-**code-explainer** (MIT, © 2026 Srujan Gurram); its license is `LICENSE-code-explainer`, which must ship in
-every distribution. The Kotlin IDE adapter, loopback server, agent harnesses and `tts_server.py` are this
+**code-explainer** (MIT, © 2026 Srujan Gurram); its notice is in `LICENSE` too, which must ship in every
+distribution. The Kotlin IDE adapter, loopback server, agent harnesses and `tts_server.py` are this
 project's own.
