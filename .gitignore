@@ -9,5 +9,7 @@ __pycache__/
 *.pyc
 # Local scratch output.
 scratchpad/
+# The release procedure — a local checklist, not shipped.
+RELEASING.md
 # Secrets — a local OpenRouter key. Never commit.
 OpenRouter.info

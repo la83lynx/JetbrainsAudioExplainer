@@ -15,6 +15,19 @@
         loads and highlights, silently.
     ]]></description>
 
+    <change-notes><![CDATA[
+        <b>0.1.0</b> — first release.
+        <ul>
+            <li>Explain This (Audio) on a selection, the symbol under the cursor, or a file or folder; a tree of
+                code that follows the narration.</li>
+            <li>Agents: the Claude Code CLI, or any ACP agent (opencode, Qwen Code, a custom one).</li>
+            <li>Narration in ~50 languages across Kokoro, Piper, Windows SAPI and espeak-ng.</li>
+            <li>Note: Explain This passes <code>--effort medium</code> to Claude by default, overriding an
+                <code>effortLevel</code> in <code>~/.claude/settings.json</code>. Choose
+                <i>Default — inherit</i> in Settings to keep yours.</li>
+        </ul>
+    ]]></change-notes>
+
     <!-- Depending only on the platform module makes this a pure frontend plugin,
          loadable in Rider and every other IntelliJ-based IDE. -->
     <depends>com.intellij.modules.platform</depends>

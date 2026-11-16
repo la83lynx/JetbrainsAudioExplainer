@@ -1,4 +1,4 @@
-// Targets Rider 2026.1.4 (branch 261). When bumping, check the IntelliJ Platform Gradle Plugin releases:
+// Targets Rider 2026.1 (branch 261) and later. When bumping, check the IntelliJ Platform Gradle Plugin releases:
 //   https://github.com/JetBrains/intellij-platform-gradle-plugin/releases
 plugins {
     id("java")
@@ -19,24 +19,77 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        // Build and run against the locally installed Rider 2026.1.4 (build 261.26222.60).
-        // A full local install includes the .NET/ReSharper backend that `runIde` needs to actually launch;
-        // the downloadable riderRD package is compile-only. Folder name is stale — build.txt confirms 261.
-        // For CI, swap back to `rider("2026.1.4")` (compile-only there).
-        local("C:/Program Files/JetBrains/JetBrains Rider 2024.3.2")
+        // Day to day: the locally installed Rider (2026.1.5, build 261.27258.81) — a full install carries the
+        // .NET/ReSharper backend that `runIde` needs to launch. Folder name is stale; build.txt confirms 261.
+        // Override the path with -PlocalRider=<dir>.
+        // A release or CI build (-Prelease): the published Rider, reproducible and machine-independent.
+        if (providers.gradleProperty("release").isPresent) {
+            rider("2026.1.4") { useInstaller = false }
+        } else {
+            local(providers.gradleProperty("localRider").orElse("C:/Program Files/JetBrains/JetBrains Rider 2024.3.2"))
+        }
+        pluginVerifier()
     }
     // Used by ExplainerServer for the wire protocol. If a bundled-version clash appears at runtime,
     // switch to compileOnly and rely on the platform-bundled kotlinx-serialization.
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 }
 
+// The IDE ships the Kotlin stdlib; bundling the copy kotlinx-serialization drags in is flagged by the
+// Marketplace. Excluded on the configuration, because a per-dependency exclude does not survive Gradle's
+// redirect to the `-jvm` variant.
+configurations.runtimeClasspath {
+    exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
+    exclude(group = "org.jetbrains", module = "annotations")
+}
+
 intellijPlatform {
     pluginConfiguration {
         ideaVersion {
             sinceBuild = "261"
-            untilBuild = "261.*" // widen or clear once you decide the supported range
+            // No upper bound: a pure platform plugin, so it loads in later IDEs; verifyPlugin is the check.
+            untilBuild = provider { null }
         }
     }
+    // Secrets come from the environment only — never from a committed file. See RELEASING.md (local).
+    signing {
+        certificateChainFile = providers.environmentVariable("CERTIFICATE_CHAIN_FILE").map { layout.projectDirectory.file(it) }
+        privateKeyFile = providers.environmentVariable("PRIVATE_KEY_FILE").map { layout.projectDirectory.file(it) }
+        password = providers.environmentVariable("PRIVATE_KEY_PASSWORD")
+    }
+    publishing {
+        token = providers.environmentVariable("PUBLISH_TOKEN")
+        // -PpluginChannel=beta stages a release; the default channel is stable.
+        channels = providers.gradleProperty("pluginChannel").map { listOf(it) }.orElse(listOf("default"))
+    }
+    pluginVerification {
+        ides {
+            recommended()
+        }
+    }
+}
+
+// code-explainer's MIT licence must travel with the reused assets: at the plugin's root in the .zip, and in
+// the jar's META-INF.
+tasks.prepareSandbox {
+    from(layout.projectDirectory.file("LICENSE-code-explainer")) {
+        into(pluginName)
+    }
+}
+tasks.jar {
+    from(layout.projectDirectory.file("LICENSE-code-explainer")) {
+        into("META-INF")
+    }
+}
+
+// Gaps in the Gradle plugin's signing tasks (2.18.1 on Gradle 9): both hold a Project reference the
+// configuration cache cannot store, and verifyPluginSignature reads signPlugin's output without depending on it.
+tasks.signPlugin {
+    notCompatibleWithConfigurationCache("holds a Project reference")
+}
+tasks.verifyPluginSignature {
+    dependsOn(tasks.signPlugin)
+    notCompatibleWithConfigurationCache("holds a Project reference")
 }
 
 kotlin {
