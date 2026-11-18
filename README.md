@@ -104,6 +104,12 @@ The plugin ships neither a CLI nor a key. **Your code is sent to the provider yo
 - **SAPI and espeak voices need the Python TTS server running.** Windows' neural Narrator voices are only
   reachable through the user-installed NaturalVoiceSAPIAdapter; Edge voices are online and send the text to
   Microsoft.
+- **NaturalVoiceSAPIAdapter is a third-party tool, not affiliated with Microsoft or this plugin.** The plugin
+  neither bundles it nor calls Microsoft's voice service itself; it reads whatever SAPI voices Windows lists.
+  Microsoft has not opened its Narrator and Edge Read Aloud voices to other apps, so the adapter may stop
+  working at any time, and using it is subject to Microsoft's terms (the Edge licence, for one, restricts
+  using Edge's service tokens outside Edge). Whether that use is allowed is between you and Microsoft; any
+  offline engine avoids the question.
 
 ## Development
 
