@@ -1051,6 +1051,33 @@ public class BuildService
         String[] attr = {"    [Fact]", "    public void M()", "    {", "        x();", "    }"};
         kotlin.jvm.functions.Function1<Integer, String> attrText = l -> l >= 1 && l <= attr.length ? attr[l - 1] : null;
         check("  control: an attribute line is a block of itself", StepCondense.Companion.block(1, attrText).toString().equals("1..1"));
+        // A signature over several lines: RunDotnetAsync's parameters run 78-82, its Allman brace is at 83, its
+        // closer at 140. Before, the block stopped at 82 and MEMBER kept the signature but folded the body.
+        check("block: a signature over several lines runs through the method's closer — " + StepCondense.Companion.block(77, buildText),
+                StepCondense.Companion.block(77, buildText).toString().equals("77..140"));
+        java.util.List<Integer> keptAll = new java.util.ArrayList<>();
+        for (int l = 20; l <= 155; l++) keptAll.add(l);
+        check("member: a step deep in RunDotnetAsync keeps all of it — " + StepCondense.Companion.member(112, keptAll, buildText),
+                String.valueOf(StepCondense.Companion.member(112, keptAll, buildText)).equals("77..140"));
+        check("  control: a closer at a lesser indent is not the statement's — " + StepCondense.Companion.block(112, buildText),
+                StepCondense.Companion.block(112, buildText).toString().equals("112..118"));
+        String[] kt = {"class C {", "    fun f(", "        a: Int,", "    ): Int {", "        val b = a", "        return b",
+                "    }", "}"};
+        kotlin.jvm.functions.Function1<Integer, String> ktText = l -> l >= 1 && l <= kt.length ? kt[l - 1] : null;
+        check("block: Kotlin's `): Int {` goes on from the signature — " + StepCondense.Companion.block(2, ktText),
+                StepCondense.Companion.block(2, ktText).toString().equals("2..7"));
+        check("chain: the `): Int {` line leads to the signature above it — " + StepCondense.Companion.chain(6, ktText),
+                StepCondense.Companion.chain(6, ktText).toString().equals("[4, 2, 1]"));
+        check("member: a statement under `): Int {` is in the whole function — " + StepCondense.Companion.member(6, Arrays.asList(1, 2, 3, 4, 5, 6, 7, 8), ktText),
+                String.valueOf(StepCondense.Companion.member(6, Arrays.asList(1, 2, 3, 4, 5, 6, 7, 8), ktText)).equals("2..7"));
+        String[] pyDef = {"def f(", "    a,", "):", "    return a", "x = 1"};
+        kotlin.jvm.functions.Function1<Integer, String> pyDefText = l -> l >= 1 && l <= pyDef.length ? pyDef[l - 1] : null;
+        check("block: Python's `):` goes on from the signature — " + StepCondense.Companion.block(1, pyDefText),
+                StepCondense.Companion.block(1, pyDefText).toString().equals("1..4"));
+        String[] scope = {"    if (x)", "        a();", "    {", "        b();", "    }"};
+        kotlin.jvm.functions.Function1<Integer, String> scopeText = l -> l >= 1 && l <= scope.length ? scope[l - 1] : null;
+        check("  control: a `{` after a finished statement opens a scope of its own — " + StepCondense.Companion.block(1, scopeText),
+                StepCondense.Companion.block(1, scopeText).toString().equals("1..2"));
         java.util.List<Integer> kept2 = new java.util.ArrayList<>();
         for (kotlin.ranges.IntRange r : keep2) for (int l = r.getFirst(); l <= r.getLast(); l++) kept2.add(l);
         check("member: a statement deep in RunAsync is in RunAsync, not in the class — " + StepCondense.Companion.member(55, kept2, buildText),

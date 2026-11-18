@@ -91,8 +91,8 @@ enum class StepCondense {
          *
          * By indentation, not by a parser, so it is one rule for every language a frame can be in (and Rider's
          * frontend has no C# tree to ask). Walking up, the first line indented less than the current one opens
-         * the block; when that line is a lone `{` (Allman), the statement it opens — the nearest line above at
-         * its indent or less — comes too. Blank lines, comments, directives and lone closers (`}`, `});`) are
+         * the block; when that line only ends a header — a lone `{` (Allman), or `): Type {` under a signature
+         * over several lines — the statement it opens, the nearest line above at its indent or less, comes too. Blank lines, comments, directives and lone closers (`}`, `});`) are
          * skipped: a closer at a lesser indent ends a sibling block, not ours. [text] gives a line, null past the
          * document; a blank [line] has no chain.
          */
@@ -109,7 +109,7 @@ enum class StepCondense {
                 }
                 out += k
                 indent = i
-                if (s.trimStart().startsWith("{")) {
+                if (endsHeader(s)) {
                     var h = k - 1
                     while (h >= 1) {
                         val t = text(h)
@@ -132,11 +132,18 @@ enum class StepCondense {
          * **The lines of the block 1-based [header] opens**, by indentation like [chain]: the lines below it
          * indented deeper, an Allman `{` at its indent before them, and the closer at its indent after them. A
          * header with no deeper line under it is a block of itself.
+         *
+         * A header over several lines is still one: the parameter lines under `Foo(` are deeper, and its end at
+         * the header's indent — `): Type {`, `)`, or a `{` after a line the statement goes on from (not ending in
+         * `;`, `{` or `}`) — continues it rather than ending the block.
          */
         fun block(header: Int, text: (Int) -> String?): IntRange {
-            val indent = text(header)?.let(::indentOf) ?: return header..header
+            val head = text(header) ?: return header..header
+            val indent = indentOf(head) ?: return header..header
             var last = header
             var body = false
+            var opened = head.trimEnd().endsWith("{")
+            var tail = head.trim()
             var k = header + 1
             while (true) {
                 val s = text(k) ?: break
@@ -147,15 +154,27 @@ enum class StepCondense {
                 }
                 val t = s.trim()
                 when {
-                    i > indent -> { body = true; last = k }
-                    !body && t.startsWith("{") -> last = k
-                    body && t.startsWith("}") -> { last = k; break }
+                    i > indent -> { body = true; last = k; tail = t }
+                    i < indent -> break
+                    !opened && (t.startsWith(")") || t.startsWith("]")) -> {
+                        body = false; last = k; tail = t; opened = t.endsWith("{")
+                    }
+                    !opened && t.startsWith("{") && (!body || goesOn(tail)) -> {
+                        body = false; opened = true; last = k
+                    }
+                    (body || opened) && t.startsWith("}") -> { last = k; break }
                     else -> break
                 }
                 k++
             }
             return header..last
         }
+
+        /** The last line of a header above it: an Allman `{`, or the `)` / `]` closing a signature's parameters. */
+        private fun endsHeader(s: String): Boolean = s.trimStart().let { it.startsWith("{") || it.startsWith(")") || it.startsWith("]") }
+
+        /** A line its statement goes on from: it ends in none of `;`, `{`, `}`. */
+        private fun goesOn(t: String): Boolean = t.isNotEmpty() && t.last() !in ";{}"
 
         /**
          * **The member 1-based [line] is in** — the outermost of its own block and its [chain]'s blocks below
@@ -170,8 +189,9 @@ enum class StepCondense {
             var best: IntRange? = null
             for (h in listOf(line) + chain(line, text)) {
                 val s = text(h) ?: continue
-                // An Allman `{` is not a header: its block misses the signature above it, which is next in the chain.
-                if (s.trimStart().startsWith("{")) continue
+                // An Allman `{` or a `): Type {` is not a header: its block misses the signature above it, which is
+                // next in the chain.
+                if (endsHeader(s)) continue
                 if (isTypeHeader(s)) break
                 val b = block(h, text)
                 if (b.first <= lo && b.last >= hi) break
