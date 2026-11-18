@@ -431,7 +431,9 @@ class NarrationController(
                         ("“${escape(label)}” is an <b>online</b> Windows voice — each sentence is synthesized " +
                             "by Microsoft's Edge endpoint (via NaturalVoiceSAPIAdapter), so it needs a working " +
                             "internet connection. That call failed: you may be offline, the endpoint may be " +
-                            "down or rate-limiting, or the adapter may not be installed. Pick an offline voice " +
+                            "down or rate-limiting, or the adapter may be missing or out of date (Microsoft " +
+                            "changes the endpoint from time to time; a newer adapter release usually follows). " +
+                            "Pick an offline voice " +
                             "(Kokoro, espeak, or a classic Windows voice) in the sidebar, or check your " +
                             "connection and try again.$raw")
                 else

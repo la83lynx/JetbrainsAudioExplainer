@@ -1,22 +1,70 @@
 <idea-plugin>
-    <id>com.audioexplainer.rider</id>
+    <id>com.audioexplainer</id>
     <name>Audio Explainer</name>
     <vendor>Andrej Zigmund</vendor>
 
     <description><![CDATA[
-        Right-click <b>"Explain This (Audio)"</b> to get a spoken, line-highlighted walkthrough of the
-        selected code, the method or class under the cursor, or a file or folder. An AI agent reads the code
-        and writes the walkthrough; a <b>tree of code</b> tab shows only the lines that matter, nests each
-        callee under the line that calls it, and follows the narration step by step.
-        <br/><br/>
-        <b>Requires</b> an agent: the Claude Code CLI on PATH, or an ACP agent (opencode, Qwen Code or a
-        custom one). Narration needs Python 3.10+; <i>Tools → Audio Explainer → Audio engines…</i> installs
-        the voices (Kokoro, Piper, Windows SAPI, espeak-ng; ~50 languages). Without them a walkthrough still
-        loads and highlights, silently.
+        <p><b>Spoken, line-highlighted walkthroughs of your code.</b> An AI agent reads the code and writes
+        the walkthrough. The IDE plays it back step by step.</p>
+        <p><img src="https://raw.githubusercontent.com/la83lynx/JetbrainsAudioExplainer/main/screenshots/shot3.jpg" width="520" height="272" alt="A walkthrough playing: tree of code and player"/></p>
+
+        <p><b>Ask</b></p>
+        <ul>
+            <li>Right-click → <b>Explain This (Audio)</b>.</li>
+            <li>Works on a selection, the method or class under the cursor, or a file or folder in the
+                Solution Explorer / Project view.</li>
+            <li><b>Explain This (Audio) with…</b> sets depth, effort and extra instructions for one run.</li>
+            <li>Progress shows live in the <i>Audio Explainer</i> tool window. The agent's run log is one
+                click away.</li>
+        </ul>
+        <p><img src="https://raw.githubusercontent.com/la83lynx/JetbrainsAudioExplainer/main/screenshots/shot1.jpg" width="400" height="375" alt="Explain This (Audio) in the context menu"/></p>
+        <p><img src="https://raw.githubusercontent.com/la83lynx/JetbrainsAudioExplainer/main/screenshots/shot2.jpg" width="520" height="281" alt="Generation progress in the tool window"/></p>
+
+        <p><b>Follow along</b></p>
+        <ul>
+            <li>A <b>tree of code</b> tab shows only the lines that matter. The rest folds away.</li>
+            <li>Each callee opens under the line that calls it.</li>
+            <li>Highlights and notes move with the narration. Arrows link a value to the line it reaches.</li>
+            <li>Player: play / pause, previous / next step, 1×–2× speed, volume, voice, live transcript.</li>
+            <li>Outline of scenes and steps. Click a step to jump to it.</li>
+            <li>Save a walkthrough with the project. Replay it later with no agent call.</li>
+            <li>Each project window keeps its own walkthrough.</li>
+        </ul>
+
+        <p><b>Listen</b></p>
+        <ul>
+            <li>Four voice engines: Kokoro and Piper (neural, offline), Windows SAPI, espeak-ng.</li>
+            <li>About 50 languages for the explanation and the voice. The menu label follows the language.</li>
+            <li>Speech is synthesized on your machine. Exception: Windows online voices use Microsoft's service.</li>
+            <li>No voices installed? The walkthrough still plays as highlights and text.</li>
+        </ul>
+        <p><img src="https://raw.githubusercontent.com/la83lynx/JetbrainsAudioExplainer/main/screenshots/shot6.jpg" width="520" height="298" alt="Choosing the explanation language"/></p>
+        <p><img src="https://raw.githubusercontent.com/la83lynx/JetbrainsAudioExplainer/main/screenshots/shot4.jpg" width="520" height="308" alt="Audio engines and the Piper voice catalog"/></p>
+
+        <p><b>Pick your model</b></p>
+        <ul>
+            <li>Agents: Claude Code CLI, or an ACP agent: opencode, Qwen Code or a custom one.</li>
+            <li>Point Claude Code at another provider: OpenRouter, DeepSeek, Kimi, GLM, Qwen (DashScope),
+                local Ollama or a custom endpoint.</li>
+            <li>Browse OpenRouter's tool-capable models with their prices.</li>
+            <li>API keys stay in the IDE password safe.</li>
+        </ul>
+        <p><img src="https://raw.githubusercontent.com/la83lynx/JetbrainsAudioExplainer/main/screenshots/shot5.jpg" width="400" height="515" alt="Choosing agent, provider and model"/></p>
+        <p><img src="https://raw.githubusercontent.com/la83lynx/JetbrainsAudioExplainer/main/screenshots/shot7.jpg" width="520" height="253" alt="Provider presets"/></p>
+
+        <p><b>Requires</b></p>
+        <ul>
+            <li>An agent: the Claude Code CLI on PATH, or an ACP agent.</li>
+            <li>For narration: Python 3.10+. <i>Tools → Audio Explainer → Audio engines…</i> installs the
+                voices.</li>
+        </ul>
+
+        <p>Your code goes only to the agent or provider you choose. Third-party agents and providers are not
+        supported by Anthropic.</p>
     ]]></description>
 
     <change-notes><![CDATA[
-        <b>0.1.0</b> — first release.
+        <b>1.0.0</b> — first release.
         <ul>
             <li>Explain This (Audio) on a selection, the symbol under the cursor, or a file or folder; a tree of
                 code that follows the narration.</li>

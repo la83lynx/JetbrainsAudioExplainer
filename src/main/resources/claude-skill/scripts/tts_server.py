@@ -702,12 +702,15 @@ class SapiEngine:
                 "voice is gone)" % voice)
         ack = json.loads(ack_line)
         if not ack.get("ok"):
-            detail = ack.get("error") or "synthesis failed"
-            # Online (Edge/NaturalVoiceSAPIAdapter) voices reach Microsoft's endpoint per sentence, so a
-            # failure here is usually connectivity/endpoint, not a bad voice — flag that in the message.
-            hint = " (online voice — needs internet; endpoint may be down or rate-limiting)" \
-                if "online" in voice.lower() else ""
-            raise RuntimeError("Windows voice '%s'%s: %s" % (voice, hint, detail))
+            raise RuntimeError(self._failure(voice, ack.get("error") or "synthesis failed"))
+
+    @staticmethod
+    def _failure(voice, detail):
+        # Online (Edge/NaturalVoiceSAPIAdapter) voices reach Microsoft's endpoint per sentence, so a
+        # failure here is usually connectivity/endpoint, not a bad voice — flag that in the message.
+        hint = " (online voice — needs internet; the endpoint may be down or rate-limiting, or " \
+               "NaturalVoiceSAPIAdapter is out of date)" if "online" in voice.lower() else ""
+        return "Windows voice '%s'%s: %s" % (voice, hint, detail)
 
     def synth(self, text, voice, speed, lang=None, tune=None):
         voice = (voice or "").strip()
@@ -716,6 +719,11 @@ class SapiEngine:
         for sentence in split_sentences(text):
             self._request(voice, sentence, rate)
             pcm, sr = _wav_to_float32le(self._wav)
+            # A provider that fails inside Speak() can still report success with a header-only WAV
+            # (NaturalVoiceSAPIAdapter does when Microsoft's endpoint refuses the connection), which would
+            # otherwise play as silence with no error anywhere.
+            if not pcm and any(c.isalnum() for c in sentence):
+                raise RuntimeError(self._failure(voice, "the voice returned no audio"))
             yield pcm, sr, sentence
 
 
