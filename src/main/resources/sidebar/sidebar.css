@@ -489,8 +489,12 @@ code {
     color: var(--ae-fg-dim); padding: 0 2px; }
 #btn-advanced:hover { color: var(--ae-fg); }
 
+/* min-width: 0, or the select is never narrower than its longest option ("Microsoft Xiaoxiao Online
+   (Natural) - Chinese (Mainland) — WinSAPI, online") and pushes the whole panel past the tool window.
+   The closed box clips the name; the open list and the title show it whole. */
 #voice-select {
     flex: 1;
+    min-width: 0;
     background: var(--ae-btn-bg);
     border: 1px solid var(--ae-border);
     color: var(--ae-fg);

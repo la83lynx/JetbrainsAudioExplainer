@@ -920,6 +920,14 @@ function rebuildVoiceOptions(voices, selected) {
 	}
 	if (selected && voices.some((v) => v.id === selected)) vs.value = selected;
 	else if (voices.length) vs.value = voices[0].id;
+	syncVoiceTitle();
+}
+
+/** The closed select clips a long voice name to the panel width; its tooltip shows it whole. */
+function syncVoiceTitle() {
+	const vs = document.getElementById("voice-select");
+	const opt = vs && vs.selectedOptions[0];
+	if (vs) vs.title = opt ? opt.textContent : "";
 }
 
 /** Global progress — `step+1 / stepCount`. */
@@ -1475,6 +1483,7 @@ document.getElementById("btn-mute").addEventListener("click", () => {
 
 document.getElementById("voice-select").addEventListener("change", (e) => {
 	vscode.postMessage({ type: "voice_change", voice: e.target.value });
+	syncVoiceTitle();
 	// Engine is per-voice: show the robotic row iff the newly-selected voice is robotic. The plugin
 	// follows up with a `robotic_profile` message to sync the slider positions to that voice's profile.
 	const opt = e.target.selectedOptions[0];
@@ -1647,6 +1656,7 @@ window.addEventListener("message", (event) => {
 			if (msg.voice) {
 				const vs = document.getElementById("voice-select");
 				if ([...vs.options].some((o) => o.value === msg.voice)) vs.value = msg.voice;
+				syncVoiceTitle();
 			}
 			if (msg.speedPercent) {
 				const speed = msg.speedPercent / 100;
