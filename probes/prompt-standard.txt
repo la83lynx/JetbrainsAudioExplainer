@@ -207,7 +207,7 @@ You are running headless inside the "Audio Explainer" IDE plugin. The user right
 This is a NON-INTERACTIVE run: there is no human to answer questions. Do NOT ask anything, do NOT wait — act autonomously and finish in one pass.
 
 Target folder / project (JSON):
-{"file":"src/Services/BuildService.cs","absolutePath":"C:/work/proj/src/Services/BuildService.cs","scope":"directory","targets":["src/Services/BuildService.cs","src/UI","src/Services/Book.cs"],"projectRoot":"C:/work/proj"}
+{"file":"src/Services/BuildService.cs","absolutePath":"C:/work/proj/src/Services/BuildService.cs","scope":"directory","targets":["src/Services/BuildService.cs","src/UI","src/Services/GitService.cs"],"projectRoot":"C:/work/proj"}
 
 Follow the headless flow documented here (read it first):
   /home/u/.claude/skills/audio-explainer/docs/explain-at-cursor.md
@@ -231,7 +231,7 @@ You are running headless inside the "Audio Explainer" IDE plugin. The user right
 This is a NON-INTERACTIVE run: there is no human to answer questions. Do NOT ask anything, do NOT wait — act autonomously and finish in one pass.
 
 Target folder / project (JSON):
-{"file":"src/Services/BuildService.cs","absolutePath":"C:/work/proj/src/Services/BuildService.cs","scope":"directory","targets":["src/Services/BuildService.cs","src/UI","src/Services/Book.cs"],"projectRoot":"C:/work/proj"}
+{"file":"src/Services/BuildService.cs","absolutePath":"C:/work/proj/src/Services/BuildService.cs","scope":"directory","targets":["src/Services/BuildService.cs","src/UI","src/Services/GitService.cs"],"projectRoot":"C:/work/proj"}
 
 What to do:
 1. Explore the listed folder/project path(s) — read the important files and pick the pieces worth a guided tour. Keep it lean; don't try to cover every file.
@@ -257,7 +257,7 @@ This is a NON-INTERACTIVE run: there is no human to answer questions. Do NOT ask
 LANGUAGE: Generate the walkthrough in German (Deutsch). Write the `title`, every frame `title` and `explanation`, and every step `ttsText`, `explanation` and `note` in German. Keep code identifiers, file paths, and API names verbatim (do NOT translate code) — a beat's `token` and a frame's `callToken` especially, since both must match the source text exactly to resolve, and `example`, which is code. The same split applies to a frame's `relations`: their `note` is prose, their `token` and `symbol` are code. You MUST put "language":"de" at the top level of the `set_plan` JSON.
 
 Target folder / project (JSON):
-{"file":"src/Services/BuildService.cs","absolutePath":"C:/work/proj/src/Services/BuildService.cs","scope":"directory","targets":["src/Services/BuildService.cs","src/UI","src/Services/Book.cs"],"projectRoot":"C:/work/proj"}
+{"file":"src/Services/BuildService.cs","absolutePath":"C:/work/proj/src/Services/BuildService.cs","scope":"directory","targets":["src/Services/BuildService.cs","src/UI","src/Services/GitService.cs"],"projectRoot":"C:/work/proj"}
 
 Follow the headless flow documented here (read it first):
   /home/u/.claude/skills/audio-explainer/docs/explain-at-cursor.md
@@ -283,7 +283,7 @@ This is a NON-INTERACTIVE run: there is no human to answer questions. Do NOT ask
 LANGUAGE: Generate the walkthrough in German (Deutsch). Write the `title`, every frame `title` and `explanation`, and every step `ttsText`, `explanation` and `note` in German. Keep code identifiers, file paths, and API names verbatim (do NOT translate code) — a beat's `token` and a frame's `callToken` especially, since both must match the source text exactly to resolve, and `example`, which is code. The same split applies to a frame's `relations`: their `note` is prose, their `token` and `symbol` are code. You MUST put "language":"de" at the top level of the `set_plan` JSON.
 
 Target folder / project (JSON):
-{"file":"src/Services/BuildService.cs","absolutePath":"C:/work/proj/src/Services/BuildService.cs","scope":"directory","targets":["src/Services/BuildService.cs","src/UI","src/Services/Book.cs"],"projectRoot":"C:/work/proj"}
+{"file":"src/Services/BuildService.cs","absolutePath":"C:/work/proj/src/Services/BuildService.cs","scope":"directory","targets":["src/Services/BuildService.cs","src/UI","src/Services/GitService.cs"],"projectRoot":"C:/work/proj"}
 
 What to do:
 1. Explore the listed folder/project path(s) — read the important files and pick the pieces worth a guided tour. Keep it lean; don't try to cover every file.

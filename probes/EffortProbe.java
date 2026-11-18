@@ -103,7 +103,7 @@ public final class EffortProbe {
                 selection ? Integer.valueOf(140) : null,
                 selection ? Integer.valueOf(144) : null,
                 scope,
-                scope == ExplainScope.DIRECTORY ? Arrays.asList("src/UI", "src/Services/Book.cs") : List.of(),
+                scope == ExplainScope.DIRECTORY ? Arrays.asList("src/UI", "src/Services/GitService.cs") : List.of(),
                 effort, depth, extra);
     }
 

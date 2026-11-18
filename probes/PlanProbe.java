@@ -365,8 +365,8 @@ public final class PlanProbe {
         return false;
     }
 
-    /** LazyDotIde's Services/BuildService.cs, whole - for StepCondense.chain. */
-    private static final String POOL = """
+    /** LazyDotIde's Services/BuildService.cs, whole — for StepCondense.chain, block and member. */
+    private static final String BUILD = """
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 
@@ -389,7 +389,7 @@ public class BuildResult
 public class BuildService
 {
     private static readonly Regex DiagnosticPattern = new(
-        @"^(.+?)\((\d+),(\d+)\):\s+(error|warning)\s+([A-Z0-9]+):\s+(.+)$",
+        @"^(.+?)\\((\\d+),(\\d+)\\):\\s+(error|warning)\\s+([A-Z0-9]+):\\s+(.+)$",
         RegexOptions.Compiled);
 
     private Process? _currentProcess;
@@ -990,35 +990,37 @@ public class BuildService
                 shortRun.toString().equals("[10..15, 30..30]"));
 
         // ── StepCondense.chain: the headers of the blocks a line sits in ──
-        // xhigh-deep-1's pool, lines 1-102 as they are in LazyDotIde. The "Exhaustion signal" step (80-82) sits in
-        // the `if` at 70-71, in Get (67-68), in the class (21-22).
-        String[] pool = POOL.split("\n", -1);
-        kotlin.jvm.functions.Function1<Integer, String> poolText = l -> l >= 1 && l <= pool.length ? pool[l - 1] : null;
-        check("chain: a step inside an `if` keeps the `if`, its brace, the method and the class — "
-                        + StepCondense.Companion.chain(80, poolText),
-                StepCondense.Companion.chain(80, poolText).toString().equals("[71, 70, 68, 67, 22, 21]"));
-        // STEP on that step, frame 2 (keep 21, 23-31, 67-102): before the chain, 69-78 folded as "10 lines" and
-        // took the `if` with it; with it, the `if` and its brace stay and only its first branch (72-78) folds.
-        List<kotlin.ranges.IntRange> keep2 = Arrays.asList(new kotlin.ranges.IntRange(21, 21),
-                new kotlin.ranges.IntRange(23, 31), new kotlin.ranges.IntRange(67, 102));
-        java.util.Set<Integer> placed2 = new java.util.HashSet<>(Arrays.asList(21, 23, 67, 80));
+        // LazyDotIde's BuildService.cs. The diagnostic step (112-118) sits in the `if` at 110-111, in the lambda at
+        // 106-107, in the `try` at 102-103, in RunDotnetAsync — a signature over 77-82, its brace at 83 — and in
+        // the class (20-21).
+        String[] build = BUILD.split("\n", -1);
+        kotlin.jvm.functions.Function1<Integer, String> buildText = l -> l >= 1 && l <= build.length ? build[l - 1] : null;
+        check("chain: a step inside an `if` keeps the `if`, its brace, the lambda, the `try`, the method and the class — "
+                        + StepCondense.Companion.chain(112, buildText),
+                StepCondense.Companion.chain(112, buildText).toString().equals("[111, 110, 107, 106, 103, 102, 83, 77, 21, 20]"));
+        // STEP on line 55 of RunAsync, a frame keeping 20, 22-27, 35-75: before the chain, 37-53 folded and took
+        // the `try` with it; with it, the `try` and its brace stay and only the lines above it (37-49) fold.
+        List<kotlin.ranges.IntRange> keep2 = Arrays.asList(new kotlin.ranges.IntRange(20, 20),
+                new kotlin.ranges.IntRange(22, 27), new kotlin.ranges.IntRange(35, 75));
+        java.util.Set<Integer> placed2 = new java.util.HashSet<>(Arrays.asList(20, 22, 35, 55));
         java.util.Set<Integer> chains2 = new java.util.HashSet<>();
-        for (int l : placed2) chains2.addAll(StepCondense.Companion.chain(l, poolText));
-        java.util.Set<Integer> anchors2 = new java.util.HashSet<>(Arrays.asList(21, 23, 67, 80, 81, 82));
+        for (int l : placed2) chains2.addAll(StepCondense.Companion.chain(l, buildText));
+        java.util.Set<Integer> anchors2 = placed2;
         List<kotlin.ranges.IntRange> stepped = StepCondense.Companion.window(keep2, anchors2, l -> true, 1, chains2);
-        check("condense: STEP keeps the `if` a step sits in — " + stepped,
-                stepped.toString().equals("[21..21, 23..24, 67..71, 79..83]"));
-        check("  control: without the chain, 69-78 folds and the `if` with it",
+        check("condense: STEP keeps the `try` a step sits in — " + stepped,
+                stepped.toString().equals("[20..20, 22..23, 35..36, 50..56]"));
+        check("  control: without the chain, 37-53 folds and the `try` with it",
                 StepCondense.Companion.window(keep2, anchors2, l -> true, 1, java.util.Collections.emptySet())
-                        .toString().equals("[21..21, 23..24, 67..68, 79..83]"));
-        // The ancestor case again: above the call line 62, CreateItem's signature and brace now stay.
+                        .toString().equals("[20..20, 22..23, 35..36, 54..56]"));
+        // An ancestor frame keeping 6-12, 20-27, 29-66, hung from the call line 53: above it, RunAsync's
+        // signature and brace and the `try` stay, so it shows which method the call line is in.
         java.util.Set<Integer> chains0 = new java.util.HashSet<>();
-        for (int l : Arrays.asList(6, 21, 33, 62)) chains0.addAll(StepCondense.Companion.chain(l, poolText));
+        for (int l : Arrays.asList(6, 20, 29, 53)) chains0.addAll(StepCondense.Companion.chain(l, buildText));
         List<kotlin.ranges.IntRange> ancestorChained = StepCondense.Companion.window(
-                Arrays.asList(new kotlin.ranges.IntRange(6, 10), new kotlin.ranges.IntRange(21, 31), new kotlin.ranges.IntRange(33, 65)),
-                new java.util.HashSet<>(Arrays.asList(6, 21, 33, 62)), l -> true, 0, chains0);
+                Arrays.asList(new kotlin.ranges.IntRange(6, 12), new kotlin.ranges.IntRange(20, 27), new kotlin.ranges.IntRange(29, 66)),
+                new java.util.HashSet<>(Arrays.asList(6, 20, 29, 53)), l -> true, 0, chains0);
         check("condense: an ancestor shows which method the call line is in — " + ancestorChained,
-                ancestorChained.toString().equals("[6..6, 21..22, 33..33, 59..62]"));
+                ancestorChained.toString().equals("[6..6, 20..21, 29..29, 35..36, 50..53]"));
         // K&R, a multi-line condition, `} else {`, a comment and a lone closer at a lesser indent.
         String[] kr = {
                 "class A {",
@@ -1042,37 +1044,39 @@ public class BuildService
         check("  control: a blank line has no chain", StepCondense.Companion.chain(2, l -> "").isEmpty());
 
         // ── StepCondense.member: the method a step is in, for MEMBER ──
-        check("block: Get runs from its signature through its closing brace — " + StepCondense.Companion.block(67, poolText),
-                StepCondense.Companion.block(67, poolText).toString().equals("67..86"));
-        check("block: the `if` in it, brace to brace — " + StepCondense.Companion.block(70, poolText),
-                StepCondense.Companion.block(70, poolText).toString().equals("70..83"));
-        check("  control: an attribute line is a block of itself", StepCondense.Companion.block(58, poolText).toString().equals("58..58"));
+        check("block: RunAsync runs from its signature through its closing brace — " + StepCondense.Companion.block(35, buildText),
+                StepCondense.Companion.block(35, buildText).toString().equals("35..66"));
+        check("block: the `try` in it, brace to brace — " + StepCondense.Companion.block(50, buildText),
+                StepCondense.Companion.block(50, buildText).toString().equals("50..57"));
+        String[] attr = {"    [Fact]", "    public void M()", "    {", "        x();", "    }"};
+        kotlin.jvm.functions.Function1<Integer, String> attrText = l -> l >= 1 && l <= attr.length ? attr[l - 1] : null;
+        check("  control: an attribute line is a block of itself", StepCondense.Companion.block(1, attrText).toString().equals("1..1"));
         java.util.List<Integer> kept2 = new java.util.ArrayList<>();
         for (kotlin.ranges.IntRange r : keep2) for (int l = r.getFirst(); l <= r.getLast(); l++) kept2.add(l);
-        check("member: a statement deep in Get is in Get, not in the class — " + StepCondense.Companion.member(80, kept2, poolText),
-                String.valueOf(StepCondense.Companion.member(80, kept2, poolText)).equals("67..86"));
-        java.util.Set<Integer> outsideGet = new java.util.HashSet<>();
-        for (int l : kept2) if (l < 67 || l > 86) outsideGet.add(l);
-        List<kotlin.ranges.IntRange> member = StepCondense.Companion.window(keep2, anchors2, outsideGet::contains, 1, chains2);
-        check("condense: MEMBER keeps Get whole and folds Return — " + member,
-                member.toString().equals("[21..21, 23..24, 67..86]"));
+        check("member: a statement deep in RunAsync is in RunAsync, not in the class — " + StepCondense.Companion.member(55, kept2, buildText),
+                String.valueOf(StepCondense.Companion.member(55, kept2, buildText)).equals("35..66"));
+        java.util.Set<Integer> outsideRun = new java.util.HashSet<>();
+        for (int l : kept2) if (l < 35 || l > 66) outsideRun.add(l);
+        List<kotlin.ranges.IntRange> member = StepCondense.Companion.window(keep2, anchors2, outsideRun::contains, 1, chains2);
+        check("condense: MEMBER keeps RunAsync whole and folds Cancel — " + member,
+                member.toString().equals("[20..20, 22..23, 35..66]"));
         // A frame that is one method plus its class header: the method holds every kept line but the header, so
         // it is the member, and there is nothing else to fold.
         check("  control: a frame of one method has it as the member",
-                String.valueOf(StepCondense.Companion.member(80, Arrays.asList(21, 67, 70, 80, 86), poolText)).equals("67..86"));
+                String.valueOf(StepCondense.Companion.member(55, Arrays.asList(20, 35, 44, 55, 66), buildText)).equals("35..66"));
         check("  control: a frame that is only the step line has no member",
-                StepCondense.Companion.member(80, Arrays.asList(80), poolText) == null);
-        // hig-standard-1 frame 0 keeps the two interfaces above the class (6-16) as well as the class: no block
-        // holds every kept line, so "below the block holding everything" took the class as the member. The type
+                StepCondense.Companion.member(55, Arrays.asList(55), buildText) == null);
+        // A frame keeping the record and BuildResult above the class (6-18) as well as the class: no block holds
+        // every kept line, so "below the block holding everything" would take the class as the member. The type
         // header stops the walk instead.
         java.util.List<Integer> kept0 = new java.util.ArrayList<>();
-        for (int[] r : new int[][]{{6, 16}, {18, 31}, {33, 65}}) for (int l = r[0]; l <= r[1]; l++) kept0.add(l);
-        check("member: with types above the class, a constructor line is in the constructor — "
-                        + StepCondense.Companion.member(38, kept0, poolText),
-                String.valueOf(StepCondense.Companion.member(38, kept0, poolText)).equals("36..44"));
-        check("member: a field is a member of itself — " + StepCondense.Companion.member(24, kept0, poolText),
-                String.valueOf(StepCondense.Companion.member(24, kept0, poolText)).equals("24..24"));
-        check("  control: the class header has no member", StepCondense.Companion.member(21, kept0, poolText) == null);
+        for (int[] r : new int[][]{{6, 12}, {14, 18}, {20, 66}}) for (int l = r[0]; l <= r[1]; l++) kept0.add(l);
+        check("member: with types above the class, a statement line is in its method — "
+                        + StepCondense.Companion.member(37, kept0, buildText),
+                String.valueOf(StepCondense.Companion.member(37, kept0, buildText)).equals("35..66"));
+        check("member: a field is a member of itself — " + StepCondense.Companion.member(26, kept0, buildText),
+                String.valueOf(StepCondense.Companion.member(26, kept0, buildText)).equals("26..26"));
+        check("  control: the class header has no member", StepCondense.Companion.member(20, kept0, buildText) == null);
         String[] types = {"public sealed class Pool<T> : IPool where T : class, new()", "class Foo:",
                 "@Serializable data class Foo(val a: Int)", "object Registry {", "pub struct Point {",
                 "export default interface Shape {", "namespace DotNetIDE;"};
