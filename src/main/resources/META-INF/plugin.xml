@@ -6,6 +6,20 @@
     <description><![CDATA[
         <p><b>Spoken, line-highlighted walkthroughs of your code.</b> An AI agent reads the code and writes
         the walkthrough. The IDE plays it back step by step.</p>
+
+        <p><b>Features</b></p>
+        <ul>
+            <li><b>Explain</b> a selection, method, class, file or folder with one right-click.</li>
+            <li><b>Follow</b> a tree of code folded to the lines in play. Highlights, notes and arrows move with
+                the voice.</li>
+            <li><b>Listen</b> in about 50 languages. Four voice engines: Kokoro, Piper (neural, offline), Windows
+                SAPI, espeak-ng.</li>
+            <li><b>Agents:</b> Claude Code CLI, or an ACP agent: opencode, Qwen Code or a custom one.</li>
+            <li><b>Models:</b> Claude, or through Claude Code: OpenRouter, DeepSeek, Kimi, GLM, Qwen, local
+                Ollama or a custom endpoint.</li>
+            <li><b>Save</b> walkthroughs with the project. Replay them with no agent call.</li>
+            <li>Free and open source (MIT).</li>
+        </ul>
         <p><img src="https://raw.githubusercontent.com/la83lynx/JetbrainsAudioExplainer/main/screenshots/shot3.jpg" width="520" height="272" alt="A walkthrough playing: tree of code and player"/></p>
 
         <p><b>Ask</b></p>
