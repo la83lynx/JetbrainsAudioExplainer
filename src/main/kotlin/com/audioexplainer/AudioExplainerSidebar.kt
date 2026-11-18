@@ -4,7 +4,6 @@ import com.intellij.ide.ui.LafManager
 import com.intellij.ide.ui.LafManagerListener
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
@@ -61,8 +60,9 @@ class AudioExplainerSidebar(
     private val log = Logger.getInstance(AudioExplainerSidebar::class.java)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
-    private val server = service<ExplainerServerService>().server
-    private val walkthrough get() = server.walkthrough
+    /** This project's own explainer: a plan, save or load here never reaches another project window. */
+    private val workspace = ProjectExplainer.of(project)
+    private val walkthrough get() = workspace.walkthrough
 
     private val browser = JBCefBrowser()
     private val jsQuery = JBCefJSQuery.create(browser as JBCefBrowserBase)
@@ -134,13 +134,6 @@ class AudioExplainerSidebar(
                 if (walkthrough.hasPrevious()) pushPlanReplaced()
             }
         }, browser.cefBrowser)
-
-        // Point per-workspace storage at THIS project BEFORE the webview loads, so the first pushSettings()
-        // / pushSavedList() in onLoadEnd already have the save directory and saved list available. It's also
-        // set by ServerStartupActivity on project open, but that ProjectActivity coroutine can race the tool
-        // window's creation (e.g. a tool window restored at startup); setting it here removes that race, which
-        // would otherwise leave the save-dir tooltips missing and the saved list empty on first load.
-        project.basePath?.let { server.setWorkspaceRoot(Path.of(it)) }
 
         browser.loadHTML(buildHtml())
         walkthrough.addListener(this)
@@ -392,12 +385,12 @@ class AudioExplainerSidebar(
             put("type", "settings")
             put("voice", st.ttsVoice)
             put("speedPercent", st.ttsSpeedPercent)
-            server.savedWalkthroughsDir()?.let { put("walkthroughsDir", it) }
+            workspace.savedWalkthroughsDir()?.let { put("walkthroughsDir", it) }
         })
     }
 
     private fun pushSavedList() {
-        val entries = server.listSavedWalkthroughs()
+        val entries = workspace.listSavedWalkthroughs()
         postToWebview(buildJsonObject {
             put("type", "saved_list")
             putJsonArray("walkthroughs") {
@@ -602,7 +595,7 @@ class AudioExplainerSidebar(
     }
 
     private fun onLoad(name: String) {
-        if (!server.loadSavedWalkthrough(name)) {
+        if (workspace.loadSavedWalkthrough(name) == null) {
             ApplicationManager.getApplication().invokeLater {
                 if (!disposed && !project.isDisposed) {
                     Messages.showErrorDialog(project, "Could not load \"$name\".", "Load Walkthrough")
@@ -624,7 +617,7 @@ class AudioExplainerSidebar(
                 Messages.getWarningIcon(),
             )
             if (choice != Messages.YES) return@invokeLater
-            server.deleteSavedWalkthrough(name)
+            workspace.deleteSavedWalkthrough(name)
             pushSavedList()
         }
     }
@@ -633,7 +626,7 @@ class AudioExplainerSidebar(
     private fun onDeleteAll() {
         ApplicationManager.getApplication().invokeLater {
             if (disposed || project.isDisposed) return@invokeLater
-            val count = server.listSavedWalkthroughs().size
+            val count = workspace.listSavedWalkthroughs().size
             if (count == 0) return@invokeLater
             val choice = Messages.showYesNoDialog(
                 project,
@@ -643,7 +636,7 @@ class AudioExplainerSidebar(
                 Messages.getWarningIcon(),
             )
             if (choice != Messages.YES) return@invokeLater
-            server.deleteAllSavedWalkthroughs()
+            workspace.deleteAllSavedWalkthroughs()
             pushSavedList()
         }
     }

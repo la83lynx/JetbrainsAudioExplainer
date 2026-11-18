@@ -56,7 +56,7 @@ class ClaudeExplainer {
         tracker.startGenerating(request.displayName, runLog, indicator)
         ensureToolWindowVisible(project)
         // What was showing before the run, so a walkthrough left from an earlier run never counts as this one's.
-        val planBefore = showingPlan()
+        val planBefore = showingPlan(project)
 
         val harness = request.harness ?: AudioExplainerSettings.getInstance().state.explainHarness
         if (harness in AgentPresets.ACP) {
@@ -109,7 +109,7 @@ class ClaudeExplainer {
         var keepPlanDir = true
         val server = service<ExplainerServerService>().server
         val early = EarlyPlan(project, tracker, runLog)
-        var tool = planDir?.let { openTool(server, it, early) }
+        var tool = planDir?.let { openTool(server, project, it, early) }
         var settingsFile: Path? = null
         try {
             if (profile != null) {
@@ -235,7 +235,7 @@ class ClaudeExplainer {
         var keepPlanDir = true
         val server = service<ExplainerServerService>().server
         val early = EarlyPlan(project, tracker, runLog)
-        val tool = planDir?.let { openTool(server, it, early) }
+        val tool = planDir?.let { openTool(server, project, it, early) }
         if (tool == null) {
             fail("Explain This failed", "Could not open the run's set_plan endpoint.")
             disposePlanDir(planDir, keep = false)
@@ -316,8 +316,9 @@ class ClaudeExplainer {
      * Open the run's endpoint and write its config into [planDir], or null — the run then POSTs its plan.
      * Each plan the tool loads is offered to [early], so the reader hears "ready" as it lands.
      */
-    private fun openTool(server: ExplainerServer, planDir: Path, early: EarlyPlan): ToolRoute? {
-        val run = server.openRun(planDir) { resolved, issues -> early.arrived(resolved, issues) }
+    private fun openTool(server: ExplainerServer, project: Project, planDir: Path, early: EarlyPlan): ToolRoute? {
+        // The run's plans reach the project window it was started from, and no other.
+        val run = server.openRun(ProjectExplainer.of(project), planDir) { resolved, issues -> early.arrived(resolved, issues) }
         return try {
             val config = planDir.resolve("mcp.json")
             Files.writeString(config, McpEndpoint.config(server.mcpUrl(run), run.token))
@@ -401,7 +402,7 @@ class ClaudeExplainer {
             return false
         }
 
-        val state = runCatching { service<ExplainerServerService>().server.walkthrough.getState() }.getOrNull()
+        val state = runCatching { ProjectExplainer.of(project).walkthrough.getState() }.getOrNull()
         // Frames, not projected segments: a plan whose frames all resolved but whose steps were dropped is
         // still a plan that arrived, and the notification below says how much of it there is. **This run's
         // plan**: one the run delivered (the tool, the early Write), or a plan other than the one showing when
@@ -496,7 +497,7 @@ class ClaudeExplainer {
 
         fun offer(content: String) {
             ApplicationManager.getApplication().executeOnPooledThread {
-                val resolved = runCatching { service<ExplainerServerService>().server.preload(content) }
+                val resolved = runCatching { service<ExplainerServerService>().server.preload(ProjectExplainer.of(project), content) }
                     .onFailure { log.warn("explain run: loading the written plan early failed", it) }
                     .getOrNull()
                 if (resolved == null) {
@@ -528,13 +529,13 @@ class ClaudeExplainer {
             if (loaded) return
             loaded = true
             tracker.finish()
-            announceReady(project, service<ExplainerServerService>().server.walkthrough.getState(), runLog)
+            announceReady(project, ProjectExplainer.of(project).walkthrough.getState(), runLog)
         }
     }
 
     /** The plan the walkthrough shows now, by identity: every plan a run delivers is a newly decoded one. */
-    private fun showingPlan(): Plan? =
-        runCatching { service<ExplainerServerService>().server.walkthrough.getState().plan }.getOrNull()
+    private fun showingPlan(project: Project): Plan? =
+        runCatching { ProjectExplainer.of(project).walkthrough.getState().plan }.getOrNull()
 
     private fun activateSidebar(project: Project) {
         ApplicationManager.getApplication().invokeLater {

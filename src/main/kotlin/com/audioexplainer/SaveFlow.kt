@@ -1,8 +1,6 @@
 package com.audioexplainer
 
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.components.service
-import com.intellij.openapi.components.serviceIfCreated
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectCloseHandler
 import com.intellij.openapi.ui.InputValidator
@@ -18,7 +16,7 @@ import com.intellij.openapi.ui.Messages
 object SaveFlow {
     private const val UNSAVED_TITLE = "Unsaved Walkthrough"
 
-    private val server get() = service<ExplainerServerService>().server
+    private fun workspace(project: Project) = ProjectExplainer.of(project)
 
     /**
      * **The Save button.** A walkthrough that is already a save is written back to its file with no dialog
@@ -26,14 +24,14 @@ object SaveFlow {
      * when a file was written.
      */
     fun save(project: Project): Boolean {
-        val state = server.walkthrough.getState()
+        val state = workspace(project).walkthrough.getState()
         val name = state.savedAs ?: return askAndWrite(project, "Save Walkthrough", WalkthroughStorage.slugify(state.title))
         return write(project, name)
     }
 
     /** **Save As…** — always asks, seeded with the current name. Returns true when a file was written. */
     fun saveAs(project: Project): Boolean {
-        val state = server.walkthrough.getState()
+        val state = workspace(project).walkthrough.getState()
         return askAndWrite(project, "Save Walkthrough As", state.savedAs ?: WalkthroughStorage.slugify(state.title))
     }
 
@@ -43,13 +41,13 @@ object SaveFlow {
      *
      * Asks nothing, and answers true, when there is nothing unsaved worth asking about
      * ([WalkthroughSnapshot.worthAsking]). **"Don't save" deletes nothing** — nothing was written — and a
-     * walkthrough saved earlier keeps its file; it only clears the unsaved mark, so the next moment (a second
+     * walkthrough saved earlier keeps its file; it only clears the unsaved mark, so the next moment (the
      * project closing) does not ask again about the same walkthrough.
      *
      * [consequence] finishes the sentence "…has not been saved." with what goes ahead if the user lets it.
      */
     fun confirmLoss(project: Project, consequence: String): Boolean {
-        val walkthrough = server.walkthrough
+        val walkthrough = workspace(project).walkthrough
         val state = walkthrough.getState()
         if (!state.worthAsking) return true
         val title = "“${state.title}”"
@@ -73,7 +71,8 @@ object SaveFlow {
 
     /** Ask for a name (seeded with [seed]), confirm replacing a different walkthrough, then write. */
     private fun askAndWrite(project: Project, dialogTitle: String, seed: String): Boolean {
-        val dir = server.savedWalkthroughsDir()
+        val workspace = workspace(project)
+        val dir = workspace.savedWalkthroughsDir()
         val typed = Messages.showInputDialog(
             project,
             if (dir != null) "Name for this walkthrough (saved in $dir):" else "Name for this walkthrough:",
@@ -84,8 +83,8 @@ object SaveFlow {
         ) ?: return false // cancelled
         val name = WalkthroughStorage.slugify(typed.trim())
         // **Only a *different* walkthrough is confirmed.** Save As onto the name it already has is just Save.
-        if (name != server.walkthrough.getState().savedAs && server.savedWalkthroughExists(name)) {
-            val existing = server.listSavedWalkthroughs().firstOrNull { it.name == name }?.title
+        if (name != workspace.walkthrough.getState().savedAs && workspace.savedWalkthroughExists(name)) {
+            val existing = workspace.listSavedWalkthroughs().firstOrNull { it.name == name }?.title
             val what = if (existing != null) "“$name” already holds the walkthrough “$existing”."
             else "A file named “$name.json” already exists there."
             val choice = Messages.showYesNoDialog(
@@ -101,7 +100,7 @@ object SaveFlow {
     }
 
     private fun write(project: Project, name: String): Boolean {
-        if (server.saveCurrentWalkthrough(name) != null) return true
+        if (workspace(project).saveCurrentWalkthrough(name) != null) return true
         Messages.showErrorDialog(
             project,
             "Could not save — no active walkthrough, or this project has no workspace folder.",
@@ -122,17 +121,15 @@ object SaveFlow {
  * A `projectCloseHandler` because [ProjectCloseHandler.canClose] is vetoable: Cancel keeps
  * the project open, which a `projectClosing` listener could not do.
  *
- * The walkthrough is app-wide, so with two projects open both close handlers see it. The first answer
- * settles it: Save marks it clean and "Don't save" clears the mark, so the second project closes without
- * asking again.
+ * Each project has its own walkthrough, so closing one asks only about that project's.
  */
 class UnsavedWalkthroughCloseHandler : ProjectCloseHandler {
     override fun canClose(project: Project): Boolean {
         val app = ApplicationManager.getApplication()
         if (app.isHeadlessEnvironment || app.isUnitTestMode || !app.isDispatchThread) return true
-        // `serviceIfCreated`: a session that never touched the plugin has no walkthrough, and closing it must
-        // not be what starts the loopback server.
-        serviceIfCreated<ExplainerServerService>() ?: return true
+        // `ifCreated`: a project that never touched the plugin has no walkthrough, and closing it must not be
+        // what creates one (and starts the loopback server).
+        ProjectExplainer.ifCreated(project) ?: return true
         return SaveFlow.confirmLoss(project, "Closing the project discards it.")
     }
 }

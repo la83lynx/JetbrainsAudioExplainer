@@ -26,6 +26,8 @@ resolved in-plugin — the agent reads the file and decides the boundaries.
 - **The sidebar** — play/pause, next/prev (Shift = by segment), speed, voice, the outline and a read-along
   transcript. **Save** / **Save As…** write to `<project>/.walkthroughs/`; the idle view lists saved
   walkthroughs to reload. An unsaved walkthrough is asked about before it is replaced or the project closes.
+- **Several projects open** — each project window has its own walkthrough, sidebar and saved list; a run
+  shows only in the window it was started from.
 - **Run log** — every read, think, the plan sent and how the run ended, live while generating (the banner
   link, the tool window's title button, or **Tools → Audio Explainer → Show Run Log**). A run that re-reads the
   same thing a 4th time is flagged as possibly looping.
@@ -131,7 +133,7 @@ The plugin ships neither a CLI nor a key. **Your code is sent to the provider yo
 | Area | Files |
 |---|---|
 | Wire schema and plan loading | `Protocol.kt` (the one place a field is declared; its prose is `claude-skill/docs/plan-schema.md` — keep both in step), `PlanLoader.kt`, `PlanOutline.kt`, `PlanSourceCheck.kt` |
-| Loopback server | `ExplainerServer.kt` (`/api/*`, writes `~/.claude-explainer-{port,token}`), `McpEndpoint.kt` |
+| Loopback server | `ExplainerServer.kt` (one per IDE; `/api/*`, writes `~/.claude-explainer-{port,token}`, routes to a project's `ExplainerWorkspace.kt`), `McpEndpoint.kt` |
 | Walkthrough state, save/load | `Walkthrough.kt`, `WalkthroughStorage.kt`, `SaveFlow.kt` |
 | Rendering | `TreePlanController.kt` → `tree/` (`TreePlanView`, `CodeNestView`, `CodeNodeView`, `LeaderArt`), `SpotlightRenderer.kt`, `LinkArt.kt` |
 | Running the agent | `ExplainThisAction.kt`, `ClaudeExplainer.kt` (resolves per-run overrides against settings, once), `ExplainPrompt.kt` (argv + prompt as a pure function), `ClaudeHarness.kt`, `acp/`, `Providers.kt`, `RunLog.kt` |

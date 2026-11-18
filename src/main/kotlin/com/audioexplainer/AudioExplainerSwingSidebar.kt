@@ -2,7 +2,6 @@ package com.audioexplainer
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.components.JBLabel
@@ -25,7 +24,7 @@ class AudioExplainerSwingSidebar(
     parentDisposable: Disposable,
 ) : WalkthroughListener {
 
-    private val walkthrough = service<ExplainerServerService>().server.walkthrough
+    private val walkthrough = ProjectExplainer.of(project).walkthrough
     private val tracker = ExplainSessionTracker.getInstance(project)
 
     private val genLabel = JBLabel("").apply {

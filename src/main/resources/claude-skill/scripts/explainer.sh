@@ -28,6 +28,16 @@ else
     exit 1
 fi
 
+# Percent-encode every byte of $1 (the plugin URL-decodes it as UTF-8).
+url_encode() {
+    printf '%s' "$1" | od -An -v -tx1 | tr -d ' 
+' | sed 's/../%&/g'
+}
+
+# The plugin serves every project window of the IDE; this folder says which one. `pwd -W` is git-bash's
+# Windows form of it, which is what the IDE's project paths look like there.
+WS_HEADER="X-Explainer-Workspace: $(url_encode "$(pwd -W 2>/dev/null || pwd)")"
+
 # Escape a string for use inside a JSON string literal (backslash and double quote).
 json_escape() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -41,7 +51,7 @@ case "$1" in
         fi
         curl -s -X POST "$BASE/api/message" \
             -H 'Content-Type: application/json' \
-            -H "$AUTH_HEADER" \
+            -H "$AUTH_HEADER" -H "$WS_HEADER" \
             --data-binary @"$2"
         ;;
     send)
@@ -51,16 +61,16 @@ case "$1" in
         fi
         curl -s -X POST "$BASE/api/message" \
             -H 'Content-Type: application/json' \
-            -H "$AUTH_HEADER" \
+            -H "$AUTH_HEADER" -H "$WS_HEADER" \
             -d "$2"
         ;;
     state)
-        curl -s -H "$AUTH_HEADER" "$BASE/api/state"
+        curl -s -H "$AUTH_HEADER" -H "$WS_HEADER" "$BASE/api/state"
         ;;
     stop)
         curl -s -X POST "$BASE/api/message" \
             -H 'Content-Type: application/json' \
-            -H "$AUTH_HEADER" \
+            -H "$AUTH_HEADER" -H "$WS_HEADER" \
             -d '{"type": "stop"}'
         ;;
     save)
@@ -68,12 +78,12 @@ case "$1" in
         if [ -n "$NAME" ]; then
             curl -s -X POST "$BASE/api/save" \
                 -H 'Content-Type: application/json' \
-                -H "$AUTH_HEADER" \
+                -H "$AUTH_HEADER" -H "$WS_HEADER" \
                 -d "{\"name\": \"$NAME\"}"
         else
             curl -s -X POST "$BASE/api/save" \
                 -H 'Content-Type: application/json' \
-                -H "$AUTH_HEADER" \
+                -H "$AUTH_HEADER" -H "$WS_HEADER" \
                 -d '{}'
         fi
         ;;
@@ -84,11 +94,11 @@ case "$1" in
         fi
         curl -s -X POST "$BASE/api/load" \
             -H 'Content-Type: application/json' \
-            -H "$AUTH_HEADER" \
+            -H "$AUTH_HEADER" -H "$WS_HEADER" \
             -d "{\"name\": \"$(json_escape "$2")\"}"
         ;;
     list)
-        curl -s -H "$AUTH_HEADER" "$BASE/api/walkthroughs"
+        curl -s -H "$AUTH_HEADER" -H "$WS_HEADER" "$BASE/api/walkthroughs"
         ;;
     *)
         echo "Usage: explainer.sh {plan|send|state|stop|save|load|list}" >&2

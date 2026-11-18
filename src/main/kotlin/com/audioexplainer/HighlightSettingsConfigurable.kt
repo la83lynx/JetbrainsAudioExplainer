@@ -994,10 +994,13 @@ class HighlightSettingsConfigurable : BoundConfigurable(DISPLAY_NAME) {
      *
      * **The sidebar needs telling too.** Its accent is a CSS variable the plugin writes from `accentColor`,
      * otherwise only when the page is built or the IDE's LAF changes. Same listener list, same reason it works:
-     * a `Walkthrough` outlives any one tool window, so whoever is registered is whoever is open.
+     * a `Walkthrough` outlives any one tool window, so whoever is registered is whoever is open — in every
+     * open project window, each with its own walkthrough.
      */
     private fun refreshLiveWalkthrough() {
-        val listeners = service<ExplainerServerService>().server.walkthrough.getListeners()
+        val listeners = ProjectManager.getInstance().openProjects
+            .mapNotNull(ProjectExplainer::ifCreated)
+            .flatMap { it.walkthrough.getListeners() }
         listeners.filterIsInstance<TreePlanController>().forEach { it.refresh() }
         listeners.filterIsInstance<AudioExplainerSidebar>().forEach { it.refreshTheme() }
     }

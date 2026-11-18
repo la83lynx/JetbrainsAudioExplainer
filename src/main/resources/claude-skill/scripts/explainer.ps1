@@ -35,7 +35,11 @@ if (-not (Test-Path $TokenFile)) {
 $Port = (Get-Content -Raw $PortFile).Trim()
 $Token = (Get-Content -Raw $TokenFile).Trim()
 $Base = "http://127.0.0.1:$Port"
-$Headers = @{ Authorization = "Bearer $Token" }
+# The plugin serves every project window of the IDE; this folder (percent-encoded UTF-8) says which one.
+$Headers = @{
+    Authorization           = "Bearer $Token"
+    'X-Explainer-Workspace' = [Uri]::EscapeDataString((Get-Location).ProviderPath)
+}
 
 # Read a response as UTF-8 regardless of what the server declared. Without this the reply is decoded
 # with the HTTP default (ISO-8859-1), which mangles any non-ASCII text the plugin sends back in
